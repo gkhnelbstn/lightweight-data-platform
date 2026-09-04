@@ -3,6 +3,10 @@
     python3 integrations/odd/push.py --out artifacts/odd            # build + validate
     python3 integrations/odd/push.py --url http://localhost:8080    # and ingest
 
+By default only days that have never reached this ODD instance are sent, so the
+same command works for the first 45-day backfill and for the daily cron line
+next to `core/runner.py`. `--since` and `--all` override that.
+
 Every payload is validated against odd-models before it leaves this process, so
 a broken mapping fails here rather than as a 400 from the platform.
 """
@@ -14,6 +18,7 @@ import os
 import urllib.error
 import urllib.request
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 import psycopg
@@ -27,23 +32,71 @@ from integrations.odd.mapper import (check_entity, dataset_entity,
 
 ROOT = Path(__file__).resolve().parents[2]
 HOST = os.getenv("DQ_HOST", "dq.local")
+DATASOURCE_NAME = os.getenv("ODD_DATASOURCE_NAME", "datafletch-contracts")
+
+# What "already pushed" is scoped to. A run is identified by its date, but the
+# same date can be unsent to a second platform, so the state is per target.
+LOCAL_TARGET = "file"
 
 
-def build() -> dict[str, list]:
+def _target(url: str | None) -> str:
+    return url.rstrip("/") if url else LOCAL_TARGET
+
+
+def pending_days(target: str, since: date | None = None,
+                 everything: bool = False) -> list[date]:
+    """Run dates this target has not seen yet, oldest first.
+
+    `--all` and `--since` bypass the log rather than clearing it: a rebuild
+    re-sends and re-stamps, it does not make the platform forget.
+    """
+    where, params = ["r.run_window = 'incremental'"], []
+    if since is not None:
+        where.append("r.run_at >= %s")
+        params.append(since)
+    if not everything and since is None:
+        where.append("not exists (select 1 from odd_pushes p"
+                     " where p.target = %s and p.run_at = r.run_at)")
+        params.append(target)
+    with store.connect() as cx:
+        store.init(cx)
+        rows = cx.execute(
+            "select distinct r.run_at from check_results r "
+            "join checks c on c.id = r.check_id "
+            f"where {' and '.join(where)} order by r.run_at", params).fetchall()
+    return [r[0] for r in rows]
+
+
+def record_push(target: str, day: date, entities: int) -> None:
+    with store.connect() as cx:
+        cx.execute(
+            """insert into odd_pushes (target, run_at, pushed_at, entities)
+               values (%s, %s, now(), %s)
+               on conflict (target, run_at) do update
+                 set pushed_at = now(), entities = excluded.entities""",
+            (target, day, entities))
+
+
+def build(days: list[date] | None = None) -> dict[str, list]:
     contracts = load_all(str(ROOT / "contracts"))
     datasets, checks, runs_by_day = [], [], defaultdict(list)
+
+    where, params = ["r.run_window = 'incremental'"], []
+    if days is not None:
+        where.append("r.run_at = any(%s)")
+        params.append(list(days))
 
     with psycopg.connect(store.DQ_DSN, row_factory=dict_row) as cx:
         # Results outlive checks: a rule removed from a contract keeps its
         # history. Only push runs whose check still exists, or ODD gets runs
         # pointing at a JOB oddrn that was never ingested.
         results = cx.execute(
-            """select r.run_at, r.check_id, r.contract_id, r.severity, r.status,
+            f"""select r.run_at, r.check_id, r.contract_id, r.severity, r.status,
                       r.failed_rows, r.total_rows, r.fail_ratio, r.duration_ms
                from check_results r
                join checks c on c.id = r.check_id
-               where r.run_window = 'incremental'
-               order by r.run_at""").fetchall()
+               where {' and '.join(where)}
+               order by r.run_at""", params).fetchall()
         orphans = cx.execute(
             """select count(*) as n, count(distinct check_id) as checks
                from check_results r
@@ -66,8 +119,14 @@ def build() -> dict[str, list]:
     return {"datasets": datasets, "checks": checks, "runs": dict(runs_by_day)}
 
 
-def payloads() -> list[tuple[str, dict]]:
-    b = build()
+def payloads(days: list[date] | None = None) -> list[tuple[str, dict]]:
+    """`(filename, body)` pairs: the catalog first, then one file per day.
+
+    The catalog goes every time. It is 25 entities, ODD upserts it, and it is
+    the only way a contract edit (a new rule, a renamed column) reaches the
+    platform -- skipping it would make an incremental push silently stale.
+    """
+    b = build(days)
     out = [("00_catalog.json",
             entity_list(b["datasets"] + b["checks"], HOST).model_dump(
                 mode="json", exclude_none=True))]
@@ -76,9 +135,6 @@ def payloads() -> list[tuple[str, dict]]:
                     entity_list(b["runs"][day], HOST).model_dump(
                         mode="json", exclude_none=True)))
     return out
-
-
-DATASOURCE_NAME = os.getenv("ODD_DATASOURCE_NAME", "datafletch-contracts")
 
 
 def _json(url: str, body: dict | None = None) -> dict:
@@ -126,30 +182,55 @@ def post(url: str, body: dict) -> int:
         return resp.status
 
 
+def _day_of(name: str) -> date | None:
+    """`runs_2026-09-05.json` -> the date; the catalog has no day to log."""
+    if not name.startswith("runs_"):
+        return None
+    return date.fromisoformat(name[len("runs_"):-len(".json")])
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=str(ROOT / "artifacts" / "odd"))
     ap.add_argument("--url", help="ODD Platform base url, e.g. http://localhost:8080")
+    ap.add_argument("--since", type=date.fromisoformat, metavar="YYYY-MM-DD",
+                    help="push from this run date on, pushed or not")
+    ap.add_argument("--all", action="store_true", dest="everything",
+                    help="rebuild and re-send every day of history")
     a = ap.parse_args()
+
+    target = _target(a.url)
+    days = pending_days(target, since=a.since, everything=a.everything)
+    if not days:
+        print(f"nothing to push: {target} already has every run")
+        return
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    files = payloads()
+    files = payloads(days)
     total = 0
     for name, body in files:
         (out / name).write_text(json.dumps(body, indent=2))
         total += len(body["items"])
-    print(f"{len(files)} payloads, {total} entities -> {out}")
+    print(f"{len(files)} payloads, {total} entities, "
+          f"{days[0]}..{days[-1]} -> {out}")
 
-    if a.url:
-        ensure_datasource(a.url)
-        for name, body in files:
-            try:
-                code = post(a.url, body)
-                print(f"  POST {name:22} {code} ({len(body['items'])} entities)")
-            except urllib.error.HTTPError as e:
-                print(f"  POST {name:22} {e.code} {e.read()[:200]!r}")
-                break
+    if not a.url:
+        return
+
+    ensure_datasource(a.url)
+    for name, body in files:
+        n = len(body["items"])
+        try:
+            code = post(a.url, body)
+        except urllib.error.HTTPError as e:
+            print(f"  POST {name:22} {e.code} {e.read()[:200]!r}")
+            break
+        print(f"  POST {name:22} {code} ({n} entities)")
+        # only a day that actually landed is a day we can skip next time
+        day = _day_of(name)
+        if day is not None:
+            record_push(target, day, n)
 
 
 if __name__ == "__main__":

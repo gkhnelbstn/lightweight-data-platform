@@ -55,6 +55,14 @@ create table if not exists check_results (
 
 create index if not exists check_results_brin on check_results using brin (run_at);
 
+create table if not exists odd_pushes (
+  target text not null,
+  run_at date not null,
+  pushed_at timestamptz not null default now(),
+  entities int not null,
+  primary key (target, run_at)
+);
+
 create table if not exists contract_scores (
   run_at date not null,
   contract_id text not null,

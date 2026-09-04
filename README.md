@@ -61,7 +61,12 @@ python core/runner.py --backfill-days 44 --emit-artifacts
 uvicorn api.main:app --port 8077                       # http://localhost:8077
 ```
 
-Daily operation is one cron line: `python core/runner.py`.
+Daily operation is two cron lines:
+
+```bash
+python core/runner.py                                        # today's run
+python integrations/odd/push.py --url http://localhost:8080  # only if ODD is used
+```
 
 ## Layout
 
@@ -114,15 +119,25 @@ tests land on the same catalog objects ODD's own collector discovers.
 
 ```bash
 python integrations/odd/push.py --out artifacts/odd          # build + validate
-python integrations/odd/push.py --url http://localhost:8080  # ingest
+python integrations/odd/push.py --url http://localhost:8080  # ingest what is new
+python integrations/odd/push.py --url ... --since 2026-08-01 # re-send from a date
+python integrations/odd/push.py --url ... --all              # re-send everything
 ```
+
+Ingestion is incremental by default: the platform's own data source is
+registered if missing, and only run dates that have not reached that platform
+are sent, so the same line covers the first 45-day backfill and the daily cron
+next to `core/runner.py`. What was sent is logged in `odd_pushes` per target, so
+a re-run is a no-op rather than a re-send.
 
 1060 entities validate against `odd-models`. `deploy/RUN-odd-trial.md` is the
 runbook. The division of labour it implies: **ODD owns** catalog, lineage,
 glossary, ownership, alert lifecycle and search; **this project owns** contracts,
 check derivation, artifact emission, scoring window, score and SLA. See
-`docs/odd-gap-analysis.md` for why — ODD's run model has no row counters, no
-severity and no score.
+`docs/odd-gap-analysis.md` for why, and for what a run against a real instance
+changed: ODD's run model has no row counters and ignores our severity, but it
+does compute a score of its own — an unweighted latest-run pass ratio, shown on
+the dataset page, next to no trend at all.
 
 ## Deliberate omissions
 
