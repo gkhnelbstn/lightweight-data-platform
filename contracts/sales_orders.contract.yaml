@@ -1,0 +1,93 @@
+apiVersion: '0.1'
+kind: DataContract
+id: erp.sales_orders
+info:
+  title: Sales Orders
+  owner: sales-ops
+  domain: sales
+  description: Header-level sales orders replicated from the ERP.
+server:
+  type: postgres
+  database: erp
+  schema: public
+  table: sales_orders
+  loaded_at_column: loaded_at
+schema:
+  fields:
+  - name: order_id
+    type: bigint
+    required: true
+    unique: true
+    description: ERP order number.
+  - name: customer_id
+    type: bigint
+    required: true
+    references:
+      table: customers
+      column: customer_id
+  - name: order_date
+    type: date
+    required: true
+  - name: status
+    type: text
+    required: true
+    allowed:
+    - OPEN
+    - SHIPPED
+    - INVOICED
+    - CANCELLED
+  - name: currency
+    type: text
+    required: true
+    allowed:
+    - TRY
+    - USD
+    - EUR
+  - name: net_amount
+    type: numeric
+    required: true
+    min: 0
+    max: 1000000
+quality:
+- id: freshness_daily
+  type: freshness
+  severity: critical
+  max_lag_days: 1
+  description: Snapshot must contain data for the run date.
+- id: header_matches_lines
+  type: custom_sql
+  severity: major
+  description: Order net_amount must equal the sum of its line amounts.
+  sql: |
+    select count(*) as failed_rows
+    from sales_orders o
+    join (
+      select order_id, sum(line_amount) as line_total
+      from sales_order_lines
+      where {{scope}}
+      group by order_id
+    ) l on l.order_id = o.order_id
+    where {{scope:o}}
+      and abs(o.net_amount - l.line_total) > 0.01
+- id: cancelled_has_zero_amount
+  type: custom_sql
+  severity: minor
+  description: Cancelled orders should carry no value.
+  sql: |
+    select count(*) as failed_rows
+    from sales_orders
+    where {{scope}}
+      and status = 'CANCELLED'
+      and net_amount <> 0
+- id: high_value_eur_needs_review
+  type: custom_sql
+  severity: major
+  description: 20.000 EUR ustu siparisler onay akisina girmeli
+  sql: |-
+    select count(*) as failed_rows
+    from sales_orders
+    where {{scope}}
+      and currency = 'EUR'
+      and net_amount > 20000
+sla:
+  min_score: 0.95

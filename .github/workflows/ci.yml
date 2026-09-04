@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  end-to-end:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: erp
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      ERP_DSN: postgresql://postgres:postgres@localhost:5432/erp
+      DQ_DSN: postgresql://postgres:postgres@localhost:5432/dq
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ".[dev]"
+      - run: psql "$ERP_DSN" -c "create database dq"
+      - name: seed, backfill, emit artifacts
+        run: |
+          python seed/seed.py
+          python core/runner.py --backfill-days 7 --emit-artifacts
+      - name: build and validate ODD payloads
+        run: python integrations/odd/push.py --out artifacts/odd
+      - name: the run must have produced a trend
+        run: |
+          n=$(psql "$DQ_DSN" -tAc "select count(*) from contract_scores")
+          echo "contract_scores rows: $n"
+          test "$n" -ge 8

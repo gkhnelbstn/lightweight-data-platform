@@ -1,0 +1,156 @@
+"""Map contracts, derived checks and run results onto the ODD specification.
+
+ODD models a quality test as DataEntity(type=JOB) carrying a DataQualityTest,
+and each execution as DataEntity(type=JOB_RUN) carrying a DataQualityTestRun --
+the same shape odd-dbt and odd-great-expectations produce. Datasets are
+addressed by ODDRN, so the tests we push land on the very same catalog objects
+ODD's own Postgres collector discovers.
+"""
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from urllib.parse import urlparse
+
+from odd_models.models import (
+    DataEntity, DataEntityList, DataEntityType, DataQualityTest,
+    DataQualityTestExpectation, DataQualityTestRun, DataSet, DataSetField,
+    DataSetFieldType, MetadataExtension, QualityRunStatus, Tag, Type,
+)
+from oddrn_generator import Generator, PostgresqlGenerator
+from oddrn_generator.path_models import BasePathsModel, DependenciesMap
+from oddrn_generator.server_models import HostnameModel
+from pydantic import Field
+
+from core.checks import Check
+from core.contract import DataContract
+
+SCHEMA_URL = ("https://raw.githubusercontent.com/opendatadiscovery/opendatadiscovery-specification"
+              "/main/specification/extensions/datafletch.json#/definitions/Contract")
+
+_PG_TYPE = {
+    "bigint": Type.TYPE_INTEGER, "integer": Type.TYPE_INTEGER,
+    "int": Type.TYPE_INTEGER, "numeric": Type.TYPE_NUMBER,
+    "float": Type.TYPE_NUMBER, "text": Type.TYPE_STRING,
+    "varchar": Type.TYPE_STRING, "date": Type.TYPE_DATETIME,
+    "timestamp": Type.TYPE_DATETIME, "boolean": Type.TYPE_BOOLEAN,
+}
+
+_STATUS = {"pass": QualityRunStatus.SUCCESS, "fail": QualityRunStatus.FAILED}
+
+
+class ContractPathsModel(BasePathsModel):
+    """//datafletch/host/<host>/contracts/<id>/checks/<check>/runs/<date>"""
+    contracts: Optional[str] = None
+    checks: Optional[str] = None
+    runs: Optional[str] = None
+
+    @classmethod
+    def _deps(cls) -> DependenciesMap:
+        return {"contracts": ("contracts",),
+                "checks": ("contracts", "checks"),
+                "runs": ("contracts", "checks", "runs")}
+
+    dependencies_map: DependenciesMap = Field(
+        default_factory=lambda: ContractPathsModel._deps())
+
+
+class ContractGenerator(Generator):
+    source = "datafletch"
+    paths_model = ContractPathsModel
+    server_model = HostnameModel
+
+
+def pg_generator(dsn: str, table: str, schema: str = "public") -> PostgresqlGenerator:
+    u = urlparse(dsn)
+    return PostgresqlGenerator(
+        host_settings=f"{u.hostname}:{u.port or 5432}",
+        databases=(u.path or "/").lstrip("/"), schemas=schema, tables=table)
+
+
+def dataset_oddrn(dsn: str, contract: DataContract) -> str:
+    return pg_generator(dsn, contract.server.table,
+                        contract.server.schema_).get_oddrn_by_path("tables")
+
+
+def dataset_entity(dsn: str, contract: DataContract) -> DataEntity:
+    """The contract already describes the schema, so it can seed the catalog on
+    its own -- no collector required to see the table in ODD."""
+    g = pg_generator(dsn, contract.server.table, contract.server.schema_)
+    fields = []
+    for f in contract.schema_.fields:
+        g.set_oddrn_paths(tables_columns=f.name)
+        fields.append(DataSetField(
+            oddrn=g.get_oddrn_by_path("tables_columns"), name=f.name,
+            description=f.description,
+            type=DataSetFieldType(
+                type=_PG_TYPE.get(f.type.lower(), Type.TYPE_UNKNOWN),
+                logical_type=f.type, is_nullable=not f.required),
+            is_primary_key=bool(f.unique and f.required),
+            enum_values=None))
+    return DataEntity(
+        oddrn=g.get_oddrn_by_path("tables"), name=contract.server.table,
+        type=DataEntityType.TABLE, owner=contract.info.owner,
+        description=contract.info.description,
+        tags=[Tag(name=f"contract:{contract.id}"),
+              Tag(name=f"domain:{contract.info.domain or 'unknown'}")],
+        metadata=[MetadataExtension(schema_url=SCHEMA_URL, metadata={
+            "contract_id": contract.id,
+            "contract_sla_min_score": float(contract.sla.min_score)})],
+        dataset=DataSet(field_list=fields))
+
+
+def check_entity(host: str, dsn: str, contract: DataContract,
+                 check: Check) -> DataEntity:
+    # the check id minus the contract prefix -- NOT the last dotted segment,
+    # which collides (customer_id.unique and tax_id.unique both end in 'unique')
+    name = check.id.replace(contract.id + ".", "")
+    g = ContractGenerator(host_settings=host, contracts=contract.id, checks=name)
+    return DataEntity(
+        oddrn=g.get_oddrn_by_path("checks"),
+        name=name,
+        type=DataEntityType.JOB, owner=contract.info.owner,
+        description=check.description,
+        tags=[Tag(name=f"severity:{check.severity}"),
+              Tag(name=f"origin:{check.origin}")],
+        metadata=[MetadataExtension(schema_url=SCHEMA_URL, metadata={
+            "severity": check.severity, "origin": check.origin,
+            "column": check.column, "kind": check.kind,
+            "derived_from_contract": contract.id, **{
+                k: v for k, v in check.params.items() if v is not None}})],
+        data_quality_test=DataQualityTest(
+            suite_name=contract.id,
+            dataset_list=[dataset_oddrn(dsn, contract)],
+            expectation=DataQualityTestExpectation(
+                type=check.kind, severity=check.severity,
+                column=check.column, **{
+                    k: str(v) for k, v in check.params.items()
+                    if v is not None})))
+
+
+def run_entity(host: str, contract_id: str, check_name: str, result: dict) -> DataEntity:
+    g = ContractGenerator(host_settings=host, contracts=contract_id,
+                          checks=check_name, runs=str(result["run_at"]))
+    start = datetime.combine(result["run_at"], datetime.min.time(),
+                             tzinfo=timezone.utc)
+    return DataEntity(
+        oddrn=g.get_oddrn_by_path("runs"),
+        name=f"{check_name}@{result['run_at']}",
+        type=DataEntityType.JOB_RUN,
+        data_quality_test_run=DataQualityTestRun(
+            data_quality_test_oddrn=g.get_oddrn_by_path("checks"),
+            start_time=start,
+            end_time=start + timedelta(milliseconds=int(result["duration_ms"])),
+            status=_STATUS.get(result["status"], QualityRunStatus.UNKNOWN),
+            # ODD's run model has no row counters, so the only place the volume
+            # signal fits is this free-text field. See docs/odd-gap-analysis.md
+            status_reason=(f"{result['failed_rows']}/{result['total_rows']} rows failed "
+                           f"({float(result['fail_ratio']) * 100:.2f}%) "
+                           f"severity={result['severity']}")))
+
+
+def entity_list(items: list[DataEntity], host: str) -> DataEntityList:
+    return DataEntityList(
+        data_source_oddrn=ContractGenerator(
+            host_settings=host).get_data_source_oddrn(), items=items)

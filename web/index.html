@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Veri Kalitesi — Kontrat Odaklı</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a21; --panel2:#1c212a; --line:#252b36;
+    --fg:#e6e9ef; --mut:#8d96a8; --acc:#4c8dff;
+    --ok:#3ecf8e; --warn:#f0b429; --bad:#f2585b;
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-size:14px}
+  header{padding:20px 28px;border-bottom:1px solid var(--line);display:flex;
+    align-items:baseline;gap:14px;flex-wrap:wrap}
+  h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.2px}
+  .sub{color:var(--mut);font-size:12.5px}
+  main{padding:22px 28px;max-width:1180px;margin:0 auto}
+  .grid{display:grid;gap:16px}
+  .cols{grid-template-columns:1fr 1fr}
+  @media(max-width:900px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:16px 18px}
+  .card h2{font-size:13px;margin:0 0 12px;font-weight:600;color:var(--mut);
+    text-transform:uppercase;letter-spacing:.6px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);
+    font-size:13px;vertical-align:middle}
+  th{color:var(--mut);font-weight:500;font-size:11.5px;text-transform:uppercase;
+    letter-spacing:.5px}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
+    font-weight:600}
+  .crit{background:rgba(242,88,91,.15);color:var(--bad)}
+  .major{background:rgba(240,180,41,.15);color:var(--warn)}
+  .minor{background:rgba(141,150,168,.15);color:var(--mut)}
+  .score{font-variant-numeric:tabular-nums;font-weight:600}
+  .strip{display:flex;gap:1.5px}
+  .strip i{width:4px;height:16px;border-radius:1px;background:var(--ok);
+    display:block}
+  .strip i.f{background:var(--bad)} .strip i.n{background:#2a3140}
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:7px;padding:7px 12px;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--acc)}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  input,textarea,select{width:100%;background:#10141b;color:var(--fg);
+    border:1px solid var(--line);border-radius:7px;padding:8px 10px;
+    font-size:13px;font-family:inherit}
+  textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;min-height:120px}
+  label{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;
+    text-transform:uppercase;letter-spacing:.5px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .muted{color:var(--mut)}
+  .kpi{font-size:30px;font-weight:650;font-variant-numeric:tabular-nums}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:12px;
+    background:#10141b;padding:1px 5px;border-radius:4px;color:#b8c4dc}
+  pre{background:#10141b;border:1px solid var(--line);border-radius:8px;
+    padding:12px;overflow:auto;font-size:12px;max-height:260px}
+  .clickable{cursor:pointer} .clickable:hover td{background:var(--panel2)}
+  .tabs{display:flex;gap:6px;margin-bottom:12px}
+  .tabs button.on{border-color:var(--acc);color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Kontrat Odaklı Veri Kalitesi</h1>
+  <span class="sub">contract → derived checks → günlük koşu → zaman serisi</span>
+  <span class="sub" style="margin-left:auto" id="asof"></span>
+</header>
+<main class="grid">
+  <div class="grid cols">
+    <div class="card">
+      <h2>Platform skoru (günlük)</h2>
+      <div class="row" style="align-items:flex-end;gap:18px">
+        <div><div class="kpi" id="kpi">—</div>
+          <div class="sub" id="kpiSub"></div></div>
+        <div style="flex:1;min-width:220px" id="chart"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Açık bulgular (son koşu)</h2>
+      <table id="failures"><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Kontratlar</h2>
+    <table id="contracts">
+      <thead><tr><th>Kontrat</th><th>Sahip</th><th>Tablo</th><th>Skor</th>
+        <th>SLA</th><th>Testler</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card" id="detail" hidden></div>
+</main>
+
+<script>
+const $ = (s,r=document)=>r.querySelector(s);
+const fmt = n => (n===null||n===undefined) ? "—" : Number(n).toFixed(3);
+const sev = s => `<span class="pill ${s==='critical'?'crit':s==='major'?'major':'minor'}">${s}</span>`;
+
+function line(series, w=420, h=90){
+  if(!series.length) return "";
+  const xs=(i)=> 4 + i*(w-8)/Math.max(1,series.length-1);
+  const lo=Math.min(...series.map(p=>+p.score))-0.01, hi=1.0;
+  const ys=(v)=> h-6 - ((v-lo)/Math.max(0.0001,hi-lo))*(h-16);
+  const d=series.map((p,i)=>`${i?'L':'M'}${xs(i).toFixed(1)},${ys(+p.score).toFixed(1)}`).join(' ');
+  const area=`${d}L${xs(series.length-1).toFixed(1)},${h}L4,${h}Z`;
+  const pts=series.map((p,i)=>p.score<0.95?`<circle cx="${xs(i).toFixed(1)}" cy="${ys(+p.score).toFixed(1)}" r="2.6" fill="#f2585b"/>`:'').join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}">
+    <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#4c8dff" stop-opacity=".35"/>
+      <stop offset="1" stop-color="#4c8dff" stop-opacity="0"/></linearGradient></defs>
+    <path d="${area}" fill="url(#g)"/>
+    <path d="${d}" fill="none" stroke="#4c8dff" stroke-width="1.8"/>
+    ${pts}</svg>`;
+}
+
+function strip(hist){
+  return `<div class="strip">${hist.map(h=>`<i class="${h.status==='fail'?'f':''}" title="${h.run_at}: ${h.status}"></i>`).join('')}</div>`;
+}
+
+async function load(){
+  const o = await (await fetch('/api/overview')).json();
+  const last = o.trend.at(-1);
+  $('#asof').textContent = last ? `son koşu: ${last.run_at}` : '';
+  $('#kpi').textContent = last ? fmt(last.score) : '—';
+  const bad = o.contracts.filter(c=>!c.sla_met).length;
+  $('#kpiSub').innerHTML = `${o.contracts.length} kontrat · ${bad} SLA ihlali · ${o.trend.length} günlük geçmiş`;
+  $('#chart').innerHTML = line(o.trend);
+
+  $('#failures tbody').innerHTML = o.open_failures.length ? o.open_failures.map(f=>`
+    <tr><td>${sev(f.severity)}</td>
+        <td><code>${f.check_id.split('.').slice(-1)}</code><div class="sub">${f.description||''}</div></td>
+        <td style="text-align:right">${f.failed_rows}/${f.total_rows}</td></tr>`).join('')
+    : `<tr><td class="muted">Son koşuda açık bulgu yok.</td></tr>`;
+
+  $('#contracts tbody').innerHTML = o.contracts.map(c=>`
+    <tr class="clickable" data-id="${c.id}">
+      <td><b>${c.title}</b><div class="sub">${c.id}</div></td>
+      <td>${c.owner}</td><td><code>${c.source_table}</code></td>
+      <td class="score" style="color:${c.sla_met?'var(--ok)':'var(--bad)'}">${fmt(c.score)}</td>
+      <td class="sub">≥ ${fmt(c.min_score)}</td>
+      <td>${c.checks_total-c.checks_failed}/${c.checks_total} geçti</td></tr>`).join('');
+  document.querySelectorAll('#contracts tbody tr').forEach(tr=>
+    tr.onclick=()=>detail(tr.dataset.id));
+  const worst=[...o.contracts].sort((a,b)=>(a.score??1)-(b.score??1))[0];
+  if(worst) detail(worst.id);
+}
+
+async function detail(id){
+  const d = await (await fetch(`/api/contracts/${id}`)).json();
+  const byCheck = {};
+  d.history.forEach(h=>(byCheck[h.check_id] ||= []).push(h));
+  const el = $('#detail'); el.hidden=false;
+  el.innerHTML = `
+    <h2>${d.contract.title} — türetilen testler</h2>
+    <div class="row" style="margin-bottom:12px">
+      <span class="sub">${d.checks.length} test kontrattan otomatik türetildi ·
+      şema alanlarından ${d.checks.filter(c=>c.origin==='schema').length},
+      kalite kurallarından ${d.checks.filter(c=>c.origin==='quality').length}</span>
+      <span style="margin-left:auto"></span>
+      <button onclick="showArtifact('${id}','dbt')">dbt schema.yml</button>
+      <button onclick="showArtifact('${id}','gx')">GX suite</button>
+      <button class="primary" onclick="ruleForm('${id}')">+ Kural ekle</button>
+    </div>
+    <table><thead><tr><th>Test</th><th>Tip</th><th>Önem</th>
+      <th>Son sonuç</th><th>45 gün</th></tr></thead><tbody>
+      ${d.checks.map(c=>`<tr>
+        <td><code>${c.id.replace(d.contract.id+'.','')}</code>
+            <div class="sub">${c.description||''}</div></td>
+        <td class="sub">${c.kind}</td><td>${sev(c.severity)}</td>
+        <td style="color:${c.status==='fail'?'var(--bad)':'var(--ok)'}">
+          ${c.status==='fail'?`${c.failed_rows}/${c.total_rows} satır`:'geçti'}</td>
+        <td>${strip(byCheck[c.id]||[])}</td></tr>`).join('')}
+    </tbody></table>
+    <div id="pane" style="margin-top:14px"></div>`;
+}
+
+async function showArtifact(id,kind){
+  const t = await (await fetch(`/api/artifacts/${id}/${kind}`)).text();
+  $('#pane').innerHTML = `<div class="sub" style="margin-bottom:6px">
+    Aynı kontrattan üretildi — motor bağımsızlığı kanıtı (${kind})</div><pre>${
+      t.replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</pre>`;
+}
+
+function ruleForm(id){
+  $('#pane').innerHTML = `
+    <div class="card" style="background:var(--panel2)">
+      <h2>Yeni kural (analist)</h2>
+      <div class="grid cols">
+        <div><label>Kural id</label><input id="rid" value="ornek_kural"/></div>
+        <div><label>Önem</label><select id="rsev">
+          <option value="major">major</option><option value="critical">critical</option>
+          <option value="minor">minor</option></select></div>
+      </div>
+      <label>Açıklama</label><input id="rdesc" value="İş kuralı açıklaması"/>
+      <label>SQL — failed_rows döndürmeli, {{scope}} tarih penceresidir</label>
+      <textarea id="rsql">select count(*) as failed_rows
+from sales_orders
+where {{scope}}
+  and currency = 'EUR'
+  and net_amount > 20000</textarea>
+      <div class="row" style="margin-top:10px">
+        <button onclick="previewRule('${id}')">Önizle</button>
+        <button class="primary" onclick="saveRule('${id}')">Kaydet ve koş</button>
+      </div>
+      <div id="prev" style="margin-top:12px"></div>
+    </div>`;
+}
+
+function draft(id){return {contract_id:id, id:$('#rid').value, severity:$('#rsev').value,
+  description:$('#rdesc').value, sql:$('#rsql').value};}
+
+async function previewRule(id){
+  const r = await (await fetch('/api/rules/preview',{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify(draft(id))})).json();
+  $('#prev').innerHTML = r.ok
+    ? `<div class="sub">Son 14 gün, kuralın ihlal ettiği satır sayısı:</div>
+       <div class="strip" style="margin-top:6px;align-items:flex-end;gap:3px">${
+        r.preview.map(p=>`<i style="height:${Math.min(40,6+p.failed_rows*3)}px;
+          background:${p.failed_rows?'var(--warn)':'var(--ok)'};width:14px"
+          title="${p.run_at}: ${p.failed_rows}"></i>`).join('')}</div>`
+    : `<div style="color:var(--bad)">SQL hatası: ${r.error}</div>`;
+}
+
+async function saveRule(id){
+  const res = await fetch('/api/rules',{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify(draft(id))});
+  if(!res.ok){ $('#prev').innerHTML=`<div style="color:var(--bad)">Kaydedilemedi</div>`; return; }
+  await load();
+}
+load();
+</script>
+</body></html>

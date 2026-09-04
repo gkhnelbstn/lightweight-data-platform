@@ -1,0 +1,36 @@
+apiVersion: "0.1"
+kind: DataContract
+id: erp.customers
+info:
+  title: Customers
+  owner: master-data
+  domain: sales
+  description: Customer master data from the ERP.
+server:
+  type: postgres
+  database: erp
+  schema: public
+  table: customers
+  loaded_at_column: loaded_at
+schema:
+  fields:
+    - name: customer_id
+      type: bigint
+      required: true
+      unique: true
+    - name: name
+      type: text
+      required: true
+    - name: country
+      type: text
+      required: true
+      allowed: [TR, DE, US, NL]
+    - name: tax_id
+      type: text
+      required: true
+      unique: true
+    - name: segment
+      type: text
+      allowed: [SMB, MID, ENT]
+sla:
+  min_score: 0.98
