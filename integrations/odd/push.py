@@ -55,8 +55,15 @@ def pending_days(target: str, since: date | None = None,
         where.append("r.run_at >= %s")
         params.append(since)
     if not everything and since is None:
-        where.append("not exists (select 1 from odd_pushes p"
-                     " where p.target = %s and p.run_at = r.run_at)")
+        # The newest day is always re-sent. `core/runner.py` rewrites a day in
+        # place, so a second run of today -- after fixing a contract, after a
+        # failed load -- produces different results under a date the log has
+        # already seen. Skipping it would let ODD keep yesterday's answer for
+        # today. It is 23 entities and ODD upserts them.
+        where.append("(r.run_at = (select max(run_at) from check_results"
+                     "             where run_window = 'incremental')"
+                     " or not exists (select 1 from odd_pushes p"
+                     "                where p.target = %s and p.run_at = r.run_at))")
         params.append(target)
     with store.connect() as cx:
         store.init(cx)

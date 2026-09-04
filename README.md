@@ -127,8 +127,9 @@ python integrations/odd/push.py --url ... --all              # re-send everythin
 Ingestion is incremental by default: the platform's own data source is
 registered if missing, and only run dates that have not reached that platform
 are sent, so the same line covers the first 45-day backfill and the daily cron
-next to `core/runner.py`. What was sent is logged in `odd_pushes` per target, so
-a re-run is a no-op rather than a re-send.
+next to `core/runner.py`. What was sent is logged in `odd_pushes` per target.
+Steady state is 48 entities a night — the catalog and the newest day, both of
+which can still change — against 1060 for a full rebuild.
 
 1060 entities validate against `odd-models`. `deploy/RUN-odd-trial.md` is the
 runbook. The division of labour it implies: **ODD owns** catalog, lineage,
