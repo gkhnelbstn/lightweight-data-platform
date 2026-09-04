@@ -7,12 +7,13 @@ from pathlib import Path
 import pytest
 
 odd_models = pytest.importorskip("odd_models")
-from odd_models.models import DataEntityList, DataEntityType  # noqa: E402
+from odd_models.models import (DataEntityList, DataEntityType,  # noqa: E402
+                               DataQualityTestExpectationCategory)
 
 from core.checks import derive  # noqa: E402
 from core.contract import load_all  # noqa: E402
 from integrations.odd.mapper import (check_entity, dataset_entity,  # noqa: E402
-                                     entity_list, run_entity)
+                                     datasource_oddrn, entity_list, run_entity)
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
 DSN = "postgresql://u:p@localhost:5432/erp"
@@ -58,3 +59,30 @@ def test_run_links_back_to_its_check():
     assert run.type == DataEntityType.JOB_RUN
     # the volume signal has nowhere else to go in ODD's run model
     assert "3/100 rows failed" in run.data_quality_test_run.status_reason
+
+
+def test_payload_declares_the_datasource_push_registers():
+    """ODD 404s an ingestion whose data_source_oddrn it has never seen, so the
+    oddrn push.py registers and the one every payload carries must be the same
+    string -- a mismatch is a 404 USR002 at ingest time, not a mapping error."""
+    payload = entity_list(_entities(), HOST)
+    assert payload.data_source_oddrn == datasource_oddrn(HOST)
+    assert payload.data_source_oddrn == f"//datafletch/host/{HOST}"
+
+
+def test_every_test_carries_an_expectation_category():
+    """An uncategorised DataQualityTest is ingested but counts as zero on ODD's
+    platform-wide Data Quality dashboard."""
+    for e in _entities():
+        if e.data_quality_test:
+            category = e.data_quality_test.expectation.category
+            assert category is not None, e.name
+            assert isinstance(category, DataQualityTestExpectationCategory)
+
+
+def test_freshness_is_the_one_non_assertion_category():
+    by_name = {e.name: e for e in _entities() if e.data_quality_test}
+    assert (by_name["freshness_daily"].data_quality_test.expectation.category
+            == DataQualityTestExpectationCategory.FRESHNESS_ANOMALY)
+    assert (by_name["order_id.not_null"].data_quality_test.expectation.category
+            == DataQualityTestExpectationCategory.ASSERTION)

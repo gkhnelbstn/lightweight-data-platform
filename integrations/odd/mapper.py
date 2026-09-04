@@ -15,8 +15,9 @@ from urllib.parse import urlparse
 
 from odd_models.models import (
     DataEntity, DataEntityList, DataEntityType, DataQualityTest,
-    DataQualityTestExpectation, DataQualityTestRun, DataSet, DataSetField,
-    DataSetFieldType, MetadataExtension, QualityRunStatus, Tag, Type,
+    DataQualityTestExpectation, DataQualityTestExpectationCategory,
+    DataQualityTestRun, DataSet, DataSetField, DataSetFieldType,
+    MetadataExtension, QualityRunStatus, Tag, Type,
 )
 from oddrn_generator import Generator, PostgresqlGenerator
 from oddrn_generator.path_models import BasePathsModel, DependenciesMap
@@ -38,6 +39,15 @@ _PG_TYPE = {
 }
 
 _STATUS = {"pass": QualityRunStatus.SUCCESS, "fail": QualityRunStatus.FAILED}
+
+# ODD's platform-wide Data Quality dashboard buckets tests by expectation
+# category and shows nothing for tests that have none -- an uncategorised test
+# is ingested, visible on its dataset, and invisible on the dashboard. Only
+# freshness has a non-assertion category that is honest here; ODD's remaining
+# categories (VOLUME_ANOMALY, COLUMN_VALUES_ANOMALY, SCHEMA_CHANGE) describe
+# anomaly detection, which is not what a deterministic contract check does.
+_CATEGORY = {"freshness": DataQualityTestExpectationCategory.FRESHNESS_ANOMALY}
+_DEFAULT_CATEGORY = DataQualityTestExpectationCategory.ASSERTION
 
 
 class ContractPathsModel(BasePathsModel):
@@ -123,7 +133,9 @@ def check_entity(host: str, dsn: str, contract: DataContract,
             suite_name=contract.id,
             dataset_list=[dataset_oddrn(dsn, contract)],
             expectation=DataQualityTestExpectation(
-                type=check.kind, severity=check.severity,
+                type=check.kind,
+                category=_CATEGORY.get(check.kind, _DEFAULT_CATEGORY),
+                severity=check.severity,
                 column=check.column, **{
                     k: str(v) for k, v in check.params.items()
                     if v is not None})))
@@ -150,7 +162,15 @@ def run_entity(host: str, contract_id: str, check_name: str, result: dict) -> Da
                            f"severity={result['severity']}")))
 
 
+def datasource_oddrn(host: str) -> str:
+    """The data source every payload is ingested under.
+
+    ODD rejects an ingestion whose ``data_source_oddrn`` it does not know
+    (404 ``USR002``). A collector registers itself; we have no collector, so
+    push.py registers this oddrn before the first POST.
+    """
+    return ContractGenerator(host_settings=host).get_data_source_oddrn()
+
+
 def entity_list(items: list[DataEntity], host: str) -> DataEntityList:
-    return DataEntityList(
-        data_source_oddrn=ContractGenerator(
-            host_settings=host).get_data_source_oddrn(), items=items)
+    return DataEntityList(data_source_oddrn=datasource_oddrn(host), items=items)

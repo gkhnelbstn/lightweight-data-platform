@@ -22,8 +22,8 @@ from psycopg.rows import dict_row
 from core import store
 from core.checks import derive
 from core.contract import load_all
-from integrations.odd.mapper import (check_entity, dataset_entity, entity_list,
-                                     run_entity)
+from integrations.odd.mapper import (check_entity, dataset_entity,
+                                     datasource_oddrn, entity_list, run_entity)
 
 ROOT = Path(__file__).resolve().parents[2]
 HOST = os.getenv("DQ_HOST", "dq.local")
@@ -78,6 +78,45 @@ def payloads() -> list[tuple[str, dict]]:
     return out
 
 
+DATASOURCE_NAME = os.getenv("ODD_DATASOURCE_NAME", "datafletch-contracts")
+
+
+def _json(url: str, body: dict | None = None) -> dict:
+    req = urllib.request.Request(
+        url, method="POST" if body is not None else "GET",
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def ensure_datasource(url: str) -> str:
+    """Register our data source, without which ODD refuses every ingestion.
+
+    ODD only accepts a DataEntityList whose ``data_source_oddrn`` it already
+    knows; an unknown one is a 404 ``USR002`` before any entity is looked at.
+    Collectors register themselves at startup. We are not a collector, so this
+    is our equivalent -- idempotent, so it can sit in the daily cron path.
+    """
+    base = url.rstrip("/")
+    oddrn = datasource_oddrn(HOST)
+    known = _json(f"{base}/api/datasources?page=1&size=1000").get("items", [])
+    if any(d.get("oddrn") == oddrn for d in known):
+        return oddrn
+    try:
+        _json(f"{base}/api/datasources", {
+            "name": DATASOURCE_NAME, "oddrn": oddrn,
+            "description": "Contract-derived data quality checks"})
+        print(f"registered data source {oddrn} as {DATASOURCE_NAME!r}")
+    except urllib.error.HTTPError as e:
+        # a same-named source under a different oddrn is an operator problem,
+        # not something to paper over: say which name collided.
+        raise SystemExit(
+            f"could not register data source {oddrn}: {e.code} "
+            f"{e.read()[:200]!r} (ODD_DATASOURCE_NAME={DATASOURCE_NAME})") from e
+    return oddrn
+
+
 def post(url: str, body: dict) -> int:
     req = urllib.request.Request(
         url.rstrip("/") + "/ingestion/entities",
@@ -103,6 +142,7 @@ def main() -> None:
     print(f"{len(files)} payloads, {total} entities -> {out}")
 
     if a.url:
+        ensure_datasource(a.url)
         for name, body in files:
             try:
                 code = post(a.url, body)
