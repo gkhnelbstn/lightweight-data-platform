@@ -133,7 +133,8 @@ which can still change — against 1060 for a full rebuild.
 
 1060 entities validate against `odd-models`. `deploy/RUN-odd-trial.md` is the
 runbook. The division of labour it implies: **ODD owns** catalog, lineage,
-glossary, ownership, alert lifecycle and search; **this project owns** contracts,
+glossary, ownership (in principle — the ingested `owner` is discarded, see the
+gap analysis), alert lifecycle and search; **this project owns** contracts,
 check derivation, artifact emission, scoring window, score and SLA. See
 `docs/odd-gap-analysis.md` for why, and for what a run against a real instance
 changed: ODD's run model has no row counters and ignores our severity, but it

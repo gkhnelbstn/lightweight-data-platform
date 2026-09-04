@@ -206,7 +206,8 @@ Two caveats:
 | dataset from contract schema | `DataEntity(TABLE, DataSet(field_list))` | full | **partly** — name, type, logical type, primary key and column description all land and render; `is_nullable` is sent as `false` and comes back `null` from `/api/datasets/{id}/structure`, with no UI affordance |
 | derived check | `DataEntity(JOB, DataQualityTest)` | full | **confirmed**, once `expectation.category` is set (§4) |
 | daily run | `DataEntity(JOB_RUN, DataQualityTestRun)` | partial | **confirmed partial** (§1) |
-| contract ownership / domain | `owner`, `tags` | full | **confirmed** — tags render as landing-page facets (`domain:sales`, `severity:critical 15`) |
+| contract domain / severity / origin | `tags` | full | **confirmed** — 8 tags, all ours, rendering as landing-page facets (`domain:sales`, `severity:critical 15`) |
+| contract ownership | `owner` | full | **refuted** — `owner` is sent on all 25 catalog entities (`sales-ops`, `master-data`) and ODD keeps none of it: `ownership: null` on every entity, `/api/owners` empty, "Owners — Not created" in the UI (§8) |
 | test ↔ dataset link | ODDRN in `dataset_list` | full | **confirmed** — the test page links to `sales_orders` and the dataset counts the test |
 | contract metadata | `MetadataExtension` | full | **refuted** — strings, ints and bools only (§3) |
 
@@ -214,6 +215,43 @@ The dataset ODDRNs are still plain PostgreSQL ODDRNs, so the merge-with-collecto
 argument stands — though it was not exercised here: no collector was run, and
 the tables appear under the `datafletch-contracts` data source we registered.
 That claim remains untested.
+
+## 8. Glossary, lineage and owners — the parts we did not build
+
+The runbook asked whether these are worth not building. All three are empty on
+the running instance, but for three different reasons, and only one of them is
+ODD's doing.
+
+**Ownership: we send it, ODD drops it.** `dataset_entity` and `check_entity`
+both set `owner=contract.info.owner`, so `sales-ops` and `master-data` are on
+all 25 catalog entities in `00_catalog.json`. In ODD: `ownership` is `null` on
+every entity, `/api/owners` returns zero, and the dataset page offers
+"+ Add Owner". Ownership in this build is a platform-side object with its own
+`/api/owners` endpoint and a role per assignment — the ingestion `owner` string
+is not a way in. So this is not "we chose not to build it"; it is a mapping
+that looks like it works and does not. Closing it means teaching `push.py` a
+second, non-ingestion API, which is a bigger commitment than it sounds: the
+contract would become the source of truth for ODD's ownership graph too.
+
+**Lineage: we send none, and we are sitting on some.** Upstream and downstream
+are both `{"nodes": [], "edges": []}`. Expected — we push no `DataTransformer`,
+no `input_list`/`output_list`. Worth noting though: the contract already
+declares `customer_id references customers.customer_id`, which we compile into
+a `relationship` check and nothing else. ODD would draw that edge if we sent
+it. Not built here, but this is the cheapest lineage anyone will ever get:
+a foreign key the contract already states.
+
+**Glossary: nothing on either side.** `/api/terms` is empty and no term is
+attached to any dataset or column; the Dictionary is a feature we have not
+used rather than one that failed. Same for namespaces — every entity reads
+"not in any namespace". This is the clearest "worth not building" of the
+three: a curated glossary is editorial work with a UI, ownership and search
+behind it, and reproducing that is a project, not a module.
+
+The honest summary: **glossary yes, lineage yes, ownership not yet.** Two of
+the three are worth adopting untouched. The third is currently a silent hole —
+the contract names an owner, the payload carries it, and no one in ODD can see
+it.
 
 ## Practical notes from the first version — all held
 
@@ -254,8 +292,17 @@ we show a severity-weighted trend, and a user who sees both without being told
 the difference will trust the wrong one." Either our UI has to own the score
 narrative explicitly, or ODD's panel needs to be read as what it is.
 
+**Ownership is on ODD's side of the line but nothing crosses it.** The split
+listed ownership under "ODD owns" and that is still where it belongs — but it
+is currently owned by nobody. We send `owner` and ODD discards it (§8), so the
+line is drawn correctly and unimplemented, which is the one place this document
+would previously have told a reader something false.
+
 Everything else survived contact. Alert lifecycle is better than assumed and is
 worth not building. Catalog, structure, tags, search and the ODDRN join key all
-worked on the first push. And the ingestion layer is a straight fit: 1060
-entities, validated locally, accepted unchanged — the only thing missing was a
-data source nobody had told us to create.
+worked on the first push. Glossary and lineage are empty because we send
+nothing, not because anything failed — and lineage is the obvious next thing to
+send, since the contract's `references:` already states an edge ODD would draw.
+The ingestion layer itself is a straight fit: 1060 entities, validated locally,
+accepted unchanged — the only thing missing was a data source nobody had told
+us to create.
