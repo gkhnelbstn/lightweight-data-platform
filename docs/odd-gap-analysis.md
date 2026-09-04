@@ -175,7 +175,14 @@ grouping ODD understands, and it is a label.
 
 **Verdict: works, and is the strongest thing ODD gave us.**
 
-After the 45-day backfill: **3 open, 10 `RESOLVED_AUTOMATICALLY`, 0 manual.**
+After one 45-day backfill into an empty platform: **3 open, 10
+`RESOLVED_AUTOMATICALLY`, 0 resolved by hand** —
+
+```bash
+curl -s "localhost:8080/api/alerts/list?type=ALL&status=OPEN&page=1&size=500" | jq length
+curl -s "localhost:8080/api/alerts/list?type=ALL&status=RESOLVED_AUTOMATICALLY&page=1&size=500" | jq length
+```
+
 An alert opens on a check's first failure, does not duplicate on subsequent
 failures (it appends to its own history —
 `Test customer_id.not_null@2026-09-02 failed with status FAILED`), and closes
