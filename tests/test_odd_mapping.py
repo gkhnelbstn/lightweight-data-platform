@@ -1,133 +1,153 @@
-"""The ODD payloads must validate against odd-models, not just look plausible."""
+"""What we send ODD has to be what ODD and odd-collector already agree on.
+
+ODD matches everything by ODDRN, as strings. The failure mode is silent: a
+dataset ODDRN that differs by a port or a host name forks the catalog in two,
+the collector's copy holding the schema and ours holding the tests, and nothing
+errors. So these tests are mostly about identifiers.
+"""
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 
 odd_models = pytest.importorskip("odd_models")
 from odd_models.models import (DataEntityList, DataEntityType,  # noqa: E402
                                DataQualityTestExpectationCategory)
 
-from core.checks import derive  # noqa: E402
-from core.contract import load_all  # noqa: E402
-from integrations.odd.mapper import (check_entity, dataset_entity,  # noqa: E402
-                                     datasource_oddrn, entity_list, pg_host,
-                                     relationship_entities, run_entity)
+from integrations.odd.from_datacontract import (build,  # noqa: E402
+                                                dataset_oddrn)
+from integrations.odd.mapper import (datasource_oddrn, entity_list,  # noqa: E402
+                                     pg_host)
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
-DSN = "postgresql://u:p@localhost:5432/erp"
+DSN = "postgresql://u:p@db:5432/erp"
 HOST = "dq.test"
 
 
-def _entities():
-    items = []
-    for c in load_all(CONTRACTS):
-        items.append(dataset_entity(DSN, c))
-        for ck in derive(c):
-            items.append(check_entity(HOST, DSN, c, ck))
-    return items
+def _contract(name: str) -> dict:
+    return yaml.safe_load((CONTRACTS / name).read_text(encoding="utf-8"))
 
 
-def test_catalog_payload_validates():
-    payload = entity_list(_entities(), HOST)
-    assert DataEntityList.model_validate(payload.model_dump(mode="json"))
+def _results(checks: list[dict]) -> dict:
+    return {"runId": "2026-09-05", "timestampStart": "2026-09-05T03:00:00Z",
+            "timestampEnd": "2026-09-05T03:00:01Z", "checks": checks}
 
 
-def test_check_oddrns_do_not_collide():
-    jobs = [e for e in _entities() if e.type == DataEntityType.JOB]
-    assert len({e.oddrn for e in jobs}) == len(jobs)
+def _check(**kw) -> dict:
+    base = {"key": "sales_orders__order_id__field_unique",
+            "name": "Check that unique field order_id has no duplicate values",
+            "category": "schema", "type": "field_unique", "field": "order_id",
+            "dimension": "uniqueness", "result": "failed",
+            "reason": "Actual duplicate_count(order_id) was 8, expected = 0",
+            "diagnostics": {"metric": "duplicate_count", "value": 8,
+                            "row_count": 3376, "failed_rows": 16}}
+    base.update(kw)
+    return base
 
 
-def test_tests_point_at_postgres_dataset_oddrns():
-    for e in _entities():
-        if e.data_quality_test:
-            assert all(o.startswith("//postgresql/")
-                       for o in e.data_quality_test.dataset_list)
+# --- identifiers ------------------------------------------------------------
+
+def test_dataset_host_carries_no_port():
+    """odd-collector builds the host segment from its bare `host:` config. A
+    port here forks every table into two catalog objects."""
+    oddrn = dataset_oddrn(_contract("erp_postgres.odcs.yaml"), "erp")
+    host = oddrn.split("/host/")[1].split("/")[0]
+    assert ":" not in host, oddrn
 
 
-def test_run_links_back_to_its_check():
-    contract = load_all(CONTRACTS)[0]
-    check = derive(contract)[0]
-    name = check.id.replace(contract.id + ".", "")
-    run = run_entity(HOST, contract.id, name, {
-        "run_at": date(2026, 9, 4), "status": "fail", "failed_rows": 3,
-        "total_rows": 100, "fail_ratio": 0.03, "duration_ms": 12,
-        "severity": check.severity})
-    job = check_entity(HOST, DSN, contract, check)
-    assert run.data_quality_test_run.data_quality_test_oddrn == job.oddrn
-    assert run.type == DataEntityType.JOB_RUN
-    # the volume signal has nowhere else to go in ODD's run model
-    assert "3/100 rows failed" in run.data_quality_test_run.status_reason
+def test_odd_pg_host_overrides_the_dsn(monkeypatch):
+    monkeypatch.setenv("ODD_PG_HOST", "erp-db.internal")
+    assert pg_host(DSN) == "erp-db.internal"
+    monkeypatch.delenv("ODD_PG_HOST")
+    assert pg_host(DSN) == "db"
+
+
+def test_server_type_picks_the_generator():
+    """The tests must land on the ODDRN odd-collector's own adapter mints for
+    that source, which is a different scheme per database."""
+    pg = dataset_oddrn(_contract("erp_postgres.odcs.yaml"), "erp")
+    ms = dataset_oddrn(_contract("erp_mssql.odcs.yaml"), "erp")
+    assert pg == "//postgresql/host/db/databases/erp/schemas/public/tables/sales_orders"
+    assert ms == "//mssql/host/mssql/databases/erp/schemas/dbo/tables/sales_orders"
+
+
+def test_windowed_server_is_not_used_for_the_oddrn():
+    """Checks run over a view of one day, but they are about the table. The
+    catalog object -- and everything downstream of it -- is the table."""
+    contract = _contract("erp_postgres.odcs.yaml")
+    assert "/schemas/public/" in dataset_oddrn(contract, "erp")
+    assert "/schemas/asof/" in dataset_oddrn(contract, "erp_daily")
 
 
 def test_payload_declares_the_datasource_push_registers():
-    """ODD 404s an ingestion whose data_source_oddrn it has never seen, so the
-    oddrn push.py registers and the one every payload carries must be the same
-    string -- a mismatch is a 404 USR002 at ingest time, not a mapping error."""
-    payload = entity_list(_entities(), HOST)
+    entities = build(_contract("erp_postgres.odcs.yaml"),
+                     _results([_check()]), "//postgresql/host/db/x")
+    payload = entity_list(entities, HOST)
     assert payload.data_source_oddrn == datasource_oddrn(HOST)
     assert payload.data_source_oddrn == f"//datafletch/host/{HOST}"
 
 
+# --- entities ---------------------------------------------------------------
+
+def test_each_check_becomes_a_test_and_a_run_that_links_back():
+    ds = "//postgresql/host/db/databases/erp/schemas/public/tables/sales_orders"
+    entities = build(_contract("erp_postgres.odcs.yaml"), _results([_check()]), ds)
+    jobs = [e for e in entities if e.type == DataEntityType.JOB]
+    runs = [e for e in entities if e.type == DataEntityType.JOB_RUN]
+    assert len(jobs) == len(runs) == 1
+    assert runs[0].data_quality_test_run.data_quality_test_oddrn == jobs[0].oddrn
+    assert jobs[0].data_quality_test.dataset_list == [ds]
+
+
+def test_the_run_carries_the_counts_odd_has_no_field_for():
+    """ODD's run model has no numeric column, so the volume signal travels in
+    status_reason or not at all."""
+    entities = build(_contract("erp_postgres.odcs.yaml"), _results([_check()]),
+                     "//postgresql/host/db/x")
+    reason = next(e for e in entities
+                  if e.type == DataEntityType.JOB_RUN).data_quality_test_run.status_reason
+    assert "16/3376" in reason
+
+
+def test_tests_are_keyed_by_something_stable_across_runs():
+    """datacontract gives each check a fresh uuid per run; keying on it would
+    make a new catalog object every night."""
+    c = _contract("erp_postgres.odcs.yaml")
+    a = build(c, _results([_check(id="uuid-1")]), "//x")
+    b = build(c, _results([_check(id="uuid-2")]), "//x")
+    assert [e.oddrn for e in a if e.type == DataEntityType.JOB] == \
+           [e.oddrn for e in b if e.type == DataEntityType.JOB]
+
+
 def test_every_test_carries_an_expectation_category():
-    """An uncategorised DataQualityTest is ingested but counts as zero on ODD's
+    """An uncategorised test is ingested and counts as zero on ODD's
     platform-wide Data Quality dashboard."""
-    for e in _entities():
+    entities = build(_contract("erp_postgres.odcs.yaml"),
+                     _results([_check(), _check(key="freshness",
+                                                dimension="timeliness")]),
+                     "//x")
+    for e in entities:
         if e.data_quality_test:
-            category = e.data_quality_test.expectation.category
-            assert category is not None, e.name
-            assert isinstance(category, DataQualityTestExpectationCategory)
+            cat = e.data_quality_test.expectation.category
+            assert isinstance(cat, DataQualityTestExpectationCategory)
 
 
-def test_freshness_is_the_one_non_assertion_category():
-    by_name = {e.name: e for e in _entities() if e.data_quality_test}
-    assert (by_name["freshness_daily"].data_quality_test.expectation.category
-            == DataQualityTestExpectationCategory.FRESHNESS_ANOMALY)
-    assert (by_name["order_id.not_null"].data_quality_test.expectation.category
-            == DataQualityTestExpectationCategory.ASSERTION)
+def test_timeliness_is_the_one_non_assertion_category():
+    entities = build(_contract("erp_postgres.odcs.yaml"),
+                     _results([_check(key="fresh", dimension="timeliness"),
+                               _check(key="uniq", dimension="uniqueness")]),
+                     "//x")
+    by_name = {e.name: e for e in entities if e.data_quality_test}
+    assert by_name["fresh"].data_quality_test.expectation.category == \
+        DataQualityTestExpectationCategory.FRESHNESS_ANOMALY
+    assert by_name["uniq"].data_quality_test.expectation.category == \
+        DataQualityTestExpectationCategory.ASSERTION
 
 
-def test_dataset_host_carries_no_port():
-    """odd-collector mints the host segment from its bare `host:` config. An
-    ODDRN is matched by string, so a port here forks every table into two
-    catalog objects -- the collector's with the schema, ours with the tests."""
-    for e in _entities():
-        if e.type == DataEntityType.TABLE:
-            host = e.oddrn.split("/host/")[1].split("/")[0]
-            assert ":" not in host, e.oddrn
-
-
-def test_odd_pg_host_overrides_the_dsn(monkeypatch):
-    """The collector usually reaches the database under a name our DSN does
-    not share -- a container name, a service DNS entry -- so the operator has
-    to be able to say what that name is."""
-    monkeypatch.setenv("ODD_PG_HOST", "erp-db.internal")
-    assert pg_host(DSN) == "erp-db.internal"
-    monkeypatch.delenv("ODD_PG_HOST")
-    assert pg_host(DSN) == "localhost"
-
-
-def test_references_become_a_column_level_erd_relationship():
-    """The contract states the foreign key; ODD draws it. This is the one edge
-    we can publish without discovering anything."""
-    rels = [r for c in load_all(CONTRACTS)
-            for r in relationship_entities(DSN, c)]
-    assert len(rels) == 1, [r.name for r in rels]
-    edge = rels[0].data_relationship
-    assert edge.source_dataset_oddrn.endswith("/tables/sales_orders")
-    assert edge.target_dataset_oddrn.endswith("/tables/customers")
-    assert edge.details.source_dataset_field_oddrns_list == [
-        edge.source_dataset_oddrn + "/columns/customer_id"]
-    assert edge.details.target_dataset_field_oddrns_list == [
-        edge.target_dataset_oddrn + "/columns/customer_id"]
-
-
-def test_relationship_oddrns_do_not_collide_with_check_oddrns():
-    """Both live under the contract generator, so a relationship named after a
-    column must not land on the check for that column."""
-    ids = {e.oddrn for e in _entities()}
-    for c in load_all(CONTRACTS):
-        for r in relationship_entities(DSN, c):
-            assert r.oddrn not in ids, r.oddrn
+def test_payload_validates_against_odd_models():
+    entities = build(_contract("erp_mssql.odcs.yaml"), _results([_check()]),
+                     dataset_oddrn(_contract("erp_mssql.odcs.yaml"), "erp"))
+    payload = entity_list(entities, HOST)
+    assert DataEntityList.model_validate(payload.model_dump(mode="json"))

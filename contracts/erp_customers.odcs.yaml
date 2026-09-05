@@ -1,0 +1,78 @@
+# Customer master data, in ODCS. See erp_postgres.odcs.yaml for why the second
+# server block exists.
+apiVersion: v3.0.2
+kind: DataContract
+id: erp.customers
+name: Customers
+version: 1.0.0
+status: active
+domain: sales
+tenant: master-data
+description:
+  purpose: Customer master data from the ERP.
+
+servers:
+  - server: erp
+    type: postgres
+    host: db
+    port: 5432
+    database: erp
+    schema: public
+  # The same tables as views over one day's arrivals. core/runner.py rebuilds
+  # this schema before each run; see its docstring for why the window is a
+  # database object rather than `datacontract test --filter`.
+  - server: erp_daily
+    type: postgres
+    host: db
+    port: 5432
+    database: erp
+    schema: asof
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: customers
+    physicalName: customers
+    logicalType: object
+    physicalType: table
+    properties:
+      - name: customer_id
+        logicalType: integer
+        physicalType: bigint
+        required: true
+        unique: true
+        primaryKey: true
+      - name: name
+        logicalType: string
+        physicalType: text
+        required: true
+      - name: country
+        logicalType: string
+        physicalType: text
+        required: true
+      - name: tax_id
+        logicalType: string
+        physicalType: text
+        required: true
+        unique: true
+      - name: segment
+        logicalType: string
+        physicalType: text
+
+    quality:
+      - type: sql
+        description: country must be one of TR, DE, US, NL
+        query: select count(*) from customers where country not in ('TR','DE','US','NL')
+        mustBe: 0
+        dimension: conformity
+
+      - type: sql
+        description: segment must be one of SMB, MID, ENT
+        query: >
+          select count(*) from customers
+          where segment is not null and segment not in ('SMB','MID','ENT')
+        mustBe: 0
+        dimension: conformity

@@ -110,11 +110,25 @@ services:
       - ./contracts:/app/contracts
       - ./artifacts:/app/artifacts
       - ./demo:/app/demo
+      # Source, mounted rather than only baked in: the image still carries a
+      # runnable copy, but editing a module should not need a rebuild.
+      - ./core:/app/core
+      - ./api:/app/api
+      - ./integrations:/app/integrations
+      - ./web:/app/web
     environment:
       ERP_DSN: postgresql://postgres:postgres@db:5432/erp
       DQ_DSN: postgresql://postgres:postgres@db:5432/dq
       ODD_PG_HOST: db
       DQ_HOST: dq.local
+      # datacontract-cli reads the source credentials from the environment, one
+      # set per server type, never from the contract file.
+      DATACONTRACT_POSTGRES_USERNAME: postgres
+      DATACONTRACT_POSTGRES_PASSWORD: postgres
+      DATACONTRACT_SQLSERVER_USERNAME: sa
+      DATACONTRACT_SQLSERVER_PASSWORD: "Str0ng!Passw0rd"
+      DATACONTRACT_SQLSERVER_DRIVER: ODBC Driver 18 for SQL Server
+      DATACONTRACT_SQLSERVER_TRUST_SERVER_CERTIFICATE: "true"
     ports: ["8077:8077"]
     restart: always
 

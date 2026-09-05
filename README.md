@@ -27,8 +27,8 @@ still missing after ODD and datacontract-cli have done their part"**.
 | schema discovery | **odd-collector** | 64 MB, one config file |
 | column profiling | **odd-collector-profiler** | string lengths, means, inferred types |
 | alert lifecycle | **ODD Platform** | opens on failure, closes itself on the next pass. Measured: 3 open, 10 auto-resolved over a 45-day backfill |
-| contract format | **ODCS** (Bitol / Linux Foundation) | a vendor-neutral standard beats our YAML |
-| deriving tests from a schema | **datacontract-cli** (MIT) | 15 checks from the same table, no code |
+| contract format | **ODCS** (Bitol / Linux Foundation) | adopted — `contracts/*.odcs.yaml` |
+| deriving and running the checks | **datacontract-cli** (MIT) | adopted — 27 checks on Postgres, 24 on SQL Server, executed in the source database |
 | dbt / Great Expectations / 24 more exports | **datacontract-cli** | `export dbt-models`, `export great-expectations` |
 | BI impact — "which dashboards break" | **odd-collector** Superset/Metabase/Tableau adapters | dashboards arrive as `DataConsumer(inputs)` pointing at the source table, so a failing check has downstream dashboards. Config, not code |
 
@@ -39,25 +39,29 @@ no maintained Helm chart, so deployment is compose.
 
 ### What is actually still missing
 
-These four are why this repository exists. Nothing above does them.
+These four are why this repository exists. Nothing above does them. Together
+they are about 400 lines: `core/runner.py`, `core/store.py`,
+`core/scoring.py`, `integrations/odd/`.
 
 1. **Results as a time series.** `datacontract test` runs and forgets: no
    as-of date, no storage, no trend. Here every run is stored under its date in
    a monthly-partitioned table, so quality has a history that can be charted
    and an SLA that can be breached.
-2. **A severity-weighted score.** ODD divides passing tests by total tests and
-   calls it a score; a failing `critical` not_null and a failing cosmetic rule
-   cost the same, and one bad row weighs as much as four thousand.
-   `0.6 * severity-weighted pass/fail + 0.4 * severity-weighted (1 - fail_ratio)`
-   does not flatten either distinction.
-3. **The incremental window.** Scoring `loaded_at = as_of` rather than
-   `loaded_at <= as_of` is the single thing that made the trend legible — see
-   below. datacontract-cli has `--filter` for exactly this and it is **broken
-   in 1.1.3**: it emits a nameless `DROP VIEW IF EXISTS` and every filtered
-   check errors.
-4. **The push to ODD.** Mapping contracts, checks, runs, column statistics and
-   foreign keys onto `DataEntity` / `DataQualityTest` / `DataQualityTestRun` /
-   `DataSetFieldStat` / `ERDRelationship`, incrementally and idempotently.
+2. **A weighted score.** ODD divides passing tests by total tests and calls it
+   a score; a missing key and a cosmetic rule cost the same, and one bad row
+   weighs as much as four thousand.
+   `0.6 * weighted pass/fail + 0.4 * weighted (1 - fail_ratio)`, weighted by
+   the ODCS quality *dimension* — completeness, uniqueness, consistency and
+   timeliness break joins, so they cost more than conformity.
+3. **The daily window.** A schema of views over one day's arrivals, addressed
+   through a second `servers` entry in the contract. datacontract-cli's
+   `--filter` is meant to be this and is **broken in 1.1.3** — a nameless
+   `DROP VIEW IF EXISTS` — and the ibis API under it, `Table.alias`, is
+   documented by ibis as not public and due for removal. Views are standard
+   SQL and standard ODCS, with nothing to patch.
+4. **The push to ODD.** Turning `datacontract test` output into
+   `DataQualityTest` / `DataQualityTestRun` on the *table's* ODDRN, so a
+   failing check inherits the dashboards downstream of it.
 
 Plus the one interface neither has: **an analyst can author a rule.** ODD's UI
 annotates what was ingested — there is no "create test" anywhere in it — and
@@ -90,12 +94,15 @@ Column profiling is opt-in, because the image is 4.4 GB and idles at ~450 MB:
 docker compose --profile profiling up -d
 ```
 
-Daily operation is two lines in cron:
+Daily operation is one line in cron:
 
 ```bash
-docker compose exec -T app python core/runner.py
-docker compose exec -T app python integrations/odd/push.py --url http://odd-platform:8080 --no-datasets
+docker compose exec -T app python core/runner.py --odd-url http://odd-platform:8080
 ```
+
+It rebuilds the day's views, runs every `contracts/*.odcs.yaml` through
+`datacontract test` against its own server type, stores the results as a time
+series, scores them, and sends the runs to ODD attached to the table.
 
 **Sizing.** Measured idle: ODD 924 MB (627 MB when capped at 1 GB, and it still
 starts), its Postgres 147 MB, collector 64 MB, profiler 451 MB. **4 vCPU /
@@ -107,29 +114,34 @@ does not enter into it.
 
 | path | what it is |
 |---|---|
-| `contracts/*.contract.yaml` | the contracts — schema, quality rules, SLA |
-| `core/contract.py` | contract model (pydantic) |
-| `core/checks.py` | contract → canonical, engine-neutral checks |
-| `core/compilers/sql.py` | check → PostgreSQL (`failed_rows`, `total_rows`) |
-| `core/compilers/dbt.py`, `gx.py` | check → dbt `schema.yml`, GX suite |
-| `core/runner.py` | register, compile, execute as-of a date, persist |
-| `core/scoring.py` | severity-weighted score |
+| `contracts/*.odcs.yaml` | the contracts, in the Open Data Contract Standard |
+| `core/runner.py` | build the day's views, run `datacontract test`, persist, score, push |
+| `core/scoring.py` | dimension-weighted score |
 | `core/store.py` | DDL, monthly partitions, writes |
-| `api/main.py` | read API + analyst rule authoring |
+| `api/main.py` | read API + analyst rule authoring, writing ODCS |
 | `web/index.html` | single-file UI, no build step |
-| `integrations/odd/` | mapper, incremental push, column statistics |
+| `integrations/odd/` | ODDRN vocabulary and the datacontract → ODD bridge |
+| `deploy/Dockerfile.odd-collector` | odd-collector plus two fixes to its Superset adapter |
 | `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
 | `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |
 | `docs/stack-choices.md` | which projects to depend on, with their health figures |
 
 ## Three things this established
 
-**1. The scoring window decides whether the dashboard is useful.**
-Cumulative scoring (`loaded_at <= as_of`) produced a flat line — 0.9993 to
-0.9936 across two real incidents, never breaching SLA, because every new bad
-row is diluted by the whole history. Scoring the daily increment turns the same
-incidents into visible drops. Same data, same checks. A quality dashboard built
-on the cumulative window is decorative.
+**1. Cumulative scoring is a ratchet, and that is why the window exists.**
+Re-measured on the current engine, 45 days, same data, same checks, only the
+predicate on the views changed:
+
+| window | days the score improved | days it worsened | biggest improvement |
+|---|---|---|---|
+| `loaded_at <= as_of` | **1** | 3 | 0.0297 |
+| `loaded_at = as_of` | **17** | 10 | 0.0895 |
+
+Scoring the whole history means a defect that appears once is counted forever:
+the series steps down and stays there, recovering once in 44 transitions. The
+daily window shows the drop *and* the recovery. The earlier phrasing of this
+finding — "a flat line that never breaches SLA" — was measured on a different
+seed and overstated it; the mechanism is the ratchet, not the flatness.
 
 **2. A pure row-ratio score is useless; so is a pure pass/fail score.**
 Ratio alone reads one bad row in a million as 0.999999. Binary alone cannot
@@ -163,13 +175,11 @@ not: it returns 201 and stores nothing, and its epic has been open since 2022.
 
 Early. A working vertical slice, not a product.
 
-* **`unique` is windowed and should not be.** The check runs against a single
-  day's rows, so a duplicate that arrives on a later day than the original is
-  never seen. Demonstrated, not theorised. `not_null` and `range` are right to
-  be windowed; a table-wide invariant is not.
-* **A broken check and broken data look identical.** A SQL error is recorded as
-  `failed_rows = 1, total_rows = 1`, which scores like a data problem and opens
-  an alert like one.
+* **`unique` is still windowed.** Every check now runs against the day's view,
+  including uniqueness, so a duplicate that arrives on a later day than its
+  original is not seen. The old engine had the same hole; adopting ODCS did not
+  close it, it moved it. The fix is a per-rule choice of window, which ODCS has
+  no field for.
 * **No CDC.** `loaded_at = as_of` is a watermark: it sees inserts, not updates
   or deletes.
 * **One data source.** The DSN comes from the environment, not the contract.

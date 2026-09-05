@@ -1,10 +1,9 @@
-"""Map contracts, derived checks and run results onto the ODD specification.
+"""The ODDRN vocabulary this project speaks to ODD in.
 
-ODD models a quality test as DataEntity(type=JOB) carrying a DataQualityTest,
-and each execution as DataEntity(type=JOB_RUN) carrying a DataQualityTestRun --
-the same shape odd-dbt and odd-great-expectations produce. Datasets are
-addressed by ODDRN, so the tests we push land on the very same catalog objects
-ODD's own Postgres collector discovers.
+ODD addresses everything by ODDRN and matches them as strings, so the only
+thing that has to be right here is that the identifiers we mint are the ones
+odd-collector mints for the same objects. The entities themselves are built in
+`from_datacontract.py`, from what `datacontract test` reports.
 """
 from __future__ import annotations
 
@@ -13,42 +12,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-from odd_models.models import (
-    CardinalityType, DataEntity, DataEntityList, DataEntityType,
-    DataQualityTest, DataQualityTestExpectation,
-    DataQualityTestExpectationCategory, DataQualityTestRun, DataRelationship,
-    DataSet, DataSetField, DataSetFieldType, ERDRelationship,
-    MetadataExtension, QualityRunStatus, RelationshipType, Tag, Type,
-)
+from odd_models.models import DataEntity, DataEntityList
 from oddrn_generator import Generator, PostgresqlGenerator
 from oddrn_generator.path_models import BasePathsModel, DependenciesMap
 from oddrn_generator.server_models import HostnameModel
 from pydantic import Field
 
-from core.checks import Check
-from core.contract import DataContract
 
 SCHEMA_URL = ("https://raw.githubusercontent.com/opendatadiscovery/opendatadiscovery-specification"
               "/main/specification/extensions/datafletch.json#/definitions/Contract")
 
-_PG_TYPE = {
-    "bigint": Type.TYPE_INTEGER, "integer": Type.TYPE_INTEGER,
-    "int": Type.TYPE_INTEGER, "numeric": Type.TYPE_NUMBER,
-    "float": Type.TYPE_NUMBER, "text": Type.TYPE_STRING,
-    "varchar": Type.TYPE_STRING, "date": Type.TYPE_DATETIME,
-    "timestamp": Type.TYPE_DATETIME, "boolean": Type.TYPE_BOOLEAN,
-}
 
-_STATUS = {"pass": QualityRunStatus.SUCCESS, "fail": QualityRunStatus.FAILED}
 
-# ODD's platform-wide Data Quality dashboard buckets tests by expectation
-# category and shows nothing for tests that have none -- an uncategorised test
-# is ingested, visible on its dataset, and invisible on the dashboard. Only
-# freshness has a non-assertion category that is honest here; ODD's remaining
-# categories (VOLUME_ANOMALY, COLUMN_VALUES_ANOMALY, SCHEMA_CHANGE) describe
-# anomaly detection, which is not what a deterministic contract check does.
-_CATEGORY = {"freshness": DataQualityTestExpectationCategory.FRESHNESS_ANOMALY}
-_DEFAULT_CATEGORY = DataQualityTestExpectationCategory.ASSERTION
 
 
 class ContractPathsModel(BasePathsModel):
@@ -95,161 +70,6 @@ def pg_generator(dsn: str, table: str, schema: str = "public") -> PostgresqlGene
         host_settings=pg_host(dsn),
         databases=(urlparse(dsn).path or "/").lstrip("/"),
         schemas=schema, tables=table)
-
-
-def dataset_oddrn(dsn: str, contract: DataContract) -> str:
-    return pg_generator(dsn, contract.server.table,
-                        contract.server.schema_).get_oddrn_by_path("tables")
-
-
-def column_oddrns(dsn: str, contract: DataContract) -> dict[str, str]:
-    """`{column name: oddrn}` -- the key ODD's dataset-stats payload is keyed by."""
-    g = pg_generator(dsn, contract.server.table, contract.server.schema_)
-    out = {}
-    for f in contract.schema_.fields:
-        g.set_oddrn_paths(tables_columns=f.name)
-        out[f.name] = g.get_oddrn_by_path("tables_columns")
-    return out
-
-
-def dataset_entity(dsn: str, contract: DataContract,
-                   rows_number: int | None = None,
-                   columns: list[tuple[str, str]] | None = None) -> DataEntity:
-    """The contract already describes the schema, so it can seed the catalog on
-    its own -- no collector required to see the table in ODD.
-
-    *columns* is the table's real column list when we have a connection to read
-    it. The contract governs a subset, and publishing that subset as the
-    dataset's structure makes every collector cycle mint a new schema revision
-    (see `stats.table_columns`). Contract metadata -- description, key,
-    nullability -- is overlaid onto the columns it does name.
-    """
-    g = pg_generator(dsn, contract.server.table, contract.server.schema_)
-    declared = {f.name: f for f in contract.schema_.fields}
-    listing = columns or [(f.name, f.type) for f in contract.schema_.fields]
-    fields = []
-    for name, pg_type in listing:
-        f = declared.get(name)
-        g.set_oddrn_paths(tables_columns=name)
-        fields.append(DataSetField(
-            oddrn=g.get_oddrn_by_path("tables_columns"), name=name,
-            description=f.description if f else None,
-            type=DataSetFieldType(
-                type=_PG_TYPE.get(pg_type.lower(), Type.TYPE_UNKNOWN),
-                logical_type=pg_type,
-                is_nullable=not (f.required if f else False)),
-            is_primary_key=bool(f and f.unique and f.required),
-            enum_values=None))
-    return DataEntity(
-        oddrn=g.get_oddrn_by_path("tables"), name=contract.server.table,
-        type=DataEntityType.TABLE, owner=contract.info.owner,
-        description=contract.info.description,
-        tags=[Tag(name=f"contract:{contract.id}"),
-              Tag(name=f"domain:{contract.info.domain or 'unknown'}")],
-        metadata=[MetadataExtension(schema_url=SCHEMA_URL, metadata={
-            "contract_id": contract.id,
-            "contract_sla_min_score": float(contract.sla.min_score)})],
-        # ODD shows "Rows 0" until something tells it otherwise; nothing
-        # derives a row count from the runs we push.
-        dataset=DataSet(field_list=fields, rows_number=rows_number))
-
-
-def check_entity(host: str, dsn: str, contract: DataContract,
-                 check: Check) -> DataEntity:
-    # the check id minus the contract prefix -- NOT the last dotted segment,
-    # which collides (customer_id.unique and tax_id.unique both end in 'unique')
-    name = check.id.replace(contract.id + ".", "")
-    g = ContractGenerator(host_settings=host, contracts=contract.id, checks=name)
-    return DataEntity(
-        oddrn=g.get_oddrn_by_path("checks"),
-        name=name,
-        type=DataEntityType.JOB, owner=contract.info.owner,
-        description=check.description,
-        tags=[Tag(name=f"severity:{check.severity}"),
-              Tag(name=f"origin:{check.origin}")],
-        metadata=[MetadataExtension(schema_url=SCHEMA_URL, metadata={
-            "severity": check.severity, "origin": check.origin,
-            "column": check.column, "kind": check.kind,
-            "derived_from_contract": contract.id, **{
-                k: v for k, v in check.params.items() if v is not None}})],
-        data_quality_test=DataQualityTest(
-            suite_name=contract.id,
-            dataset_list=[dataset_oddrn(dsn, contract)],
-            expectation=DataQualityTestExpectation(
-                type=check.kind,
-                category=_CATEGORY.get(check.kind, _DEFAULT_CATEGORY),
-                severity=check.severity,
-                column=check.column, **{
-                    k: str(v) for k, v in check.params.items()
-                    if v is not None})))
-
-
-def relationship_entities(dsn: str, contract: DataContract) -> list[DataEntity]:
-    """`references:` in a contract is a foreign key. ODD draws those.
-
-    The contract already states the edge -- `customer_id references
-    customers.customer_id` -- and we were only compiling it into a relationship
-    check. ODD models the same thing as an ENTITY_RELATIONSHIP carrying an
-    ERDRelationship, which is column-level and renders on the dataset's
-    Relationships tab. It is the cheapest lineage available: nothing to
-    discover, the contract says it.
-
-    Not to be confused with lineage proper -- ODD's DataTransformer inputs and
-    outputs are dataset-level and describe a job, which a contract does not.
-    """
-    out = []
-    for f in contract.schema_.fields:
-        if not f.references:
-            continue
-        src = pg_generator(dsn, contract.server.table, contract.server.schema_)
-        src.set_oddrn_paths(tables_columns=f.name)
-        tgt = pg_generator(dsn, f.references.table, contract.server.schema_)
-        tgt.set_oddrn_paths(tables_columns=f.references.column)
-        name = f"{contract.server.table}.{f.name} -> {f.references.table}.{f.references.column}"
-        g = ContractGenerator(host_settings=os.getenv("DQ_HOST", "dq.local"),
-                              contracts=contract.id, checks=f"rel.{f.name}")
-        out.append(DataEntity(
-            oddrn=g.get_oddrn_by_path("checks"), name=name,
-            type=DataEntityType.ENTITY_RELATIONSHIP,
-            description=f"{f.name} must exist in {f.references.table}",
-            tags=[Tag(name=f"contract:{contract.id}")],
-            data_relationship=DataRelationship(
-                relationship_type=RelationshipType.ERD,
-                source_dataset_oddrn=src.get_oddrn_by_path("tables"),
-                target_dataset_oddrn=tgt.get_oddrn_by_path("tables"),
-                details=ERDRelationship(
-                    source_dataset_field_oddrns_list=[
-                        src.get_oddrn_by_path("tables_columns")],
-                    target_dataset_field_oddrns_list=[
-                        tgt.get_oddrn_by_path("tables_columns")],
-                    # a child row must point at exactly one parent; the parent
-                    # may have none. Anything stronger is a claim the contract
-                    # does not make.
-                    cardinality=CardinalityType.ONE_TO_EXACTLY_ONE,
-                    is_identifying=False,
-                    relationship_entity_name="ERDRelationship"))))
-    return out
-
-
-def run_entity(host: str, contract_id: str, check_name: str, result: dict) -> DataEntity:
-    g = ContractGenerator(host_settings=host, contracts=contract_id,
-                          checks=check_name, runs=str(result["run_at"]))
-    start = datetime.combine(result["run_at"], datetime.min.time(),
-                             tzinfo=timezone.utc)
-    return DataEntity(
-        oddrn=g.get_oddrn_by_path("runs"),
-        name=f"{check_name}@{result['run_at']}",
-        type=DataEntityType.JOB_RUN,
-        data_quality_test_run=DataQualityTestRun(
-            data_quality_test_oddrn=g.get_oddrn_by_path("checks"),
-            start_time=start,
-            end_time=start + timedelta(milliseconds=int(result["duration_ms"])),
-            status=_STATUS.get(result["status"], QualityRunStatus.UNKNOWN),
-            # ODD's run model has no row counters, so the only place the volume
-            # signal fits is this free-text field. See docs/odd-gap-analysis.md
-            status_reason=(f"{result['failed_rows']}/{result['total_rows']} rows failed "
-                           f"({float(result['fail_ratio']) * 100:.2f}%) "
-                           f"severity={result['severity']}")))
 
 
 def datasource_oddrn(host: str) -> str:

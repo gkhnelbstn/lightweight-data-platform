@@ -36,9 +36,11 @@ from odd_models.models import (DataEntity, DataEntityList, DataEntityType,
 from oddrn_generator import (MssqlGenerator, MysqlGenerator,
                              PostgresqlGenerator)
 
-from integrations.odd.mapper import SCHEMA_URL, ContractGenerator, entity_list
+from integrations.odd.mapper import (SCHEMA_URL, ContractGenerator,
+                                     datasource_oddrn, entity_list)
 
 HOST = os.getenv("DQ_HOST", "dq.local")
+DATASOURCE_NAME = os.getenv("ODD_DATASOURCE_NAME", "datafletch-contracts")
 
 # The generator has to be the one odd-collector uses for that source, or the
 # tests land on a dataset ODDRN nobody else refers to.
@@ -61,6 +63,50 @@ _STATUS = {
 # non-assertion home; the rest of datacontract's dimensions describe what a
 # deterministic check asserts, not an anomaly someone detected.
 _CATEGORY = {"timeliness": DataQualityTestExpectationCategory.FRESHNESS_ANOMALY}
+
+
+def _json(url: str, body: dict | None = None) -> dict:
+    req = urllib.request.Request(
+        url, method="POST" if body is not None else "GET",
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def ensure_datasource(url: str) -> str:
+    """Register our data source, without which ODD refuses every ingestion.
+
+    ODD only accepts a DataEntityList whose ``data_source_oddrn`` it already
+    knows; an unknown one is a 404 ``USR002`` before any entity is looked at.
+    Collectors register themselves at startup, guarded by a filter that is
+    always on. We are not a collector, so this is our equivalent -- idempotent,
+    so it can sit in the daily cron path.
+    """
+    base = url.rstrip("/")
+    oddrn = datasource_oddrn(HOST)
+    known = _json(f"{base}/api/datasources?page=1&size=1000").get("items", [])
+    if any(d.get("oddrn") == oddrn for d in known):
+        return oddrn
+    try:
+        _json(f"{base}/api/datasources", {
+            "name": DATASOURCE_NAME, "oddrn": oddrn,
+            "description": "Contract-derived data quality checks"})
+        print(f"registered data source {oddrn} as {DATASOURCE_NAME!r}")
+    except urllib.error.HTTPError as e:
+        raise SystemExit(
+            f"could not register data source {oddrn}: {e.code} "
+            f"{e.read()[:200]!r} (ODD_DATASOURCE_NAME={DATASOURCE_NAME})") from e
+    return oddrn
+
+
+def post(url: str, body: dict) -> int:
+    req = urllib.request.Request(
+        url.rstrip("/") + "/ingestion/entities",
+        data=json.dumps(body).encode(), method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.status
 
 
 def dataset_oddrn(contract: dict, server_key: str | None = None) -> str:
@@ -173,7 +219,6 @@ def main() -> None:
         print(f"payload -> {a.out}")
 
     if a.url:
-        from integrations.odd.push import ensure_datasource, post
         ensure_datasource(a.url)
         try:
             print(f"POST {len(body['items'])} entities -> {post(a.url, body)}")

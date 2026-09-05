@@ -1,0 +1,149 @@
+# The PostgreSQL contract, in ODCS.
+#
+# Converted from the project's own YAML dialect. Everything it used to express
+# has a home in the standard: required/unique/primaryKey on properties become
+# the schema checks datacontract-cli derives, `allowed` becomes a validValues
+# rule, min/max become a range rule, and the hand-written SQL stays SQL.
+#
+# Two things the old dialect had that ODCS does not, both deliberate:
+#
+#   severity   -- our score weights critical/major/minor. ODCS has `dimension`
+#                 instead, which says what kind of wrong a check is rather than
+#                 how much it costs. The weights now live in core/scoring.py,
+#                 keyed by dimension, so the contract stays vendor-neutral.
+#   {{scope}}  -- the daily window. `datacontract test --filter` is the
+#                 standard's answer and it is broken in 1.1.3, so core/runner.py
+#                 still supplies the window; see its docstring.
+apiVersion: v3.0.2
+kind: DataContract
+id: erp.sales_orders
+name: Sales Orders
+version: 1.0.0
+status: active
+domain: sales
+tenant: sales-ops
+description:
+  purpose: Header-level sales orders replicated from the ERP.
+  usage: Revenue reporting. A failure here has dashboards downstream.
+
+servers:
+  - server: erp
+    type: postgres
+    host: db
+    port: 5432
+    database: erp
+    schema: public
+  # The same tables as views over one day's arrivals. core/runner.py rebuilds
+  # this schema before each run; see its docstring for why the window is a
+  # database object rather than `datacontract test --filter`.
+  - server: erp_daily
+    type: postgres
+    host: db
+    port: 5432
+    database: erp
+    schema: asof
+
+slaProperties:
+  - property: generalAvailability
+    value: "2026-07-23"
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: sales_orders
+    physicalName: sales_orders
+    logicalType: object
+    physicalType: table
+    description: One row per order header.
+    properties:
+      - name: order_id
+        logicalType: integer
+        physicalType: bigint
+        description: ERP order number.
+        required: true
+        unique: true
+        primaryKey: true
+      - name: customer_id
+        logicalType: integer
+        physicalType: bigint
+        required: true
+      - name: order_date
+        logicalType: date
+        physicalType: date
+        required: true
+      - name: status
+        logicalType: string
+        physicalType: text
+        required: true
+      - name: currency
+        logicalType: string
+        physicalType: text
+        required: true
+      - name: net_amount
+        logicalType: number
+        physicalType: numeric
+        required: true
+
+    quality:
+      - type: sql
+        description: status must be one of OPEN, SHIPPED, INVOICED, CANCELLED
+        query: >
+          select count(*) from sales_orders
+          where status not in ('OPEN','SHIPPED','INVOICED','CANCELLED')
+        mustBe: 0
+        dimension: conformity
+
+      - type: sql
+        description: currency must be one of TRY, USD, EUR
+        query: select count(*) from sales_orders where currency not in ('TRY','USD','EUR')
+        mustBe: 0
+        dimension: conformity
+
+      - type: sql
+        description: net_amount must be between 0 and 1000000
+        query: select count(*) from sales_orders where net_amount < 0 or net_amount > 1000000
+        mustBe: 0
+        dimension: accuracy
+
+      - type: sql
+        description: customer_id must exist in customers
+        query: >
+          select count(*) from sales_orders o
+          left join customers c on c.customer_id = o.customer_id
+          where c.customer_id is null
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: snapshot must contain data for the run date
+        query: >
+          select case when max(loaded_at) < current_date - 1 then 1 else 0 end
+          from sales_orders
+        mustBe: 0
+        dimension: timeliness
+
+      - type: sql
+        description: order net_amount must equal the sum of its line amounts
+        query: >
+          select count(*) from sales_orders o
+          join (select order_id, sum(line_amount) as line_total
+                from sales_order_lines group by order_id) l
+            on l.order_id = o.order_id
+          where abs(o.net_amount - l.line_total) > 0.01
+        mustBe: 0
+        dimension: accuracy
+
+      - type: sql
+        description: cancelled orders should carry no value
+        query: select count(*) from sales_orders where status = 'CANCELLED' and net_amount <> 0
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: 20.000 EUR ustu siparisler onay akisina girmeli
+        query: >
+          select count(*) from sales_orders
+          where currency = 'EUR' and net_amount > 20000
+        mustBe: 0
+        dimension: conformity

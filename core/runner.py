@@ -1,130 +1,246 @@
-"""Compile the contracts, run every derived check as of a given date, persist
-results and the contract score. This is the scheduled unit -- one call per day
-per contract is what produces the trend.
+"""Run the contracts as of a date, store the results, score them.
+
+The checks are not derived here any more. `datacontract test` reads an ODCS
+contract, derives the schema checks from the properties, compiles them and the
+hand-written SQL rules to the server's dialect, runs them inside the source
+database, and writes JSON with `failed_rows` and `row_count` per check. That is
+the same two-column contract core/compilers/sql.py used to produce, from a tool
+that also speaks SQL Server, MySQL, Snowflake and twenty other things.
+
+What is still ours, and why:
+
+**The window.** Scoring the daily increment rather than the whole table is the
+one measured decision in this project -- cumulative scoring flattened two real
+incidents into a line that never moved. datacontract-cli's `--filter` is exactly
+this and is broken in 1.1.3 (a nameless `DROP VIEW IF EXISTS`), and the ibis API
+it is built on, `Table.alias`, is documented by ibis as not public and due for
+removal. So the window is a database object instead: a schema of views over one
+day's arrivals, which the contract addresses through a second `servers` entry.
+Standard ODCS, standard SQL, nothing to patch and nothing to fork.
+
+**The time series and the score.** `datacontract test` runs and forgets.
 """
 from __future__ import annotations
 
 import argparse
-import time
+import json
+import os
+import subprocess
+import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
 import psycopg
+import yaml
+from psycopg import sql
 
-from core.checks import Check, derive
-from core.compilers.dbt import compile_dbt
-from core.compilers.gx import compile_gx
-from core.compilers.sql import compile_sql
-from core.contract import DataContract, load_all
-from core.scoring import score
 from core import store
+from core.scoring import score
 
 ROOT = Path(__file__).resolve().parent.parent
+CONTRACTS = ROOT / "contracts"
+
+# The server block whose schema holds the daily views, and the one that holds
+# the real tables. A contract without the first is run unwindowed.
+DAILY_SERVER = os.getenv("DQ_DAILY_SERVER", "erp_daily")
+HOST = os.getenv("DQ_HOST", "dq.local")
+WINDOW_SCHEMA = os.getenv("DQ_WINDOW_SCHEMA", "asof")
 
 
-def register(contracts_dir: str = str(ROOT / "contracts")) -> list[DataContract]:
-    contracts = load_all(contracts_dir)
+def load_contracts(directory: Path = CONTRACTS) -> list[dict]:
+    """Every ODCS contract in the directory, oldest name first."""
+    out = []
+    for path in sorted(directory.glob("*.odcs.yaml")):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc["_path"] = str(path)
+        out.append(doc)
+    return out
+
+
+def _server(contract: dict, key: str) -> dict | None:
+    return next((s for s in contract.get("servers", [])
+                 if s.get("server") == key), None)
+
+
+def _tables(contract: dict) -> list[tuple[str, str]]:
+    """`(logical name, physical name)` for every model in the contract."""
+    return [(m["name"], m.get("physicalName") or m["name"])
+            for m in contract.get("schema", [])]
+
+
+def build_window(contract: dict, as_of: date, dsn: str = None,
+                 window: str = "incremental") -> int:
+    """Rebuild the day's views, and return how many were created.
+
+    Every table the contract names gets a view of the same name restricted to
+    the rows that arrived on *as_of*. Anything those queries join to and the
+    contract does not name -- sales_order_lines, say -- is mirrored unfiltered,
+    so a rule that joins still resolves.
+
+    `cumulative` widens the predicate to everything up to *as_of*, which exists
+    to be compared against: scoring the whole history flattens an incident into
+    a line that does not move, and that comparison is the reason the daily
+    window is the default.
+    """
+    daily = _server(contract, DAILY_SERVER)
+    if daily is None:
+        return 0
+    source = _server(contract, "erp") or contract["servers"][0]
+    loaded_at = os.getenv("DQ_LOADED_AT_COLUMN", "loaded_at")
+    src_schema = source.get("schema", "public")
+    win_schema = daily.get("schema", WINDOW_SCHEMA)
+
+    made = 0
+    with psycopg.connect(dsn or store.ERP_DSN, autocommit=True) as cx:
+        cx.execute(f'create schema if not exists "{win_schema}"')
+        named = {physical for _, physical in _tables(contract)}
+        # Every table in the source schema is mirrored: the ones the contract
+        # names get the day's rows, the rest are passed through so joins work.
+        rows = cx.execute(
+            """select table_name from information_schema.tables
+               where table_schema = %s and table_type = 'BASE TABLE'""",
+            (src_schema,)).fetchall()
+        for (table,) in rows:
+            has_window = cx.execute(
+                """select 1 from information_schema.columns
+                   where table_schema = %s and table_name = %s
+                     and column_name = %s""",
+                (src_schema, table, loaded_at)).fetchone()
+            # A view definition cannot take a bind parameter, so the date is
+            # composed in as a literal -- psycopg quotes it, and `as_of` is a
+            # date object rather than anything a caller typed.
+            stmt = sql.SQL("create or replace view {win}.{tbl} as "
+                           "select * from {src}.{tbl}").format(
+                win=sql.Identifier(win_schema), src=sql.Identifier(src_schema),
+                tbl=sql.Identifier(table))
+            if has_window and table in named:
+                op = sql.SQL("=" if window == "incremental" else "<=")
+                stmt = stmt + sql.SQL(" where {col} {op} {day}").format(
+                    col=sql.Identifier(loaded_at), op=op,
+                    day=sql.Literal(as_of))
+            cx.execute(stmt)
+            made += 1
+    return made
+
+
+def run_contract(contract: dict, as_of: date, windowed: bool = True) -> dict:
+    """`datacontract test` for one contract, as a parsed results document."""
+    server = DAILY_SERVER if (windowed and _server(contract, DAILY_SERVER)) else "erp"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "results.json"
+        cmd = ["datacontract", "test", contract["_path"],
+               "--server", server, "--output", str(out), "--output-format", "json"]
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              cwd=str(ROOT), env={**os.environ,
+                                                  "PYTHONIOENCODING": "utf-8"})
+        if not out.exists():
+            # No results file at all means the contract could not be read; the
+            # stderr is the only thing that says why.
+            raise SystemExit(
+                f"datacontract produced no results for {contract['_path']}:\n"
+                f"{proc.stdout[-2000:]}{proc.stderr[-2000:]}")
+        return json.loads(out.read_text(encoding="utf-8"))
+
+
+def persist(results: dict, contract: dict, as_of: date,
+            window: str = "incremental") -> list[dict]:
+    """Store one run's checks and return the rows the score is computed from."""
+    contract_id = contract.get("id") or contract.get("name")
+    rows = []
+    for check in results.get("checks", []):
+        d = check.get("diagnostics") or {}
+        failed = d.get("failed_rows")
+        if failed is None:
+            failed = d.get("value") if d.get("value") is not None else (
+                0 if check.get("result") == "passed" else 1)
+        total = d.get("row_count") or 0
+        rows.append({
+            "check_id": f"{contract_id}.{check.get('key') or check['name']}",
+            "dimension": check.get("dimension") or "unknown",
+            "failed_rows": int(failed), "total_rows": int(total),
+            "fail_ratio": round(int(failed) / total, 6) if total else 0.0,
+            # a check that errored is an engineering problem, not a data one
+            "status": {"passed": "pass", "failed": "fail"}.get(
+                check.get("result"), "error"),
+            "duration_ms": 0,
+        })
+
     with store.connect() as dq:
         store.init(dq)
-        for c in contracts:
-            checks = derive(c)
-            compiled = {ck.id: compile_sql(ck, c) for ck in checks}
-            store.upsert_contract(dq, c, checks, compiled)
-    return contracts
+        store.ensure_partition(dq, as_of)
+        store.write_results(dq, as_of, contract_id, rows, window)
+        s = score(rows)
+        failed_n = sum(1 for r in rows if r["status"] != "pass")
+        store.write_score(dq, as_of, contract_id, s, len(rows), failed_n,
+                          _min_score(contract), window)
+    return rows
 
 
-def emit_artifacts(out: Path = ROOT / "artifacts") -> list[str]:
-    """Same contract, other engines. Portability is the anti-lock-in argument."""
-    out.mkdir(exist_ok=True)
-    written = []
-    for c in load_all(str(ROOT / "contracts")):
-        checks = derive(c)
-        slug = c.id.replace(".", "_")
-        (out / f"{slug}.dbt.schema.yml").write_text(compile_dbt(c, checks))
-        (out / f"{slug}.gx.suite.json").write_text(compile_gx(c, checks))
-        written += [f"{slug}.dbt.schema.yml", f"{slug}.gx.suite.json"]
-    return written
+def push_to_odd(contract: dict, results: dict, url: str) -> int:
+    """Send the run to ODD, attached to the table rather than the day's view.
+
+    The checks execute over `asof`, but what they are about -- and what the
+    Superset charts downstream point at -- is the table in `public`. Sending
+    the view's ODDRN would put the tests on a catalog object nothing else
+    refers to.
+    """
+    from integrations.odd.from_datacontract import (build, dataset_oddrn,
+                                                    ensure_datasource, post)
+    from integrations.odd.mapper import entity_list
+
+    ds = dataset_oddrn(contract, "erp")
+    body = entity_list(build(contract, results, ds), HOST).model_dump(
+        mode="json", exclude_none=True)
+    ensure_datasource(url)
+    post(url, body)
+    return len(body["items"])
 
 
-def run_one(contract: DataContract, checks: list[Check], as_of: date,
-            erp: psycopg.Connection, dq: psycopg.Connection,
-            window: str = "incremental") -> dict:
-    store.ensure_partition(dq, as_of)
-    rows = []
-    for ck in checks:
-        sql = compile_sql(ck, contract, window)
-        t0 = time.perf_counter()
-        try:
-            failed, total = erp.execute(sql, {"as_of": as_of}).fetchone()
-        except Exception as exc:                      # a broken check is a failure
-            erp.rollback()
-            failed, total = 1, 1
-            print(f"  ! {ck.id}: {exc}")
-        ms = int((time.perf_counter() - t0) * 1000)
-        total = int(total or 0)
-        failed = int(failed or 0)
-        ratio = (failed / total) if total else 0.0
-        rows.append({"check_id": ck.id, "severity": ck.severity,
-                     "failed_rows": failed, "total_rows": total,
-                     "fail_ratio": round(ratio, 6),
-                     "status": "pass" if failed == 0 else "fail",
-                     "duration_ms": ms})
-
-    for r in rows:
-        dq.execute(
-            """insert into check_results (run_at,check_id,contract_id,severity,status,
-                   failed_rows,total_rows,fail_ratio,duration_ms,run_window)
-               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-               on conflict (run_at,check_id,run_window) do update set
-                 status=excluded.status, failed_rows=excluded.failed_rows,
-                 total_rows=excluded.total_rows, fail_ratio=excluded.fail_ratio,
-                 duration_ms=excluded.duration_ms""",
-            (as_of, r["check_id"], contract.id, r["severity"], r["status"],
-             r["failed_rows"], r["total_rows"], r["fail_ratio"], r["duration_ms"],
-             window))
-
-    s = score(rows)
-    failed_n = sum(1 for r in rows if r["status"] == "fail")
-    dq.execute(
-        """insert into contract_scores (run_at,contract_id,score,checks_total,
-               checks_failed,sla_min,sla_met,run_window)
-           values (%s,%s,%s,%s,%s,%s,%s,%s)
-           on conflict (run_at,contract_id,run_window) do update set
-             score=excluded.score, checks_total=excluded.checks_total,
-             checks_failed=excluded.checks_failed, sla_met=excluded.sla_met""",
-        (as_of, contract.id, s, len(rows), failed_n, contract.sla.min_score,
-         s >= float(contract.sla.min_score), window))
-    return {"contract": contract.id, "as_of": str(as_of), "score": s,
-            "failed": failed_n, "total": len(rows)}
+def _min_score(contract: dict) -> float:
+    """`slaProperties` is where ODCS puts a promise; ours is a floor on the score."""
+    for prop in contract.get("slaProperties", []) or []:
+        if prop.get("property") in ("minScore", "min_score"):
+            return float(prop["value"])
+    return float(os.getenv("DQ_MIN_SCORE", "0.95"))
 
 
-def run(as_of: date, contracts: list[DataContract] | None = None,
-        window: str = "incremental") -> list[dict]:
-    contracts = contracts or load_all(str(ROOT / "contracts"))
+def run(as_of: date, contracts: list[dict] | None = None,
+        window: str = "incremental", odd_url: str | None = None) -> list[dict]:
+    contracts = contracts if contracts is not None else load_contracts()
     out = []
-    with store.connect(store.ERP_DSN) as erp, store.connect() as dq:
-        for c in contracts:
-            out.append(run_one(c, derive(c), as_of, erp, dq, window))
+    for c in contracts:
+        # Both windows go through the views; only the predicate differs.
+        windowed = bool(build_window(c, as_of, window=window))
+        results = run_contract(c, as_of, windowed=windowed)
+        rows = persist(results, c, as_of, window)
+        if odd_url:
+            push_to_odd(c, results, odd_url)
+        s = score(rows)
+        out.append({"contract": c.get("id"), "as_of": str(as_of), "score": s,
+                    "failed": sum(1 for r in rows if r["status"] != "pass"),
+                    "total": len(rows)})
     return out
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--as-of", default=str(date.today()))
     ap.add_argument("--backfill-days", type=int, default=0)
-    ap.add_argument("--emit-artifacts", action="store_true")
     ap.add_argument("--window", choices=["incremental", "cumulative"],
                     default="incremental")
+    ap.add_argument("--contract", help="run only this contract id")
+    ap.add_argument("--odd-url", help="also push each run to this ODD Platform")
     a = ap.parse_args()
 
-    contracts = register()
-    if a.emit_artifacts:
-        print("artifacts:", ", ".join(emit_artifacts()))
+    contracts = [c for c in load_contracts()
+                 if a.contract in (None, c.get("id"))]
+    if not contracts:
+        raise SystemExit("no ODCS contracts found in contracts/")
 
     end = date.fromisoformat(a.as_of)
-    days = [end - timedelta(days=i) for i in range(a.backfill_days, -1, -1)]
-    for d in days:
-        for r in run(d, contracts, a.window):
+    for i in range(a.backfill_days, -1, -1):
+        day = end - timedelta(days=i)
+        for r in run(day, contracts, a.window, odd_url=a.odd_url):
             flag = "OK " if r["failed"] == 0 else "FAIL"
             print(f"{flag} {r['as_of']} {r['contract']:<20} "
                   f"score={r['score']:.4f} failed={r['failed']}/{r['total']}")
