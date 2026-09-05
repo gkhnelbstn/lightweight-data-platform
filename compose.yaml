@@ -1,0 +1,119 @@
+# The whole stack, in one file.
+#
+#   docker compose up -d db odd-db odd-platform
+#   ./deploy/odd-bootstrap.sh                    # collector tokens
+#   docker compose up -d                         # + collector + app
+#   docker compose --profile profiling up -d     # + column profiler (4.4 GB image)
+#
+# Ports: 8077 the contract UI, 8080 ODD, 5442 the source database, 5433 ODD's.
+# 5442 rather than 5432 so a Postgres already installed on the host does not
+# collide with this one.
+#
+# SECURITY. ODD's `/ingestion/**` is unauthenticated here, and so is the
+# contract UI. odd-platform issue #1740 spells out the first half:
+# auth.ingestion.filter.enabled defaults to false, and even when true it
+# covered only /ingestion/entities -- /ingestion/alerts, /ingestion/metrics and
+# /ingestion/entities/datasets/stats had no filter at all. Anyone who can reach
+# 8080 can inject alerts or overwrite statistics; anyone who can reach 8077 can
+# write SQL that runs against the source. Keep both on a private network.
+services:
+  # The data under test, and the results about it. One server, two databases:
+  # the contracts have no opinion about where they live and this is one less
+  # thing to run.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./deploy/db-init.sql:/docker-entrypoint-initdb.d/10-databases.sql:ro
+    ports: ["5442:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  odd-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: odd-platform
+      POSTGRES_PASSWORD: odd-platform-password
+      POSTGRES_DB: odd-platform
+    # ODD's notification engine reads its own WAL logically. Harmless unused.
+    command: ["postgres", "-c", "wal_level=logical"]
+    volumes: ["odd-db-data:/var/lib/postgresql/data"]
+    ports: ["5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odd-platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  odd-platform:
+    image: ghcr.io/opendatadiscovery/odd-platform:latest
+    depends_on:
+      odd-db: { condition: service_healthy }
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://odd-db:5432/odd-platform
+      SPRING_DATASOURCE_USERNAME: odd-platform
+      SPRING_DATASOURCE_PASSWORD: odd-platform-password
+      AUTH_TYPE: DISABLED
+    ports: ["8080:8080"]
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  # Discovers the source schema and owns the catalog objects, which is why the
+  # push runs with --no-datasets. Needs a token minted by deploy/odd-bootstrap.sh:
+  # ODD guards POST /ingestion/datasources with a filter that is always on, so a
+  # collector cannot register itself.
+  odd-collector:
+    image: ghcr.io/opendatadiscovery/odd-collector:latest
+    depends_on:
+      odd-platform: { condition: service_healthy }
+    volumes: ["./deploy/collector_config.yaml:/app/collector_config.yaml:ro"]
+    restart: always
+
+  # String lengths, means, inferred types -- the column statistics a contract
+  # has no opinion about. Opt-in: the image is 4.4 GB (it carries TensorFlow)
+  # and it idles at ~450 MB, against 64 MB for the collector.
+  odd-profiler:
+    image: ghcr.io/opendatadiscovery/odd-collector-profiler:latest
+    profiles: ["profiling"]
+    depends_on:
+      odd-platform: { condition: service_healthy }
+    volumes: ["./deploy/profiler_config.yaml:/app/collector_config.yaml:ro"]
+    restart: always
+
+  # Contracts, derived checks, the daily run, and the UI that authors rules.
+  # ODD_PG_HOST is `db` because that is the name odd-collector reaches the
+  # database by, and a dataset ODDRN is matched by string: give the two sides
+  # different names and every table forks into two catalog objects.
+  app:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    volumes:
+      # The contract is the source of truth and the UI is an editor for it:
+      # saving a rule rewrites the .yaml. Baked into the image that write goes
+      # to a copy and disappears on the next build, which quietly turns the
+      # invariant into a lie. The emitted dbt/GX artifacts want to be readable
+      # from the host for the same reason.
+      - ./contracts:/app/contracts
+      - ./artifacts:/app/artifacts
+    environment:
+      ERP_DSN: postgresql://postgres:postgres@db:5432/erp
+      DQ_DSN: postgresql://postgres:postgres@db:5432/dq
+      ODD_PG_HOST: db
+      DQ_HOST: dq.local
+    ports: ["8077:8077"]
+    restart: always
+
+volumes:
+  db-data:
+  odd-db-data:

@@ -25,7 +25,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # service or container name, which is also what ends up in the dataset ODDRNs
 # -- so push.py must be given the same value as ODD_PG_HOST or the tables fork
 # into two catalog objects.
-PG_HOST="${ODD_PG_HOST:-ldp-pg}"
+PG_HOST="${ODD_PG_HOST:-db}"
 PG_PORT="${ODD_PG_PORT:-5432}"
 PG_DB="${ODD_PG_DB:-erp}"
 PG_USER="${ODD_PG_USER:-postgres}"
@@ -59,6 +59,12 @@ COLLECTOR_TOKEN="${ODD_COLLECTOR_TOKEN:-$(token_for erp-collector ODD_COLLECTOR_
 PROFILER_TOKEN="${ODD_PROFILER_TOKEN:-$(token_for erp-profiler ODD_PROFILER_TOKEN || true)}"
 [ -n "$COLLECTOR_TOKEN" ] || exit 1
 
+# The collector and the profiler describe the same database in different
+# words: type `postgresql` vs `postgres`, and the credential key `user` vs
+# `username`. Getting either wrong is a startup crash -- "Couldn't handle
+# config. Reason 'postgres'" for the first, a pydantic "Field required" for
+# the second -- so both are parameters here rather than a template anyone is
+# expected to remember.
 write_config() {
   cat > "$HERE/$1" <<YAML
 # Written by deploy/odd-bootstrap.sh -- the token is an ODD collector secret.
@@ -66,25 +72,26 @@ default_pulling_interval: ${2}
 token: "${3}"
 platform_host_url: ${PLATFORM_INTERNAL}
 ${4}:
-  - type: postgres
+  - type: ${6}
     name: ${5}
     host: ${PG_HOST}
     port: ${PG_PORT}
     database: ${PG_DB}
-    username: ${PG_USER}
+    ${7}: ${PG_USER}
     password: ${PG_PASSWORD}
 YAML
   chmod 600 "$HERE/$1"
   echo "wrote deploy/$1"
 }
 
-write_config collector_config.yaml 10 "$COLLECTOR_TOKEN" plugins erp_postgres
-[ -n "$PROFILER_TOKEN" ] && write_config profiler_config.yaml 360 "$PROFILER_TOKEN" profilers erp_profiler
+write_config collector_config.yaml 10 "$COLLECTOR_TOKEN" plugins erp_postgres postgresql user
+[ -n "$PROFILER_TOKEN" ] && write_config profiler_config.yaml 360 "$PROFILER_TOKEN" profilers erp_profiler postgres username
 
 cat <<EOF
 
 next:
-  docker compose -f deploy/odd-compose.yaml up -d
-  export ODD_PG_HOST=$PG_HOST     # must match the collector, or the tables fork
-  python integrations/odd/push.py --url $URL --no-datasets
+  docker compose up -d
+  docker compose exec app python seed/seed.py
+  docker compose exec app python core/runner.py --backfill-days 44
+  docker compose exec app python integrations/odd/push.py --url http://odd-platform:8080 --no-datasets
 EOF
