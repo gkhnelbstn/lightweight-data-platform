@@ -16,6 +16,12 @@ RUN pip install --no-cache-dir -e ".[odd,sqlserver]"
 
 # only the demo loader needs this; the checks do not
 RUN pip install --no-cache-dir pymongo
+
+# Column classification. Presidio pulls a language model on first use and
+# defaults to en_core_web_lg (425 MB); the small one is 15 MB and finds the
+# same columns, because a column of IBANs is not free text. Fetched at build
+# time so the first run is not a surprise download.
+RUN pip install --no-cache-dir "presidio-analyzer>=2.2"  && python -m spacy download en_core_web_sm
 COPY contracts contracts
 COPY seed seed
 COPY web web

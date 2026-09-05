@@ -120,7 +120,7 @@ does not enter into it.
 | `core/store.py` | DDL, monthly partitions, writes |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
 | `web/index.html` | single-file UI, no build step |
-| `integrations/odd/` | ODDRN vocabulary and the datacontract → ODD bridge |
+| `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
 | `deploy/Dockerfile.odd-collector` | odd-collector plus two fixes to its Superset adapter |
 | `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
 | `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |
@@ -175,8 +175,21 @@ not: it returns 201 and stores nothing, and its epic has been open since 2022.
 
 Early. A working vertical slice, not a product.
 
-* **No CDC.** `loaded_at` is a watermark: it sees inserts, not updates or
-  deletes. A row corrected in place after it landed is never re-checked.
+* **No CDC.** `loaded_at` is a watermark: it sees inserts. A row corrected in
+  place keeps its original watermark, and a deleted row leaves nothing behind.
+  A contract whose table is updated in place can widen its own window —
+
+  ```yaml
+  customProperties:
+    - property: windowPredicate
+      value: "{col} = {day} or updated_at::date = {day}"
+  ```
+
+  — and a source with real CDC points its contract at the change table and
+  windows on the change timestamp. SQL Server has that built in
+  (`sys.sp_cdc_enable_table`) and it needs no new infrastructure. Deletes on a
+  source with neither are genuinely invisible, and no amount of contract says
+  otherwise.
 * **Custom SQL is executed as written.** The checks connect as `dq_reader` --
   `SELECT` only, `default_transaction_read_only`, a 60s `statement_timeout` --
   so a rule cannot write or hang. That is a smaller blast radius, not a
@@ -185,13 +198,18 @@ Early. A working vertical slice, not a product.
   `/api/rules/preview` compile and run a person's SQL, so they require
   `DQ_API_TOKEN` and refuse when it is unset. Reads are open, and ODD's
   `/ingestion/**` is open by its own design (issue #1740). Private network.
-* **ODD's ERD relationships are write-only on 0.29.0.** They store correctly
-  and 500 on read, because `extractErdDetails` collects versioned
-  `dataset_field` rows with `Collectors.toMap`.
-* **Two upstream fixes are carried as patches.** `deploy/Dockerfile.odd-collector`
-  fixes odd-collector's Superset adapter; when
-  [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135)
-  lands, that image should be deleted rather than maintained.
+* **No column-level lineage.** ODD's ingestion model has none — `DataTransformer`
+  is dataset-level — and the issues that would add it have been open since 2022.
+  Table-level lineage works, including the BI chain, and the contract's foreign
+  keys are published as column-level ERD relationships, but that is a different
+  thing from "which column feeds which".
+* **ODD's ERD relationships are write-only when two sources describe a column
+  differently.** Reported with a reproduction as
+  [odd-platform#1880](https://github.com/opendatadiscovery/odd-platform/issues/1880).
+* **One upstream fix is carried as a patch**, and it is now a pull request:
+  [odd-collectors#136](https://github.com/opendatadiscovery/odd-collectors/pull/136).
+  When it merges, `deploy/Dockerfile.odd-collector` should be deleted rather
+  than maintained.
 
 ### Closed, and how
 
@@ -207,11 +225,21 @@ Early. A working vertical slice, not a product.
   own dialect.
 * **A broken check looked like broken data.** A check that errors is stored as
   `status = 'error'`, not as a failure with `1/1` rows.
+* **No PII classification.** `integrations/odd/classify.py` samples each column
+  and tags it in ODD — `pii:TR_TCKN`, `pii:EMAIL_ADDRESS` — as first-class,
+  searchable tags. The recognisers are Microsoft's **Presidio** (MIT, ~10k
+  stars) rather than patterns of our own; the Turkish identifiers are ours
+  because Presidio has none, and they validate the checksum rather than
+  matching eleven digits. It costs ~265 MB in the image, which is the small
+  spaCy model rather than the 425 MB default — a column of identifiers is not
+  free text, so the NLP half earns very little here.
 
 ### Reported upstream
 
 | what | where |
 |---|---|
+| ERD relationships unreadable when a column has two `dataset_field` rows | [odd-platform#1880](https://github.com/opendatadiscovery/odd-platform/issues/1880) |
+| the Superset adapter fixes, as a PR | [odd-collectors#136](https://github.com/opendatadiscovery/odd-collectors/pull/136) |
 | `Table.sql()` on postgres emits a nameless `DROP VIEW` (sqlglot 30 renamed `Drop.this`) | [ibis#12108](https://github.com/ibis-project/ibis/issues/12108) |
 | `datacontract test --filter` unusable on postgres because of the above | [datacontract-cli#1592](https://github.com/datacontract/datacontract-cli/issues/1592) |
 | a row filter is all-or-nothing; uniqueness needs to opt out | [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593) |

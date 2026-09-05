@@ -55,6 +55,9 @@ CONTRACTS = ROOT / "contracts"
 # The server block whose schema holds the daily views, and the one that holds
 # the real tables. A contract without the first is run unwindowed.
 DAILY_SERVER = os.getenv("DQ_DAILY_SERVER", "erp_daily")
+# The default window: rows that arrived on the run date. A contract whose table
+# is updated in place says so itself -- see `window_predicate`.
+DEFAULT_PREDICATE = "{col} = {day}"
 HOST = os.getenv("DQ_HOST", "dq.local")
 
 # Checks whose meaning is the whole table, not the day's arrivals. datacontract
@@ -84,6 +87,33 @@ def _tables(contract: dict) -> list[tuple[str, str]]:
             for m in contract.get("schema", [])]
 
 
+def window_predicate(contract: dict, model: dict | None = None) -> str:
+    """The SQL that decides which rows a day's view contains.
+
+    `loaded_at = <day>` is a watermark: it sees inserts and nothing else. A row
+    corrected in place after it landed keeps its original `loaded_at` and is
+    never re-checked, which is the honest limit of not having CDC.
+
+    Rather than pretend otherwise, the predicate is the contract's to state, as
+    an ODCS custom property on the model or at the top level:
+
+        customProperties:
+          - property: windowPredicate
+            value: "{col} = {day} or updated_at::date = {day}"
+
+    `{col}` is the watermark column and `{day}` the run date, both quoted by
+    psycopg. A source with real CDC points its contract at the change table and
+    windows on the change timestamp instead; a source without one and without
+    an `updated_at` cannot express updates, and should say so in its README
+    rather than in a comment here.
+    """
+    for holder in (model or {}, contract):
+        for prop in holder.get("customProperties") or []:
+            if prop.get("property") == "windowPredicate":
+                return str(prop["value"])
+    return DEFAULT_PREDICATE
+
+
 def build_window(contract: dict, as_of: date, dsn: str = None,
                  window: str = "incremental") -> int:
     """Rebuild the day's views, and return how many were created.
@@ -110,6 +140,8 @@ def build_window(contract: dict, as_of: date, dsn: str = None,
     with psycopg.connect(dsn or store.ERP_DSN, autocommit=True) as cx:
         cx.execute(f'create schema if not exists "{win_schema}"')
         named = {physical for _, physical in _tables(contract)}
+        by_table = {(m.get("physicalName") or m["name"]): m
+                    for m in contract.get("schema", [])}
         # Every table in the source schema is mirrored: the ones the contract
         # names get the day's rows, the rest are passed through so joins work.
         rows = cx.execute(
@@ -130,10 +162,13 @@ def build_window(contract: dict, as_of: date, dsn: str = None,
                 win=sql.Identifier(win_schema), src=sql.Identifier(src_schema),
                 tbl=sql.Identifier(table))
             if has_window and table in named:
-                op = sql.SQL("=" if window == "incremental" else "<=")
-                stmt = stmt + sql.SQL(" where {col} {op} {day}").format(
-                    col=sql.Identifier(loaded_at), op=op,
-                    day=sql.Literal(as_of))
+                if window == "incremental":
+                    template = window_predicate(contract, by_table.get(table))
+                else:
+                    # the comparison the daily window exists to beat
+                    template = "{col} <= {day}"
+                stmt = stmt + sql.SQL(" where ") + sql.SQL(template).format(
+                    col=sql.Identifier(loaded_at), day=sql.Literal(as_of))
             cx.execute(stmt)
             made += 1
     return made

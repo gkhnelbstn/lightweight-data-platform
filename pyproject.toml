@@ -33,6 +33,10 @@ odd = ["odd-models>=2.0,<3", "oddrn-generator>=0.1,<1"]
 # Checking a SQL Server source additionally needs Microsoft's ODBC driver on
 # the machine; the Dockerfile installs it.
 sqlserver = ["datacontract-cli[sqlserver]>=1.1.3,<2"]
+# Column classification. Needs `python -m spacy download en_core_web_sm` too;
+# the Dockerfile does it, see integrations/odd/classify.py for why the small
+# model is the right one.
+classify = ["presidio-analyzer>=2.2"]
 dev = [
   "pytest>=8.0",
   "odd-models>=2.0,<3",

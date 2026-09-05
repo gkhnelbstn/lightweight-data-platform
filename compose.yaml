@@ -116,6 +116,7 @@ services:
       - ./api:/app/api
       - ./integrations:/app/integrations
       - ./web:/app/web
+      - ./seed:/app/seed
     environment:
       ERP_DSN: postgresql://postgres:postgres@db:5432/erp
       DQ_DSN: postgresql://postgres:postgres@db:5432/dq

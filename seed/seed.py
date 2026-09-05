@@ -41,6 +41,26 @@ SEGMENTS = ["SMB", "MID", "ENT"]
 STATUSES = ["OPEN", "SHIPPED", "INVOICED", "CANCELLED"]
 
 
+def _tckn(seed: int) -> str:
+    """A valid Turkish national identity number, derived from `seed`."""
+    d = [int(c) for c in f"{1 + seed % 9}{seed * 7919 % 100000000:08d}"][:9]
+    odd, even = d[0] + d[2] + d[4] + d[6] + d[8], d[1] + d[3] + d[5] + d[7]
+    d.append((odd * 7 - even) % 10)
+    d.append(sum(d) % 10)
+    return "".join(map(str, d))
+
+
+def _vkn(seed: int) -> str:
+    """A valid Turkish tax number, derived from `seed`."""
+    d = [int(c) for c in f"{seed * 104729 % 1000000000:09d}"]
+    total = 0
+    for i in range(9):
+        tmp = (d[i] + 10 - (i + 1)) % 10
+        total += tmp if tmp == 9 else (tmp * pow(2, 9 - i)) % 9
+    d.append((10 - total % 10) % 10)
+    return "".join(map(str, d))
+
+
 def main() -> None:
     end = date.today()
     start = end - timedelta(days=DAYS - 1)
@@ -49,8 +69,14 @@ def main() -> None:
         cust, orders, lines = [], [], []
 
         for i in range(1, 401):
+            # A real tax_id column in a Turkish ERP holds a VKN for companies
+            # and a TCKN for sole traders, both checksum-validated. Generating
+            # valid ones rather than "TR9000000001" is what lets
+            # integrations/odd/classify.py find the column at all -- an
+            # invalid number is indistinguishable from an order reference.
             cust.append((i, f"Customer {i:03d}", random.choice(COUNTRIES),
-                         f"TR{9000000000 + i}", random.choice(SEGMENTS), start))
+                         _tckn(i) if i % 3 else _vkn(i),
+                         random.choice(SEGMENTS), start))
 
         oid = 1000
         for d in range(DAYS):
