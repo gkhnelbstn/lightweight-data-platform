@@ -121,10 +121,15 @@ services:
       DQ_DSN: postgresql://postgres:postgres@db:5432/dq
       ODD_PG_HOST: db
       DQ_HOST: dq.local
+      # Rule authoring compiles and runs a person's SQL. Set a token or the
+      # write routes refuse; generate one with `openssl rand -hex 32`.
+      DQ_API_TOKEN: ${DQ_API_TOKEN:-}
       # datacontract-cli reads the source credentials from the environment, one
-      # set per server type, never from the contract file.
-      DATACONTRACT_POSTGRES_USERNAME: postgres
-      DATACONTRACT_POSTGRES_PASSWORD: postgres
+      # set per server type, never from the contract file. It runs SQL a person
+      # wrote, so it connects as a role that can only SELECT and gives up after
+      # 60s. Creating the daily views is the app's own job and uses ERP_DSN.
+      DATACONTRACT_POSTGRES_USERNAME: dq_reader
+      DATACONTRACT_POSTGRES_PASSWORD: dq_reader
       DATACONTRACT_SQLSERVER_USERNAME: sa
       DATACONTRACT_SQLSERVER_PASSWORD: "Str0ng!Passw0rd"
       DATACONTRACT_SQLSERVER_DRIVER: ODBC Driver 18 for SQL Server

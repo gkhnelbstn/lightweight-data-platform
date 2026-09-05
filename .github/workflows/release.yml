@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: tag to release
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  images:
+    name: publish images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        run: echo "tag=${GITHUB_REF_NAME:-${{ inputs.tag }}}" >> "$GITHUB_OUTPUT"
+
+      - name: app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/app:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository }}/app:latest
+
+      # Published because it is not stock: it carries the fixes to
+      # odd-collector's Superset adapter reported as
+      # opendatadiscovery/odd-collectors#135. When those land upstream this
+      # image should go away rather than be maintained.
+      - name: odd-collector (patched)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.odd-collector
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/odd-collector:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository }}/odd-collector:latest
+
+  release:
+    name: create the release
+    needs: images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The contracts are the artifact a consumer most likely wants without
+      # cloning: they are the source of truth and they are portable.
+      - name: bundle the contracts
+        run: |
+          mkdir -p dist
+          tar -czf dist/contracts-${GITHUB_REF_NAME:-${{ inputs.tag }}}.tar.gz contracts/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*.tar.gz

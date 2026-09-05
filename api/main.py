@@ -11,15 +11,17 @@ truth; this is an editor for it, not a second store.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
+from hmac import compare_digest
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import psycopg
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
@@ -31,6 +33,21 @@ from core.scoring import DIMENSION_WEIGHT
 app = FastAPI(title="Contract-driven data quality on ODD")
 
 DIMENSIONS = sorted(DIMENSION_WEIGHT)
+
+# The two write routes compile a person's SQL and run it against the source.
+# That is the one thing here worth a door, so it fails closed: with no token
+# configured they refuse rather than run. Reads are open, and the compose says
+# to keep the whole thing on a private network either way.
+API_TOKEN = os.getenv("DQ_API_TOKEN") or ""
+
+
+def authorised(authorization: str = Header(default="")) -> None:
+    if not API_TOKEN:
+        raise HTTPException(
+            503, "DQ_API_TOKEN is not set; rule authoring is disabled")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not compare_digest(token, API_TOKEN):
+        raise HTTPException(401, "bad or missing bearer token")
 
 
 def _block_str(dumper, data):
@@ -163,7 +180,7 @@ def _run_datacontract(path: Path, server: str = "erp") -> dict:
         return json.loads(out.read_text(encoding="utf-8"))
 
 
-@app.post("/api/rules/preview")
+@app.post("/api/rules/preview", dependencies=[Depends(authorised)])
 def preview_rule(draft: RuleDraft) -> dict:
     """Run the rule without saving it.
 
@@ -202,7 +219,7 @@ def preview_rule(draft: RuleDraft) -> dict:
             "compiled_sql": check.get("implementation")}
 
 
-@app.post("/api/rules")
+@app.post("/api/rules", dependencies=[Depends(authorised)])
 def save_rule(draft: RuleDraft) -> dict:
     """Append the rule to the contract file, then re-run the contract."""
     prev = preview_rule(draft)

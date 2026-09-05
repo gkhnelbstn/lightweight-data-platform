@@ -175,21 +175,47 @@ not: it returns 201 and stores nothing, and its epic has been open since 2022.
 
 Early. A working vertical slice, not a product.
 
-* **`unique` is still windowed.** Every check now runs against the day's view,
-  including uniqueness, so a duplicate that arrives on a later day than its
-  original is not seen. The old engine had the same hole; adopting ODCS did not
-  close it, it moved it. The fix is a per-rule choice of window, which ODCS has
-  no field for.
-* **No CDC.** `loaded_at = as_of` is a watermark: it sees inserts, not updates
-  or deletes.
-* **One data source.** The DSN comes from the environment, not the contract.
-* **Custom SQL is executed as written.** No read-only role, no statement
-  timeout, no AST check. `/api/rules/preview` is validation, not a sandbox.
-* **Neither UI has authentication.** Anyone who reaches 8077 can run SQL
-  against the source; anyone who reaches 8080 can inject alerts into ODD
-  (issue #1740). Private network only.
+* **No CDC.** `loaded_at` is a watermark: it sees inserts, not updates or
+  deletes. A row corrected in place after it landed is never re-checked.
+* **Custom SQL is executed as written.** The checks connect as `dq_reader` --
+  `SELECT` only, `default_transaction_read_only`, a 60s `statement_timeout` --
+  so a rule cannot write or hang. That is a smaller blast radius, not a
+  sandbox: it can still read every column it is granted and cost a table scan.
+* **Only the write routes are authenticated.** `/api/rules` and
+  `/api/rules/preview` compile and run a person's SQL, so they require
+  `DQ_API_TOKEN` and refuse when it is unset. Reads are open, and ODD's
+  `/ingestion/**` is open by its own design (issue #1740). Private network.
 * **ODD's ERD relationships are write-only on 0.29.0.** They store correctly
-  and 500 on read — `Collectors.toMap` over versioned `dataset_field` rows.
+  and 500 on read, because `extractErdDetails` collects versioned
+  `dataset_field` rows with `Collectors.toMap`.
+* **Two upstream fixes are carried as patches.** `deploy/Dockerfile.odd-collector`
+  fixes odd-collector's Superset adapter; when
+  [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135)
+  lands, that image should be deleted rather than maintained.
+
+### Closed, and how
+
+* **`unique` scoped to a single day** meant a duplicate arriving later than its
+  original was never seen -- the check passed for 45 days on a table holding 8
+  duplicate primary keys. Table-level invariants now re-run against the real
+  tables and their results replace the windowed ones: `field_unique` reports
+  `16/3376` where it used to report `0/70`. The proper fix is a per-rule scope
+  in the contract, raised as
+  [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593).
+* **One data source.** Contracts now carry their own `servers` block, so the
+  same runner checks PostgreSQL and SQL Server in one pass, each through its
+  own dialect.
+* **A broken check looked like broken data.** A check that errors is stored as
+  `status = 'error'`, not as a failure with `1/1` rows.
+
+### Reported upstream
+
+| what | where |
+|---|---|
+| `Table.sql()` on postgres emits a nameless `DROP VIEW` (sqlglot 30 renamed `Drop.this`) | [ibis#12108](https://github.com/ibis-project/ibis/issues/12108) |
+| `datacontract test --filter` unusable on postgres because of the above | [datacontract-cli#1592](https://github.com/datacontract/datacontract-cli/issues/1592) |
+| a row filter is all-or-nothing; uniqueness needs to opt out | [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593) |
+| odd-collector's Superset adapter: int ids, and lineage only for postgresql/sqlite | [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135) |
 
 ## Where this goes next
 

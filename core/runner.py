@@ -19,6 +19,18 @@ day's arrivals, which the contract addresses through a second `servers` entry.
 Standard ODCS, standard SQL, nothing to patch and nothing to fork.
 
 **The time series and the score.** `datacontract test` runs and forgets.
+
+**Which window each check means.** A row filter is all-or-nothing, and checks
+divide into two kinds that want opposite windows. `not_null` scoped to today
+answers "did today's load bring nulls"; unscoped, a null from three weeks ago
+keeps it red forever. Uniqueness is the other way round: scoped to one day it
+only sees duplicates that arrive in the same batch, so a row duplicating a key
+loaded last week passes. That is not hypothetical -- our windowed uniqueness
+check passed for 45 days on a table with 8 duplicate primary keys in it. So
+table-level invariants are re-run unwindowed and their results replace the
+windowed ones. Raised upstream as
+https://github.com/datacontract/datacontract-cli/issues/1593; until ODCS can
+say it per rule, the list below is the local answer.
 """
 from __future__ import annotations
 
@@ -44,6 +56,10 @@ CONTRACTS = ROOT / "contracts"
 # the real tables. A contract without the first is run unwindowed.
 DAILY_SERVER = os.getenv("DQ_DAILY_SERVER", "erp_daily")
 HOST = os.getenv("DQ_HOST", "dq.local")
+
+# Checks whose meaning is the whole table, not the day's arrivals. datacontract
+# names them in `check["type"]`; anything not listed follows the window.
+TABLE_SCOPED_TYPES = frozenset({"field_unique", "field_primary_key"})
 WINDOW_SCHEMA = os.getenv("DQ_WINDOW_SCHEMA", "asof")
 
 
@@ -142,6 +158,23 @@ def run_contract(contract: dict, as_of: date, windowed: bool = True) -> dict:
         return json.loads(out.read_text(encoding="utf-8"))
 
 
+def merge_table_scoped(windowed: dict, unwindowed: dict) -> dict:
+    """Replace the windowed result of every table-level invariant.
+
+    Keyed by `check["key"]`, which datacontract keeps stable across runs and
+    across servers -- the same check against the view and against the table
+    carries the same key.
+    """
+    replacements = {c.get("key"): c for c in unwindowed.get("checks", [])
+                    if c.get("type") in TABLE_SCOPED_TYPES}
+    if not replacements:
+        return windowed
+    merged = dict(windowed)
+    merged["checks"] = [replacements.get(c.get("key"), c)
+                        for c in windowed.get("checks", [])]
+    return merged
+
+
 def persist(results: dict, contract: dict, as_of: date,
             window: str = "incremental") -> list[dict]:
     """Store one run's checks and return the rows the score is computed from."""
@@ -196,6 +229,15 @@ def push_to_odd(contract: dict, results: dict, url: str) -> int:
     return len(body["items"])
 
 
+def _has_table_scoped(contract: dict) -> bool:
+    """Does anything in this contract declare a table-level invariant?"""
+    for model in contract.get("schema", []):
+        for prop in model.get("properties") or []:
+            if prop.get("unique") or prop.get("primaryKey"):
+                return True
+    return False
+
+
 def _min_score(contract: dict) -> float:
     """`slaProperties` is where ODCS puts a promise; ours is a floor on the score."""
     for prop in contract.get("slaProperties", []) or []:
@@ -212,6 +254,11 @@ def run(as_of: date, contracts: list[dict] | None = None,
         # Both windows go through the views; only the predicate differs.
         windowed = bool(build_window(c, as_of, window=window))
         results = run_contract(c, as_of, windowed=windowed)
+        if windowed and _has_table_scoped(c):
+            # A second pass against the real tables, for the checks a daily
+            # window would make meaningless.
+            results = merge_table_scoped(results, run_contract(c, as_of,
+                                                               windowed=False))
         rows = persist(results, c, as_of, window)
         if odd_url:
             push_to_odd(c, results, odd_url)

@@ -2,3 +2,19 @@
 -- about it. Postgres runs this once, when the volume is empty.
 create database erp;
 create database dq;
+
+-- Contract checks are SQL a person wrote, executed against the source. They
+-- should not be able to write to it, and they should not be able to sit on a
+-- lock all night. A role with SELECT and a statement timeout is the cheapest
+-- version of both; it is not a sandbox, and the README says so.
+create role dq_reader with login password 'dq_reader';
+alter role dq_reader set statement_timeout = '60s';
+alter role dq_reader set idle_in_transaction_session_timeout = '60s';
+alter role dq_reader set default_transaction_read_only = on;
+
+\connect erp
+grant connect on database erp to dq_reader;
+grant usage on schema public to dq_reader;
+grant select on all tables in schema public to dq_reader;
+-- and on whatever the seed and the daily views create later
+alter default privileges in schema public grant select on tables to dq_reader;

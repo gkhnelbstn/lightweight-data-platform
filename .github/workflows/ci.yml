@@ -1,52 +1,119 @@
 name: ci
 
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  unit:
+  test:
+    name: unit tests + contract lint
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "${{ matrix.python }}" }
+        with:
+          python-version: "3.12"
+          cache: pip
       - run: pip install -e ".[dev]"
-      - run: pytest -q
 
-  end-to-end:
+      - name: pytest
+        run: pytest -q
+
+      # The contracts are the source of truth; a broken one is a broken build.
+      # `lint` validates against the ODCS JSON Schema without touching a
+      # database, which is the half that belongs in CI.
+      - name: lint every contract against ODCS
+        run: |
+          for f in contracts/*.odcs.yaml; do
+            echo "::group::$f"
+            datacontract lint "$f"
+            echo "::endgroup::"
+          done
+
+  integration:
+    name: run the contracts against a real postgres
     runs-on: ubuntu-latest
     services:
-      postgres:
+      db:
         image: postgres:16-alpine
         env:
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: erp
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s
-          --health-timeout 5s --health-retries 20
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       ERP_DSN: postgresql://postgres:postgres@localhost:5432/erp
       DQ_DSN: postgresql://postgres:postgres@localhost:5432/dq
-      PGPASSWORD: postgres
+      DATACONTRACT_POSTGRES_USERNAME: postgres
+      DATACONTRACT_POSTGRES_PASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
+        with:
+          python-version: "3.12"
+          cache: pip
       - run: pip install -e ".[dev]"
-      - run: psql "$ERP_DSN" -c "create database dq"
-      - name: seed, backfill, emit artifacts
+
+      - name: create the databases
         run: |
-          python seed/seed.py
-          python core/runner.py --backfill-days 7 --emit-artifacts
-      - name: build and validate ODD payloads
-        run: python integrations/odd/push.py --out artifacts/odd
-      - name: the run must have produced a trend
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" \
+            -c "create database erp" -c "create database dq"
+
+      - run: python seed/seed.py
+
+      # The contracts point at `db` inside compose; in CI the service is
+      # reachable on localhost.
+      - name: point the contracts at the CI host
         run: |
-          n=$(psql "$DQ_DSN" -tAc "select count(*) from contract_scores")
-          echo "contract_scores rows: $n"
-          test "$n" -ge 8
+          sed -i 's/^    host: db$/    host: localhost/' contracts/*.odcs.yaml
+
+      - name: two days, so the time series has more than one point
+        run: python core/runner.py --backfill-days 1
+
+      - name: assert the run actually stored something
+        run: |
+          python - <<'PY'
+          from core import store
+          with store.connect() as cx:
+              days, rows = cx.execute(
+                  "select count(distinct run_at), count(*) from check_results"
+              ).fetchone()
+              scored = cx.execute(
+                  "select count(*) from contract_scores").fetchone()[0]
+          print(f"{days} days, {rows} check results, {scored} scores")
+          assert days == 2, f"expected 2 run dates, got {days}"
+          assert rows > 40, f"suspiciously few results: {rows}"
+          assert scored >= 2, f"expected a score per contract per day, got {scored}"
+          PY
+
+  images:
+    name: build the images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # The collector image carries our fixes to its Superset adapter; if the
+      # upstream file moves, the patch script fails the build rather than
+      # silently producing a collector without them.
+      - name: odd-collector (patched)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.odd-collector
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
