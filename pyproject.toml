@@ -1,12 +1,12 @@
 [project]
 name = "lightweight-data-platform"
 version = "0.1.0"
-description = "Contract-driven data quality: contracts derive the tests, results become a time series, no Elasticsearch"
+description = "Contract-driven data quality on OpenDataDiscovery: ODCS contracts, results as a time series, no Elasticsearch"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "gkhnelbstn" }]
-keywords = ["data-contracts", "data-quality", "data-catalog", "dbt", "great-expectations", "postgres"]
+keywords = ["data-contracts", "odcs", "data-quality", "data-catalog", "opendatadiscovery", "postgres", "sqlserver"]
 
 dependencies = [
   "pydantic>=2.6",
@@ -14,6 +14,9 @@ dependencies = [
   "psycopg[binary]>=3.1",
   "fastapi>=0.110",
   "uvicorn>=0.27",
+  # core/runner.py shells out to `datacontract test`; it derives and executes
+  # the checks, so it is a runtime dependency and not an optional extra.
+  "datacontract-cli[postgres]>=1.1.3,<2",
 ]
 
 [build-system]
@@ -24,8 +27,17 @@ build-backend = "setuptools.build_meta"
 packages = ["core", "api", "integrations", "integrations.odd"]
 
 [project.optional-dependencies]
-odd = ["odd-models>=2.0", "oddrn-generator>=0.1"]
-dev = ["pytest>=8.0", "odd-models>=2.0", "oddrn-generator>=0.1"]
+# Pushing to ODD. Both are small and neither has been released since 2024, so
+# they are pinned rather than floated -- see docs/stack-choices.md.
+odd = ["odd-models>=2.0,<3", "oddrn-generator>=0.1,<1"]
+# Checking a SQL Server source additionally needs Microsoft's ODBC driver on
+# the machine; the Dockerfile installs it.
+sqlserver = ["datacontract-cli[sqlserver]>=1.1.3,<2"]
+dev = [
+  "pytest>=8.0",
+  "odd-models>=2.0,<3",
+  "oddrn-generator>=0.1,<1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

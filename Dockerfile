@@ -12,9 +12,10 @@ COPY pyproject.toml README.md ./
 COPY core core
 COPY api api
 COPY integrations integrations
-RUN pip install --no-cache-dir -e ".[odd]"
+RUN pip install --no-cache-dir -e ".[odd,sqlserver]"
 
-RUN pip install --no-cache-dir pymongo "datacontract-cli[sqlserver,postgres]"
+# only the demo loader needs this; the checks do not
+RUN pip install --no-cache-dir pymongo
 COPY contracts contracts
 COPY seed seed
 COPY web web
