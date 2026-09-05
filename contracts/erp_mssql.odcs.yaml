@@ -1,0 +1,112 @@
+# ODCS, not our own YAML dialect.
+#
+# The SQL Server ERP is checked by datacontract-cli rather than by
+# core/compilers/sql.py: it already speaks sqlserver, it derives the schema
+# checks from the properties, and it returns failed_rows and row_count per
+# check as structured JSON. Writing a second SQL compiler to do the same thing
+# would be a compiler we then maintain.
+#
+#   datacontract test contracts/erp_mssql.odcs.yaml \
+#       --output artifacts/mssql-results.json --output-format json
+#
+# Credentials come from the environment, never from this file:
+#   DATACONTRACT_SQLSERVER_USERNAME / DATACONTRACT_SQLSERVER_PASSWORD
+apiVersion: v3.0.2
+kind: DataContract
+id: erp.mssql.sales_orders
+name: Sales Orders (SQL Server)
+version: 1.0.0
+status: active
+domain: sales
+description:
+  purpose: Header-level sales orders replicated from the ERP into SQL Server.
+  usage: Revenue reporting in Superset. A failure here has dashboards downstream.
+
+servers:
+  - server: erp
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
+
+schema:
+  - name: sales_orders
+    physicalName: sales_orders
+    logicalType: object
+    physicalType: table
+    description: One row per order header.
+    properties:
+      - name: order_id
+        logicalType: integer
+        physicalType: bigint
+        required: true
+        unique: true
+        primaryKey: true
+      - name: customer_id
+        logicalType: integer
+        physicalType: int
+        required: true
+      - name: order_date
+        logicalType: date
+        physicalType: date
+        required: true
+      - name: currency
+        logicalType: string
+        physicalType: char
+        required: true
+      - name: status
+        logicalType: string
+        physicalType: varchar
+        required: true
+      - name: net_amount
+        logicalType: number
+        physicalType: decimal
+        required: true
+
+    quality:
+      - type: sql
+        description: currency must be one of TRY, USD, EUR
+        query: select count(*) from dbo.sales_orders where currency not in ('TRY','USD','EUR')
+        mustBe: 0
+        dimension: conformity
+
+      - type: sql
+        description: every order must belong to a customer that exists
+        query: >
+          select count(*) from dbo.sales_orders o
+          left join dbo.customers c on c.customer_id = o.customer_id
+          where c.customer_id is null
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: cancelled orders should carry no value
+        query: select count(*) from dbo.sales_orders where status = 'CANCELLED' and net_amount <> 0
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: order header total must equal the sum of its lines
+        query: >
+          select count(*) from dbo.sales_orders o
+          join (select order_id, sum(line_amount) as line_total
+                from dbo.sales_order_lines group by order_id) l
+            on l.order_id = o.order_id
+          where abs(o.net_amount - l.line_total) > 0.01
+        mustBe: 0
+        dimension: accuracy
+
+      - type: sql
+        description: a day must not lose more than half its usual order volume
+        query: >
+          select count(*) from (
+            select loaded_at, count(*) as n
+            from dbo.sales_orders group by loaded_at
+          ) d
+          where d.n < (select avg(n) / 2 from (
+            select count(*) as n from dbo.sales_orders group by loaded_at) a)
+        mustBe: 0
+        dimension: completeness

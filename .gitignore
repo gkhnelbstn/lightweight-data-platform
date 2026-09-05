@@ -12,3 +12,5 @@ build/
 .DS_Store
 collector_config.yaml
 profiler_config.yaml
+artifacts/
+demo/superset_home/

@@ -73,7 +73,10 @@ services:
   # ODD guards POST /ingestion/datasources with a filter that is always on, so a
   # collector cannot register itself.
   odd-collector:
-    image: ghcr.io/opendatadiscovery/odd-collector:latest
+    # stock image plus a two-line fix to the Superset adapter, see the Dockerfile
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.odd-collector
     depends_on:
       odd-platform: { condition: service_healthy }
     volumes: ["./deploy/collector_config.yaml:/app/collector_config.yaml:ro"]
@@ -106,6 +109,7 @@ services:
       # from the host for the same reason.
       - ./contracts:/app/contracts
       - ./artifacts:/app/artifacts
+      - ./demo:/app/demo
     environment:
       ERP_DSN: postgresql://postgres:postgres@db:5432/erp
       DQ_DSN: postgresql://postgres:postgres@db:5432/dq
@@ -114,6 +118,65 @@ services:
     ports: ["8077:8077"]
     restart: always
 
+  # ---- demo sources, behind `--profile demo` -------------------------------
+  # A second shape of the same problem: an ERP in SQL Server, reference data
+  # pulled from a public API into MongoDB, and Superset reading both. The point
+  # is the chain that ends at a dashboard -- odd-collector maps a chart to the
+  # tables behind it, so a failing check has a blast radius.
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    profiles: ["demo"]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
+      MSSQL_PID: Developer
+      # SQL Server takes what it is given; on a laptop that is the whole box.
+      MSSQL_MEMORY_LIMIT_MB: "2048"
+    volumes: ["mssql-data:/var/opt/mssql"]
+    ports: ["1433:1433"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'select 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  mongo:
+    image: mongo:7
+    profiles: ["demo"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+    volumes: ["mongo-data:/data/db"]
+    ports: ["27017:27017"]
+    command: ["--wiredTigerCacheSizeGB", "0.5"]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet -u root -p rootpass --authenticationDatabase admin --eval \"db.adminCommand(1)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  superset:
+    image: apache/superset:latest
+    profiles: ["demo"]
+    depends_on:
+      mssql: { condition: service_healthy }
+    environment:
+      SUPERSET_SECRET_KEY: "demo-not-a-secret-change-me"
+      SUPERSET_LOAD_EXAMPLES: "no"
+      FLASK_APP: superset
+      # bootstrap.sh pip-installs the SQL Server driver as the superset user,
+      # which lands in ~/.local and is not on gunicorn's path by default.
+      PYTHONPATH: /app/superset_home/.local/lib/python3.10/site-packages
+    volumes:
+      - superset-home:/app/superset_home
+      - ./demo/superset-bootstrap.sh:/app/bootstrap.sh:ro
+    ports: ["8089:8088"]
+    entrypoint: ["/bin/bash", "/app/bootstrap.sh"]
+
 volumes:
   db-data:
   odd-db-data:
+  mssql-data:
+  mongo-data:
+  superset-home:

@@ -1,0 +1,26 @@
+# odd-collector with the Superset adapter's id types fixed.
+#
+# The adapter passes Superset's numeric dashboard and chart ids straight into
+# the ODDRN generator, whose paths model requires strings, so every Superset
+# pull dies with:
+#
+#   1 validation error for SupersetPathsModel
+#   dashboards  Input should be a valid string [input_value=1, input_type=int]
+#
+# The collector is maintained; oddrn-generator has not been touched since
+# 2024-07, so the mismatch sits between two repositories with very different
+# levels of attention. One sed each, and the image is otherwise stock.
+FROM ghcr.io/opendatadiscovery/odd-collector:latest
+USER root
+RUN sed -i 's/dashboards=dashboard.id/dashboards=str(dashboard.id)/' \
+        /app/odd_collector/adapters/superset/mappers/dashboard.py \
+ && sed -i 's/charts=chart.id/charts=str(chart.id)/' \
+        /app/odd_collector/adapters/superset/mappers/chart.py \
+ && grep -q 'str(dashboard.id)' /app/odd_collector/adapters/superset/mappers/dashboard.py \
+ && grep -q 'str(chart.id)' /app/odd_collector/adapters/superset/mappers/chart.py
+
+# The Superset adapter resolves a chart's source tables through a per-backend
+# adaptee and ships with postgresql and sqlite only, so a SQL Server ERP loses
+# the BI lineage entirely. See the patch for why that is the whole feature.
+COPY deploy/superset-mssql-lineage.patch.py /tmp/patch.py
+RUN python /tmp/patch.py && rm /tmp/patch.py
