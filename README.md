@@ -58,6 +58,8 @@ annotates what was ingested — there is no "create test" anywhere in it — and
 datacontract-cli is a CLI. `web/index.html` writes SQL, shows the last 14 days
 it would have failed on, and saves the rule back into the contract file.
 
+![The contract UI](docs/contract-ui.png)
+
 ## Quick start
 
 Everything is one compose file.
