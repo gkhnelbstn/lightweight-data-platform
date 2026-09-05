@@ -1,72 +1,99 @@
 # lightweight-data-platform
 
-Contract-driven data quality for people whose data does not justify a data
-platform. Two contracts, 23 derived checks, 45 days of history, one PostgreSQL
-database. No Elasticsearch, no Kafka, no Airflow, no TimescaleDB.
+Contract-driven data quality on top of **OpenDataDiscovery**. The catalog,
+search, glossary, alerting and schema discovery are ODD's. The contracts, the
+daily run, the score and the trend are here. Two contracts, 23 derived checks,
+45 days of history, PostgreSQL.
 
 ```
-contract.yaml  ->  derived checks  ->  daily run (as-of date)  ->  time series  ->  score / SLA
-                        |
-                        +--> dbt schema.yml   (emitted, for teams that run dbt)
-                        +--> GX suite JSON    (emitted, for teams that run Great Expectations)
-                        +--> ODD payloads     (pushed, for catalog / lineage / glossary)
+contract.yaml ──> derived checks ──> daily run (as-of date) ──> time series ──> score / SLA
+                                            │
+                                            └──> ODD Platform: catalog, tests,
+                                                 run history, column stats,
+                                                 ER relationships, alerts
 ```
 
-## Why
+## The position
 
-Every open-source catalog that covers catalog + quality + lineage + glossary
-carries infrastructure sized for a company that has a data platform team.
-OpenMetadata's documented production minimum is a search cluster (2 vCPU / 8 GiB
-per node, three nodes), a database (4 vCPU / 16 GiB) and an Airflow (4 vCPU /
-16 GiB). For a 25 GB ERP replica that is not a trade-off, it is a joke.
+Every line we write is a line the community does not maintain for us. So the
+question this project keeps asking is not "what can we build" but **"what is
+still missing after ODD and datacontract-cli have done their part"**.
 
-The tools that *are* light — dbt tests, Great Expectations — have the opposite
-problem: they tell you what is broken today and forget it tomorrow, they have no
-scheduler, and a business analyst cannot read them.
+### Adopt, do not build
 
-This project takes a different starting point: **the data contract is the source
-of truth, and everything else is derived from it.**
+| need | what covers it | why not us |
+|---|---|---|
+| catalog, search, glossary, ownership, RBAC | **ODD Platform** (Apache-2.0, active) | Postgres full-text, no Elasticsearch. Their last 25 commits are all search |
+| schema discovery | **odd-collector** | 64 MB, one config file |
+| column profiling | **odd-collector-profiler** | string lengths, means, inferred types |
+| alert lifecycle | **ODD Platform** | opens on failure, closes itself on the next pass. Measured: 3 open, 10 auto-resolved over a 45-day backfill |
+| contract format | **ODCS** (Bitol / Linux Foundation) | a vendor-neutral standard beats our YAML |
+| deriving tests from a schema | **datacontract-cli** (MIT) | 15 checks from the same table, no code |
+| dbt / Great Expectations / 24 more exports | **datacontract-cli** | `export dbt-models`, `export great-expectations` |
 
-## What is actually different here
+### What is actually still missing
 
-1. **Nobody writes a test.** `required: true` becomes a not_null check,
-   `allowed: [...]` becomes accepted_values, `references:` becomes a
-   relationship check, `min`/`max` become a range check. Business rules live in
-   the same file as SQL. Change the contract and the tests change with it.
-2. **The same contract compiles to other engines.** dbt `schema.yml` and a
-   Great Expectations suite are generated from it (~60 lines each). A team that
-   already runs dbt can take the contract and run it in their own stack — which
-   is the honest answer to "aren't we locked into your tool?"
-3. **Results are a time series, not a status light.** Every run is stored
-   as-of a date, so quality has a trend, a severity-weighted score, and an SLA
-   that can actually be breached.
-4. **An analyst can add a rule from the UI** — write SQL, see the last 14 days
-   it would have failed on, save. Saving writes the rule back into the contract
-   file. The contract stays the single source of truth; the UI is an editor for
-   it, not a second store.
+These four are why this repository exists. Nothing above does them.
+
+1. **Results as a time series.** `datacontract test` runs and forgets: no
+   as-of date, no storage, no trend. Here every run is stored under its date in
+   a monthly-partitioned table, so quality has a history that can be charted
+   and an SLA that can be breached.
+2. **A severity-weighted score.** ODD divides passing tests by total tests and
+   calls it a score; a failing `critical` not_null and a failing cosmetic rule
+   cost the same, and one bad row weighs as much as four thousand.
+   `0.6 * severity-weighted pass/fail + 0.4 * severity-weighted (1 - fail_ratio)`
+   does not flatten either distinction.
+3. **The incremental window.** Scoring `loaded_at = as_of` rather than
+   `loaded_at <= as_of` is the single thing that made the trend legible — see
+   below. datacontract-cli has `--filter` for exactly this and it is **broken
+   in 1.1.3**: it emits a nameless `DROP VIEW IF EXISTS` and every filtered
+   check errors.
+4. **The push to ODD.** Mapping contracts, checks, runs, column statistics and
+   foreign keys onto `DataEntity` / `DataQualityTest` / `DataQualityTestRun` /
+   `DataSetFieldStat` / `ERDRelationship`, incrementally and idempotently.
+
+Plus the one interface neither has: **an analyst can author a rule.** ODD's UI
+annotates what was ingested — there is no "create test" anywhere in it — and
+datacontract-cli is a CLI. `web/index.html` writes SQL, shows the last 14 days
+it would have failed on, and saves the rule back into the contract file.
 
 ## Quick start
 
-Needs PostgreSQL 14+ and Python 3.10+.
+Everything is one compose file.
 
 ```bash
-pip install -e ".[dev]"
+docker compose up -d db odd-db odd-platform     # wait for ODD to come up
+./deploy/odd-bootstrap.sh                       # collector tokens + configs
+docker compose up -d                            # + collector + app
 
-export ERP_DSN=postgresql://postgres:postgres@localhost:5432/erp
-export DQ_DSN=postgresql://postgres:postgres@localhost:5432/dq
-createdb erp && createdb dq
-
-python seed/seed.py                                    # 45 days of ERP-ish data
-python core/runner.py --backfill-days 44 --emit-artifacts
-uvicorn api.main:app --port 8077                       # http://localhost:8077
+docker compose exec app python seed/seed.py                      # 45 days of ERP-ish data
+docker compose exec app python core/runner.py --backfill-days 44
+docker compose exec app python integrations/odd/push.py \
+    --url http://odd-platform:8080 --no-datasets
 ```
 
-Daily operation is two cron lines:
+* contract UI — http://localhost:8077
+* ODD — http://localhost:8080
+
+Column profiling is opt-in, because the image is 4.4 GB and idles at ~450 MB:
 
 ```bash
-python core/runner.py                                        # today's run
-python integrations/odd/push.py --url http://localhost:8080  # only if ODD is used
+docker compose --profile profiling up -d
 ```
+
+Daily operation is two lines in cron:
+
+```bash
+docker compose exec -T app python core/runner.py
+docker compose exec -T app python integrations/odd/push.py --url http://odd-platform:8080 --no-datasets
+```
+
+**Sizing.** Measured idle: ODD 924 MB (627 MB when capped at 1 GB, and it still
+starts), its Postgres 147 MB, collector 64 MB, profiler 451 MB. **4 vCPU /
+8 GiB / 100 GB is the target box.** ODD's database was 12 MB for 2 tables, 23
+checks and 45 days of runs — it stores metadata, so the size of the source data
+does not enter into it.
 
 ## Layout
 
@@ -74,106 +101,89 @@ python integrations/odd/push.py --url http://localhost:8080  # only if ODD is us
 |---|---|
 | `contracts/*.contract.yaml` | the contracts — schema, quality rules, SLA |
 | `core/contract.py` | contract model (pydantic) |
-| `core/checks.py` | contract -> canonical, engine-neutral checks |
-| `core/compilers/sql.py` | check -> PostgreSQL (`failed_rows`, `total_rows`) |
-| `core/compilers/dbt.py` | check -> dbt `schema.yml` |
-| `core/compilers/gx.py` | check -> Great Expectations suite JSON |
+| `core/checks.py` | contract → canonical, engine-neutral checks |
+| `core/compilers/sql.py` | check → PostgreSQL (`failed_rows`, `total_rows`) |
+| `core/compilers/dbt.py`, `gx.py` | check → dbt `schema.yml`, GX suite |
 | `core/runner.py` | register, compile, execute as-of a date, persist |
-| `core/scoring.py` | severity-weighted score (incident + volume terms) |
+| `core/scoring.py` | severity-weighted score |
 | `core/store.py` | DDL, monthly partitions, writes |
 | `api/main.py` | read API + analyst rule authoring |
 | `web/index.html` | single-file UI, no build step |
-| `integrations/odd/` | push to ODD Platform (catalog, lineage, glossary) |
-| `deploy/` | ODD compose file and its runbook |
-| `docs/odd-gap-analysis.md` | what ODD models natively and what it does not |
+| `integrations/odd/` | mapper, incremental push, column statistics |
+| `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
+| `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |
 
-## Three things this actually established
+## Three things this established
 
 **1. The scoring window decides whether the dashboard is useful.**
-Scoring cumulatively (`loaded_at <= as_of`) produced a flat line: 0.9993 ->
-0.9936 across two real incidents, never breaching SLA, because every new bad row
-is diluted by the whole history. Scoring the daily increment
-(`loaded_at = as_of`) turns the same incidents into visible drops — 0.989
-baseline, 0.87 during the outage, recovery to 0.935. Same data, same checks.
-A quality dashboard built on the cumulative window is decorative.
+Cumulative scoring (`loaded_at <= as_of`) produced a flat line — 0.9993 to
+0.9936 across two real incidents, never breaching SLA, because every new bad
+row is diluted by the whole history. Scoring the daily increment turns the same
+incidents into visible drops. Same data, same checks. A quality dashboard built
+on the cumulative window is decorative.
 
 **2. A pure row-ratio score is useless; so is a pure pass/fail score.**
-`score = 0.6 * severity-weighted pass/fail + 0.4 * severity-weighted (1 - fail_ratio)`.
-Ratio alone reads one bad row in a million as 0.999999. Binary alone cannot tell
-a typo from an outage.
+Ratio alone reads one bad row in a million as 0.999999. Binary alone cannot
+tell a typo from an outage.
 
-**3. Generating engine artifacts is cheap; running the engines is not.**
-The dbt and GX compilers are ~60 lines each and remove the lock-in argument
-entirely. Executing the checks in-process against PostgreSQL is ~90 lines.
-Embedding dbt or GX as a runtime dependency would have been an order of
-magnitude more work and more operational surface for no additional signal at
-this data volume — especially now that Soda Core has moved to the Elastic
-License and both dbt and Great Expectations sit under one vendor.
+**3. ODD holds more numbers than its run model suggests.** `DataQualityTestRun`
+has no numeric field, so per-run counts travel as text in `status_reason` — but
+`DataSet.rows_number` and `POST /ingestion/entities/datasets/stats` take row
+counts and per-column `nulls_count` / `unique_count` / min / max as structured
+values that the UI renders. `/ingestion/metrics` looks like the answer and is
+not: it returns 201 and stores nothing, and its epic has been open since 2022.
 
-## ODD Platform integration
+## Operating notes that cost time to find
 
-`integrations/odd/` maps contracts, derived checks and run history onto the ODD
-specification (`DataEntity` / `DataQualityTest` / `DataQualityTestRun`), the same
-shape `odd-dbt` produces. Dataset ODDRNs are plain PostgreSQL ODDRNs, so pushed
-tests land on the same catalog objects ODD's own collector discovers.
-
-```bash
-python integrations/odd/push.py --out artifacts/odd          # build + validate
-python integrations/odd/push.py --url http://localhost:8080  # ingest what is new
-python integrations/odd/push.py --url ... --since 2026-08-01 # re-send from a date
-python integrations/odd/push.py --url ... --all              # re-send everything
-python integrations/odd/push.py --url ... --no-datasets      # odd-collector owns the tables
-```
-
-What is sent: the tables and their columns, the 23 checks, one run per check
-per day, the table's row count and per-column `nulls_count` / `unique_count` /
-min / max, and the contract's `references:` as a column-level ERD relationship.
-
-Set `ODD_PG_HOST` to whatever host odd-collector reaches the database by. A
-dataset ODDRN is matched by string, so a mismatch forks every table into two
-catalog objects — the collector's with the schema, ours with the tests. With a
-collector running, add `--no-datasets` and let it own the schema.
-
-Ingestion is incremental by default: the platform's own data source is
-registered if missing, and only run dates that have not reached that platform
-are sent, so the same line covers the first 45-day backfill and the daily cron
-next to `core/runner.py`. What was sent is logged in `odd_pushes` per target.
-Steady state is 48 entities a night — the catalog and the newest day, both of
-which can still change — against 1060 for a full rebuild.
-
-1060 entities validate against `odd-models`. `deploy/RUN-odd-trial.md` is the
-runbook. The division of labour it implies: **ODD owns** catalog, lineage,
-glossary, ownership (in principle — the ingested `owner` is discarded, see the
-gap analysis), alert lifecycle and search; **this project owns** contracts,
-check derivation, artifact emission, scoring window, score and SLA. See
-`docs/odd-gap-analysis.md` for why, and for what a run against a real instance
-changed: ODD's run model has no row counters and ignores our severity, but it
-does compute a score of its own — an unweighted latest-run pass ratio, shown on
-the dataset page, next to no trend at all.
-
-## Deliberate omissions
-
-* **No TimescaleDB.** Monthly range partitions plus a BRIN index on `run_at`
-  cover this. At ~23 checks x 365 days the results table gains ~8k rows a year.
-  TimescaleDB's useful parts (continuous aggregates, retention policies,
-  compression) are Community/TSL licensed, so adopting it early trades an
-  Elasticsearch-sized dependency for a license restriction.
-* **No Elasticsearch.** Catalog search over this many objects is `tsvector` +
-  `pg_trgm` territory.
-* **No React build.** A single HTML file with inline SVG renders the same screens
-  with zero toolchain.
+* **`ODD_PG_HOST` must match what odd-collector calls the database.** A dataset
+  ODDRN is matched by string; a mismatch forks every table into two catalog
+  objects, the collector's with the schema and ours with the tests. Inside this
+  compose both are `db`, which is most of the reason it is one compose.
+* **Push with `--no-datasets` when a collector runs.** ODD versions a dataset
+  whenever its structure changes and the two writers never agree — the contract
+  governs 6 columns of 7, the collector says `int8` where `information_schema`
+  says `bigint`. Left alone they mint a schema revision every pull.
+* **A collector cannot register itself.** `POST /ingestion/datasources` is
+  guarded by a filter that is always on, so odd-collector dies at startup until
+  it is handed a token minted through `POST /api/collectors`.
+  `deploy/odd-bootstrap.sh` does that and writes both configs — the collector
+  and the profiler spell the same database differently (`postgresql` vs
+  `postgres`, `user` vs `username`) and each mistake is an opaque crash.
 
 ## Status and limitations
 
-Early. This is a working vertical slice, not a product.
+Early. A working vertical slice, not a product.
 
-* Custom SQL is executed as written. A real deployment needs a read-only role, a
-  statement timeout and an AST check — `/api/rules/preview` is validation, not a
-  sandbox.
-* `{{scope}}` / `{{scope:alias}}` is string substitution, not a parser.
-* Lineage, glossary and CDC are not modelled here; the ODD integration is the
-  current answer for the first two.
-* Alerting, ownership routing and multi-datasource support are not built.
+* **`unique` is windowed and should not be.** The check runs against a single
+  day's rows, so a duplicate that arrives on a later day than the original is
+  never seen. Demonstrated, not theorised. `not_null` and `range` are right to
+  be windowed; a table-wide invariant is not.
+* **A broken check and broken data look identical.** A SQL error is recorded as
+  `failed_rows = 1, total_rows = 1`, which scores like a data problem and opens
+  an alert like one.
+* **No CDC.** `loaded_at = as_of` is a watermark: it sees inserts, not updates
+  or deletes.
+* **One data source.** The DSN comes from the environment, not the contract.
+* **Custom SQL is executed as written.** No read-only role, no statement
+  timeout, no AST check. `/api/rules/preview` is validation, not a sandbox.
+* **Neither UI has authentication.** Anyone who reaches 8077 can run SQL
+  against the source; anyone who reaches 8080 can inject alerts into ODD
+  (issue #1740). Private network only.
+* **ODD's ERD relationships are write-only on 0.29.0.** They store correctly
+  and 500 on read — `Collectors.toMap` over versioned `dataset_field` rows.
+
+## Where this goes next
+
+The honest direction is to keep shrinking the part we maintain:
+
+1. **Adopt ODCS as the contract format** and let `datacontract test` derive and
+   execute the checks. It already returns `failed_rows` and `row_count` per
+   check as structured JSON — the same two numbers `core/compilers/sql.py`
+   exists to produce. That would retire our contract model, our derivation and
+   both artifact compilers, and hand us 24 export formats we never wrote.
+2. **Keep** the results store, the score, the window and the ODD push. Those
+   four are the whole remaining product.
+3. **Authentication** before anyone else uses it.
 
 ## License
 
