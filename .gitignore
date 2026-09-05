@@ -10,3 +10,5 @@ artifacts/
 dist/
 build/
 .DS_Store
+collector_config.yaml
+profiler_config.yaml

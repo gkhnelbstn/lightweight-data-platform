@@ -1,8 +1,20 @@
-# Minimal ODD Platform, no sample data, no collector.
+# ODD Platform, its database, and the collectors that discover and profile the
+# source. This is the shape a real deployment has, not the minimum that boots.
+#
+#   ./deploy/odd-bootstrap.sh          # data source + collector tokens
 #   docker compose -f deploy/odd-compose.yaml up -d
-#   open http://localhost:8080
+#   docker compose -f deploy/odd-compose.yaml --profile profiling up -d   # + profiler
+#
 # Ports: 8080 (UI/API), 5433 (ODD's own Postgres, kept off 5432 so it does not
-# collide with the ERP database the spike reads).
+# collide with the database the contracts read).
+#
+# SECURITY. `/ingestion/**` is unauthenticated here. odd-platform issue #1740
+# spells it out: auth.ingestion.filter.enabled defaults to false, and even when
+# true it covered only /ingestion/entities -- /ingestion/alerts,
+# /ingestion/metrics and /ingestion/entities/datasets/stats had no filter at
+# all. Anyone who can reach port 8080 can inject alerts or overwrite stats.
+# Keep this compose on a private network and put the platform behind something
+# that terminates auth before exposing it.
 services:
   odd-db:
     image: postgres:16-alpine
@@ -10,6 +22,9 @@ services:
       POSTGRES_USER: odd-platform
       POSTGRES_PASSWORD: odd-platform-password
       POSTGRES_DB: odd-platform
+    # notifications.enabled=true drives itself off logical replication of this
+    # database, so the WAL level has to allow it. Harmless when unused.
+    command: ["postgres", "-c", "wal_level=logical"]
     ports: ["5433:5432"]
     volumes: ["odd-db-data:/var/lib/postgresql/data"]
     healthcheck:
@@ -27,8 +42,36 @@ services:
       SPRING_DATASOURCE_USERNAME: odd-platform
       SPRING_DATASOURCE_PASSWORD: odd-platform-password
       AUTH_TYPE: DISABLED
-      AUTH_INGESTION_FILTER_ENABLED: "false"
     ports: ["8080:8080"]
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  # Discovers the source schema. It owns the catalog objects, which is why
+  # push.py runs with --no-datasets: two writers disagreeing about a column
+  # list mint a new schema revision on every pull.
+  odd-collector:
+    image: ghcr.io/opendatadiscovery/odd-collector:latest
+    depends_on:
+      odd-platform: { condition: service_healthy }
+    volumes: ["./collector_config.yaml:/app/collector_config.yaml:ro"]
+    restart: always
+
+  # Column statistics -- string lengths, means, inferred types -- via Capital
+  # One's DataProfiler. Opt-in because the image is 4.4 GB (it carries
+  # TensorFlow) and idles around 450 MB, against 64 MB for the collector.
+  # integrations/odd/stats.py already sends nulls_count / unique_count /
+  # low / high for the numeric columns a contract governs; this adds the rest.
+  # Both write the same field stats, so the last one to run wins per column.
+  odd-profiler:
+    image: ghcr.io/opendatadiscovery/odd-collector-profiler:latest
+    profiles: ["profiling"]
+    depends_on:
+      odd-platform: { condition: service_healthy }
+    volumes: ["./profiler_config.yaml:/app/collector_config.yaml:ro"]
     restart: always
 
 volumes:
