@@ -72,11 +72,28 @@ class ContractGenerator(Generator):
     server_model = HostnameModel
 
 
+def pg_host(dsn: str) -> str:
+    """The host segment of the dataset ODDRNs, as odd-collector would mint it.
+
+    An ODDRN is matched by string, so a dataset only merges with the one
+    ODD's own Postgres collector discovers if this segment is byte-identical
+    to the collector's. The collector uses the bare hostname from its config
+    -- no port -- so appending one forks every table into two catalog objects,
+    the collector's copy holding the schema and ours holding the tests.
+
+    ODD_PG_HOST overrides it outright, which is the normal case rather than
+    the exception: the collector reaches the database by a name we do not
+    share (a container name, a service DNS entry) while our DSN says
+    localhost. Set it to whatever the collector's `host:` says.
+    """
+    return os.getenv("ODD_PG_HOST") or (urlparse(dsn).hostname or "localhost")
+
+
 def pg_generator(dsn: str, table: str, schema: str = "public") -> PostgresqlGenerator:
-    u = urlparse(dsn)
     return PostgresqlGenerator(
-        host_settings=f"{u.hostname}:{u.port or 5432}",
-        databases=(u.path or "/").lstrip("/"), schemas=schema, tables=table)
+        host_settings=pg_host(dsn),
+        databases=(urlparse(dsn).path or "/").lstrip("/"),
+        schemas=schema, tables=table)
 
 
 def dataset_oddrn(dsn: str, contract: DataContract) -> str:

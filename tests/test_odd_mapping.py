@@ -13,7 +13,8 @@ from odd_models.models import (DataEntityList, DataEntityType,  # noqa: E402
 from core.checks import derive  # noqa: E402
 from core.contract import load_all  # noqa: E402
 from integrations.odd.mapper import (check_entity, dataset_entity,  # noqa: E402
-                                     datasource_oddrn, entity_list, run_entity)
+                                     datasource_oddrn, entity_list, pg_host,
+                                     run_entity)
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
 DSN = "postgresql://u:p@localhost:5432/erp"
@@ -86,3 +87,23 @@ def test_freshness_is_the_one_non_assertion_category():
             == DataQualityTestExpectationCategory.FRESHNESS_ANOMALY)
     assert (by_name["order_id.not_null"].data_quality_test.expectation.category
             == DataQualityTestExpectationCategory.ASSERTION)
+
+
+def test_dataset_host_carries_no_port():
+    """odd-collector mints the host segment from its bare `host:` config. An
+    ODDRN is matched by string, so a port here forks every table into two
+    catalog objects -- the collector's with the schema, ours with the tests."""
+    for e in _entities():
+        if e.type == DataEntityType.TABLE:
+            host = e.oddrn.split("/host/")[1].split("/")[0]
+            assert ":" not in host, e.oddrn
+
+
+def test_odd_pg_host_overrides_the_dsn(monkeypatch):
+    """The collector usually reaches the database under a name our DSN does
+    not share -- a container name, a service DNS entry -- so the operator has
+    to be able to say what that name is."""
+    monkeypatch.setenv("ODD_PG_HOST", "erp-db.internal")
+    assert pg_host(DSN) == "erp-db.internal"
+    monkeypatch.delenv("ODD_PG_HOST")
+    assert pg_host(DSN) == "localhost"
