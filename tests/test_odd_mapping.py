@@ -14,7 +14,7 @@ from core.checks import derive  # noqa: E402
 from core.contract import load_all  # noqa: E402
 from integrations.odd.mapper import (check_entity, dataset_entity,  # noqa: E402
                                      datasource_oddrn, entity_list, pg_host,
-                                     run_entity)
+                                     relationship_entities, run_entity)
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
 DSN = "postgresql://u:p@localhost:5432/erp"
@@ -107,3 +107,27 @@ def test_odd_pg_host_overrides_the_dsn(monkeypatch):
     assert pg_host(DSN) == "erp-db.internal"
     monkeypatch.delenv("ODD_PG_HOST")
     assert pg_host(DSN) == "localhost"
+
+
+def test_references_become_a_column_level_erd_relationship():
+    """The contract states the foreign key; ODD draws it. This is the one edge
+    we can publish without discovering anything."""
+    rels = [r for c in load_all(CONTRACTS)
+            for r in relationship_entities(DSN, c)]
+    assert len(rels) == 1, [r.name for r in rels]
+    edge = rels[0].data_relationship
+    assert edge.source_dataset_oddrn.endswith("/tables/sales_orders")
+    assert edge.target_dataset_oddrn.endswith("/tables/customers")
+    assert edge.details.source_dataset_field_oddrns_list == [
+        edge.source_dataset_oddrn + "/columns/customer_id"]
+    assert edge.details.target_dataset_field_oddrns_list == [
+        edge.target_dataset_oddrn + "/columns/customer_id"]
+
+
+def test_relationship_oddrns_do_not_collide_with_check_oddrns():
+    """Both live under the contract generator, so a relationship named after a
+    column must not land on the check for that column."""
+    ids = {e.oddrn for e in _entities()}
+    for c in load_all(CONTRACTS):
+        for r in relationship_entities(DSN, c):
+            assert r.oddrn not in ids, r.oddrn

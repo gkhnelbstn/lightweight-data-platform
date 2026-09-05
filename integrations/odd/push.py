@@ -29,7 +29,7 @@ from core.checks import derive
 from core.contract import load_all
 from integrations.odd.mapper import (check_entity, column_oddrns, dataset_entity,
                                      dataset_oddrn, datasource_oddrn, entity_list,
-                                     run_entity)
+                                     relationship_entities, run_entity)
 from integrations.odd.stats import profile, stats_payload, table_columns
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,6 +130,8 @@ def build(days: list[date] | None = None,
                 column_oddrns(store.ERP_DSN, c), field_stats))
             for ck in derive(c):
                 checks.append(check_entity(HOST, store.ERP_DSN, c, ck))
+            # the contract's `references:` is a foreign key ODD can draw
+            checks.extend(relationship_entities(store.ERP_DSN, c))
 
     for r in results:
         name = r["check_id"].replace(r["contract_id"] + ".", "")

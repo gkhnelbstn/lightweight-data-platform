@@ -14,10 +14,11 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from odd_models.models import (
-    DataEntity, DataEntityList, DataEntityType, DataQualityTest,
-    DataQualityTestExpectation, DataQualityTestExpectationCategory,
-    DataQualityTestRun, DataSet, DataSetField, DataSetFieldType,
-    MetadataExtension, QualityRunStatus, Tag, Type,
+    CardinalityType, DataEntity, DataEntityList, DataEntityType,
+    DataQualityTest, DataQualityTestExpectation,
+    DataQualityTestExpectationCategory, DataQualityTestRun, DataRelationship,
+    DataSet, DataSetField, DataSetFieldType, ERDRelationship,
+    MetadataExtension, QualityRunStatus, RelationshipType, Tag, Type,
 )
 from oddrn_generator import Generator, PostgresqlGenerator
 from oddrn_generator.path_models import BasePathsModel, DependenciesMap
@@ -181,6 +182,53 @@ def check_entity(host: str, dsn: str, contract: DataContract,
                 column=check.column, **{
                     k: str(v) for k, v in check.params.items()
                     if v is not None})))
+
+
+def relationship_entities(dsn: str, contract: DataContract) -> list[DataEntity]:
+    """`references:` in a contract is a foreign key. ODD draws those.
+
+    The contract already states the edge -- `customer_id references
+    customers.customer_id` -- and we were only compiling it into a relationship
+    check. ODD models the same thing as an ENTITY_RELATIONSHIP carrying an
+    ERDRelationship, which is column-level and renders on the dataset's
+    Relationships tab. It is the cheapest lineage available: nothing to
+    discover, the contract says it.
+
+    Not to be confused with lineage proper -- ODD's DataTransformer inputs and
+    outputs are dataset-level and describe a job, which a contract does not.
+    """
+    out = []
+    for f in contract.schema_.fields:
+        if not f.references:
+            continue
+        src = pg_generator(dsn, contract.server.table, contract.server.schema_)
+        src.set_oddrn_paths(tables_columns=f.name)
+        tgt = pg_generator(dsn, f.references.table, contract.server.schema_)
+        tgt.set_oddrn_paths(tables_columns=f.references.column)
+        name = f"{contract.server.table}.{f.name} -> {f.references.table}.{f.references.column}"
+        g = ContractGenerator(host_settings=os.getenv("DQ_HOST", "dq.local"),
+                              contracts=contract.id, checks=f"rel.{f.name}")
+        out.append(DataEntity(
+            oddrn=g.get_oddrn_by_path("checks"), name=name,
+            type=DataEntityType.ENTITY_RELATIONSHIP,
+            description=f"{f.name} must exist in {f.references.table}",
+            tags=[Tag(name=f"contract:{contract.id}")],
+            data_relationship=DataRelationship(
+                relationship_type=RelationshipType.ERD,
+                source_dataset_oddrn=src.get_oddrn_by_path("tables"),
+                target_dataset_oddrn=tgt.get_oddrn_by_path("tables"),
+                details=ERDRelationship(
+                    source_dataset_field_oddrns_list=[
+                        src.get_oddrn_by_path("tables_columns")],
+                    target_dataset_field_oddrns_list=[
+                        tgt.get_oddrn_by_path("tables_columns")],
+                    # a child row must point at exactly one parent; the parent
+                    # may have none. Anything stronger is a claim the contract
+                    # does not make.
+                    cardinality=CardinalityType.ONE_TO_EXACTLY_ONE,
+                    is_identifying=False,
+                    relationship_entity_name="ERDRelationship"))))
+    return out
 
 
 def run_entity(host: str, contract_id: str, check_name: str, result: dict) -> DataEntity:
