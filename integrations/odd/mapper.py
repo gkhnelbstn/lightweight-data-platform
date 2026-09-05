@@ -101,20 +101,43 @@ def dataset_oddrn(dsn: str, contract: DataContract) -> str:
                         contract.server.schema_).get_oddrn_by_path("tables")
 
 
-def dataset_entity(dsn: str, contract: DataContract) -> DataEntity:
-    """The contract already describes the schema, so it can seed the catalog on
-    its own -- no collector required to see the table in ODD."""
+def column_oddrns(dsn: str, contract: DataContract) -> dict[str, str]:
+    """`{column name: oddrn}` -- the key ODD's dataset-stats payload is keyed by."""
     g = pg_generator(dsn, contract.server.table, contract.server.schema_)
-    fields = []
+    out = {}
     for f in contract.schema_.fields:
         g.set_oddrn_paths(tables_columns=f.name)
+        out[f.name] = g.get_oddrn_by_path("tables_columns")
+    return out
+
+
+def dataset_entity(dsn: str, contract: DataContract,
+                   rows_number: int | None = None,
+                   columns: list[tuple[str, str]] | None = None) -> DataEntity:
+    """The contract already describes the schema, so it can seed the catalog on
+    its own -- no collector required to see the table in ODD.
+
+    *columns* is the table's real column list when we have a connection to read
+    it. The contract governs a subset, and publishing that subset as the
+    dataset's structure makes every collector cycle mint a new schema revision
+    (see `stats.table_columns`). Contract metadata -- description, key,
+    nullability -- is overlaid onto the columns it does name.
+    """
+    g = pg_generator(dsn, contract.server.table, contract.server.schema_)
+    declared = {f.name: f for f in contract.schema_.fields}
+    listing = columns or [(f.name, f.type) for f in contract.schema_.fields]
+    fields = []
+    for name, pg_type in listing:
+        f = declared.get(name)
+        g.set_oddrn_paths(tables_columns=name)
         fields.append(DataSetField(
-            oddrn=g.get_oddrn_by_path("tables_columns"), name=f.name,
-            description=f.description,
+            oddrn=g.get_oddrn_by_path("tables_columns"), name=name,
+            description=f.description if f else None,
             type=DataSetFieldType(
-                type=_PG_TYPE.get(f.type.lower(), Type.TYPE_UNKNOWN),
-                logical_type=f.type, is_nullable=not f.required),
-            is_primary_key=bool(f.unique and f.required),
+                type=_PG_TYPE.get(pg_type.lower(), Type.TYPE_UNKNOWN),
+                logical_type=pg_type,
+                is_nullable=not (f.required if f else False)),
+            is_primary_key=bool(f and f.unique and f.required),
             enum_values=None))
     return DataEntity(
         oddrn=g.get_oddrn_by_path("tables"), name=contract.server.table,
@@ -125,7 +148,9 @@ def dataset_entity(dsn: str, contract: DataContract) -> DataEntity:
         metadata=[MetadataExtension(schema_url=SCHEMA_URL, metadata={
             "contract_id": contract.id,
             "contract_sla_min_score": float(contract.sla.min_score)})],
-        dataset=DataSet(field_list=fields))
+        # ODD shows "Rows 0" until something tells it otherwise; nothing
+        # derives a row count from the runs we push.
+        dataset=DataSet(field_list=fields, rows_number=rows_number))
 
 
 def check_entity(host: str, dsn: str, contract: DataContract,

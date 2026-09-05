@@ -27,8 +27,10 @@ from psycopg.rows import dict_row
 from core import store
 from core.checks import derive
 from core.contract import load_all
-from integrations.odd.mapper import (check_entity, dataset_entity,
-                                     datasource_oddrn, entity_list, run_entity)
+from integrations.odd.mapper import (check_entity, column_oddrns, dataset_entity,
+                                     dataset_oddrn, datasource_oddrn, entity_list,
+                                     run_entity)
+from integrations.odd.stats import profile, stats_payload, table_columns
 
 ROOT = Path(__file__).resolve().parents[2]
 HOST = os.getenv("DQ_HOST", "dq.local")
@@ -84,9 +86,10 @@ def record_push(target: str, day: date, entities: int) -> None:
             (target, day, entities))
 
 
-def build(days: list[date] | None = None) -> dict[str, list]:
+def build(days: list[date] | None = None,
+          with_datasets: bool = True) -> dict[str, list]:
     contracts = load_all(str(ROOT / "contracts"))
-    datasets, checks, runs_by_day = [], [], defaultdict(list)
+    datasets, checks, runs_by_day, stats = [], [], defaultdict(list), []
 
     where, params = ["r.run_window = 'incremental'"], []
     if days is not None:
@@ -113,34 +116,56 @@ def build(days: list[date] | None = None) -> dict[str, list]:
         print(f"note: {orphans['n']} result rows from {orphans['checks']} retired "
               f"check(s) kept in history, not pushed")
 
-    for c in contracts:
-        datasets.append(dataset_entity(store.ERP_DSN, c))
-        for ck in derive(c):
-            checks.append(check_entity(HOST, store.ERP_DSN, c, ck))
+    # The profile is table-wide and current, unlike everything else here, so
+    # it is read fresh rather than from the results store.
+    with psycopg.connect(store.ERP_DSN) as erp:
+        for c in contracts:
+            rows, field_stats = profile(erp, c)
+            if with_datasets:
+                datasets.append(dataset_entity(
+                    store.ERP_DSN, c, rows_number=rows,
+                    columns=table_columns(erp, c)))
+            stats.append(stats_payload(
+                dataset_oddrn(store.ERP_DSN, c),
+                column_oddrns(store.ERP_DSN, c), field_stats))
+            for ck in derive(c):
+                checks.append(check_entity(HOST, store.ERP_DSN, c, ck))
 
     for r in results:
         name = r["check_id"].replace(r["contract_id"] + ".", "")
         runs_by_day[str(r["run_at"])].append(
             run_entity(HOST, r["contract_id"], name, r))
 
-    return {"datasets": datasets, "checks": checks, "runs": dict(runs_by_day)}
+    return {"datasets": datasets, "checks": checks, "runs": dict(runs_by_day),
+            "stats": stats}
 
 
-def payloads(days: list[date] | None = None) -> list[tuple[str, dict]]:
-    """`(filename, body)` pairs: the catalog first, then one file per day.
+ENTITIES = "/ingestion/entities"
+STATS = "/ingestion/entities/datasets/stats"
+
+
+def payloads(days: list[date] | None = None,
+             with_datasets: bool = True) -> list[tuple[str, dict, str]]:
+    """`(filename, body, endpoint)` triples: catalog, stats, then one per day.
 
     The catalog goes every time. It is 25 entities, ODD upserts it, and it is
     the only way a contract edit (a new rule, a renamed column) reaches the
     platform -- skipping it would make an incremental push silently stale.
+
+    Stats go to their own endpoint. They are the one payload ODD stores as
+    numbers rather than as text, so they follow the catalog and precede the
+    runs; a column ODD has not seen yet is ignored rather than rejected.
     """
-    b = build(days)
+    b = build(days, with_datasets)
     out = [("00_catalog.json",
             entity_list(b["datasets"] + b["checks"], HOST).model_dump(
-                mode="json", exclude_none=True))]
+                mode="json", exclude_none=True), ENTITIES)]
+    for i, body in enumerate(b["stats"]):
+        out.append((f"01_stats_{i}.json", body, STATS))
     for day in sorted(b["runs"]):
         out.append((f"runs_{day}.json",
                     entity_list(b["runs"][day], HOST).model_dump(
-                        mode="json", exclude_none=True)))
+                        mode="json", exclude_none=True), ENTITIES))
     return out
 
 
@@ -180,9 +205,9 @@ def ensure_datasource(url: str) -> str:
     return oddrn
 
 
-def post(url: str, body: dict) -> int:
+def post(url: str, body: dict, endpoint: str = ENTITIES) -> int:
     req = urllib.request.Request(
-        url.rstrip("/") + "/ingestion/entities",
+        url.rstrip("/") + endpoint,
         data=json.dumps(body).encode(), method="POST",
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=60) as resp:
@@ -204,6 +229,9 @@ def main() -> None:
                     help="push from this run date on, pushed or not")
     ap.add_argument("--all", action="store_true", dest="everything",
                     help="rebuild and re-send every day of history")
+    ap.add_argument("--no-datasets", action="store_true",
+                    help="let odd-collector own the tables: push tests, runs "
+                         "and column stats but not the dataset entities")
     a = ap.parse_args()
 
     target = _target(a.url)
@@ -214,9 +242,9 @@ def main() -> None:
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    files = payloads(days)
+    files = payloads(days, with_datasets=not a.no_datasets)
     total = 0
-    for name, body in files:
+    for name, body, _ in files:
         (out / name).write_text(json.dumps(body, indent=2))
         total += len(body["items"])
     print(f"{len(files)} payloads, {total} entities, "
@@ -226,10 +254,10 @@ def main() -> None:
         return
 
     ensure_datasource(a.url)
-    for name, body in files:
+    for name, body, endpoint in files:
         n = len(body["items"])
         try:
-            code = post(a.url, body)
+            code = post(a.url, body, endpoint)
         except urllib.error.HTTPError as e:
             print(f"  POST {name:22} {e.code} {e.read()[:200]!r}")
             break
