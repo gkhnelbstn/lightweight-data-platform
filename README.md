@@ -122,7 +122,17 @@ python integrations/odd/push.py --out artifacts/odd          # build + validate
 python integrations/odd/push.py --url http://localhost:8080  # ingest what is new
 python integrations/odd/push.py --url ... --since 2026-08-01 # re-send from a date
 python integrations/odd/push.py --url ... --all              # re-send everything
+python integrations/odd/push.py --url ... --no-datasets      # odd-collector owns the tables
 ```
+
+What is sent: the tables and their columns, the 23 checks, one run per check
+per day, the table's row count and per-column `nulls_count` / `unique_count` /
+min / max, and the contract's `references:` as a column-level ERD relationship.
+
+Set `ODD_PG_HOST` to whatever host odd-collector reaches the database by. A
+dataset ODDRN is matched by string, so a mismatch forks every table into two
+catalog objects — the collector's with the schema, ours with the tests. With a
+collector running, add `--no-datasets` and let it own the schema.
 
 Ingestion is incremental by default: the platform's own data source is
 registered if missing, and only run dates that have not reached that platform

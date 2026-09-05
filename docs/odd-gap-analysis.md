@@ -48,14 +48,40 @@ source existed.
 
 ## 1. "No row counters. The volume signal can only be shipped as free text in `status_reason`."
 
-**Verdict: confirmed, with one correction in ODD's favour.**
+**Verdict: refuted for the platform, confirmed for the run model.**
+
+This was the document's central claim and it was wrong, because only ODD's
+run model had been looked at. The dataset model holds numbers:
+
+* **`DataSet.rows_number`** — the table's row count, part of the catalog payload.
+  We never set it, which is why every table read `Rows 0`.
+* **`POST /ingestion/entities/datasets/stats`** — per-column `nulls_count`,
+  `unique_count`, `low_value`, `high_value`, stored as structured JSON and
+  rendered on the column panel. After pushing them, `customer_id` reads
+  **`Unique 399 | Missing 75 | Min 1 | Max 400`** — and `Missing 75` is exactly
+  what `customer_id.not_null` counts.
+
+So the numbers our checks produce do have a first-class home; we were sending
+them to the wrong place. `integrations/odd/stats.py` now fills it.
+
+What has no home is narrower than claimed, and still real: a **per-run**
+`failed_rows` tied to one check execution on one day. That is the run model,
+and there the original claim stands:
 
 `DataQualityTestRun` really is `{data_quality_test_oddrn, start_time, end_time,
-status, status_reason}` — there is no numeric field, and `failed_rows` /
-`total_rows` / `fail_ratio` have nowhere to go but the string.
+status, status_reason}` — there is no numeric field, so the daily per-check
+counts have nowhere to go but the string.
 
-The correction: the original text implied this makes the volume signal
-effectively invisible. It does not. `status_reason` is a first-class column in a
+The `/ingestion/metrics` endpoint looks like the answer and is not. It accepts
+a `MetricSet` with Prometheus-shaped gauge points, returns **201**, and stores
+nothing: `metric_family`, `metric_series` and `metric_point` stay empty, with
+no error in the log, on the default `metrics.storage: INTERNAL_POSTGRES` and
+with `METRICS_EXPORT_ENABLED=true` alike. The epic that would implement it
+(#1180, "Revisiting Metrics API") has been open since 2022. Treat the Metrics
+API as absent.
+
+A second correction: the original text implied the string makes the volume
+signal invisible. It does not. `status_reason` is a first-class column in a
 check's **History** tab, so the daily row counts read as a legible series:
 
 ![Run history with row counts as free text](odd-run-history.png)
@@ -69,8 +95,8 @@ reader's head.
 
 Two smaller findings in the same area:
 
-* The dataset overview shows **Rows 0** for both tables. We never send a row
-  count, and nothing derives one from the runs.
+* The dataset overview showed **Rows 0** because we never sent
+  `DataSet.rows_number`; nothing derives one from the runs. Fixed.
 * The inline test-report panel pages the history 10 runs at a time
   (`/api/dataentities/{id}/runs?page=1&size=10`). All 45 are stored and the
   full list is on the check's own page; the panel just does not show them.
@@ -210,11 +236,104 @@ Two caveats:
 | contract ownership | `owner` | full | **refuted** — `owner` is sent on all 25 catalog entities (`sales-ops`, `master-data`) and ODD keeps none of it: `ownership: null` on every entity, `/api/owners` empty, "Owners — Not created" in the UI (§8) |
 | test ↔ dataset link | ODDRN in `dataset_list` | full | **confirmed** — the test page links to `sales_orders` and the dataset counts the test |
 | contract metadata | `MetadataExtension` | full | **refuted** — strings, ints and bools only (§3) |
+| table row count | `DataSet.rows_number` | not claimed | **available and now sent** (§1) |
+| per-column null / unique / min / max | `DataSetFieldStat` | not claimed | **available and now sent** (§1) |
+| `references:` foreign key | `ERDRelationship` | not claimed | **available and now sent**; stored correctly, unreadable on 0.29.0 (§7b) |
+| per-run numeric facts | — | — | **absent**; `/ingestion/metrics` is a stub (§1) |
 
-The dataset ODDRNs are still plain PostgreSQL ODDRNs, so the merge-with-collector
-argument stands — though it was not exercised here: no collector was run, and
-the tables appear under the `datafletch-contracts` data source we registered.
-That claim remains untested.
+The dataset ODDRNs are still plain PostgreSQL ODDRNs, and the
+merge-with-collector argument now holds — but only after a fix, and not on the
+terms the README claimed. See §7b.
+
+## 7b. Running odd-collector alongside us — what actually happens
+
+The original claimed pushed tests "land on the same catalog objects ODD's own
+collector discovers". That was never exercised. It is now, and the first run
+produced **two of every table**:
+
+```
+//postgresql/host/ldp-pg/databases/erp/.../tables/sales_orders     collector
+//postgresql/host/localhost:5442/databases/erp/.../sales_orders    us
+```
+
+An ODDRN is matched by string. The collector builds the host segment from its
+bare `host:` config; `oddrn-generator` appended the port. Nothing merged, so
+the collector's copy held the real schema and ours held all 23 tests. Fixed by
+minting the host the way the collector does, with `ODD_PG_HOST` to override it
+— which is the normal case, since the collector usually reaches the database
+under a name our DSN does not share. After the fix the tests, the runs and the
+column stats all land on the collector's object: 15 tests on `sales_orders`,
+12 columns carrying stats.
+
+Three further things that only show up with both running:
+
+**Whoever writes last owns the shared fields.** Tags, metadata and the column
+list are replaced wholesale by each push. Our tags vanish on the collector's
+next cycle and its `oid` / `is_insertable_into` metadata vanishes on ours.
+
+**Schema revisions thrash.** ODD versions a dataset whenever its structure
+changes, and the two sources never agree: the contract governs 6 columns of 7,
+the collector reports `int8` where `information_schema` says `bigint`, calls
+every column nullable and finds no primary key. Four revisions appeared in half
+an hour; at a 10-minute pull that is ~144 a day of pure noise. Two *identical*
+pushes create no revision, so the churn is entirely the disagreement.
+
+Matching the column list is not achievable — the type names and the nullability
+come from different places — and ODD **rejects a `TABLE` entity with no
+`dataset` block**, so annotating a dataset someone else owns is not expressible:
+
+```
+USR001 Data entity ... has TABLE type. One or several properties must be filled: [dataset]
+```
+
+Hence `push.py --no-datasets`: when a collector owns the tables, we stop
+declaring them and push only tests, runs and column stats, which address the
+dataset by ODDRN and never needed us to declare it. Verified: three pushes and
+a collector cycle left the revision number unmoved.
+
+**ERD relationships are write-only on 0.29.0.** The contract's `references:` is
+published as a column-level `ERDRelationship` and stored correctly. Reading it
+back is a 500:
+
+```
+IllegalStateException: Duplicate key .../tables/sales_orders/columns/customer_id
+  at ReactiveRelationshipsRepositoryImpl.extractErdDetails:248
+```
+
+`dataset_field` rows are versioned, so one column ODDRN legitimately has
+several rows; `extractErdDetails` collects them with `Collectors.toMap` and no
+merge function. Any table whose structure has ever been versioned trips it.
+Worth reporting upstream.
+
+## 7c. The project itself, as of 2026-09-05
+
+Relevant to adopting it, and not visible from the code we push.
+
+* **`odd-platform` is active** — 1427 stars, commits the same day. Every one of
+  the last 25 is `feat(search)` or `fix(search)`: unified cross-kind search,
+  saved searches, query operators (quoted phrase, `-exclusion`, `or`), a
+  favorites scope, a snapshotted popularity score. Postgres full-text is where
+  the investment is going, and there is still no Elasticsearch in the compose.
+* **`:latest` lags the work.** The image is `0.29.0`, built 2026-06-26. None of
+  the July–September search commits are in it. Run a release behind, or build
+  `main`.
+* **Collectors moved.** `odd-collector` looks abandoned since 2023; the live
+  home is the `odd-collectors` monorepo (SDK + AWS + Azure + GCP), 2026-01.
+* **A collector needs a token.** `POST /ingestion/datasources` is guarded by a
+  filter that is *always* active regardless of `auth.ingestion.filter.enabled`,
+  so odd-collector fails at startup with the same 500 we hit until a collector
+  is created via `POST /api/collectors` and its token put in the config.
+* **The shipped ingestion surface is unauthenticated.** Issue #1740 (closed
+  2026-06) states it plainly: `auth.ingestion.filter.enabled` defaults to
+  false, and even when true only `/ingestion/entities` was covered —
+  `/ingestion/alerts`, `/ingestion/metrics`,
+  `/ingestion/entities/datasets/stats` and `/ingestion/entities/degs/children`
+  had no filter at all. Anyone with network reach could inject alerts or
+  overwrite stats. Close `/ingestion/**` at the network layer.
+* **Maintenance model.** There is an `odd-team` repository describing an "AI
+  maintainer team" coordinating audit and gap-closing across ODD repos, active
+  the same week. The activity is real; the model is unusual enough to know
+  about before depending on it.
 
 ## 8. Glossary, lineage and owners — the parts we did not build
 
@@ -233,13 +352,18 @@ that looks like it works and does not. Closing it means teaching `push.py` a
 second, non-ingestion API, which is a bigger commitment than it sounds: the
 contract would become the source of truth for ODD's ownership graph too.
 
-**Lineage: we send none, and we are sitting on some.** Upstream and downstream
-are both `{"nodes": [], "edges": []}`. Expected — we push no `DataTransformer`,
-no `input_list`/`output_list`. Worth noting though: the contract already
-declares `customer_id references customers.customer_id`, which we compile into
-a `relationship` check and nothing else. ODD would draw that edge if we sent
-it. Not built here, but this is the cheapest lineage anyone will ever get:
-a foreign key the contract already states.
+**Lineage: we send none, and it stays that way.** Upstream and downstream are
+both `{"nodes": [], "edges": []}`. Expected — we push no `DataTransformer`, and
+a contract does not describe a job, which is what `inputs`/`outputs` model.
+Column-level lineage is not in ODD's ingestion model at all (`DataTransformer`
+is dataset-level), and the issues that would add it — #1033 backend, #1067
+frontend — have been open since 2022.
+
+What the contract *does* state is a foreign key, and that is a different ODD
+concept: `ENTITY_RELATIONSHIP` carrying a column-level `ERDRelationship`. We
+publish it now (§7b), so `customer_id references customers.customer_id` is an
+edge in the catalog rather than only a check. Cheapest edge available —
+nothing to discover, the contract says it.
 
 **Glossary: nothing on either side.** `/api/terms` is empty and no term is
 attached to any dataset or column; the Dictionary is a feature we have not
