@@ -30,6 +30,12 @@ still missing after ODD and datacontract-cli have done their part"**.
 | contract format | **ODCS** (Bitol / Linux Foundation) | a vendor-neutral standard beats our YAML |
 | deriving tests from a schema | **datacontract-cli** (MIT) | 15 checks from the same table, no code |
 | dbt / Great Expectations / 24 more exports | **datacontract-cli** | `export dbt-models`, `export great-expectations` |
+| BI impact — "which dashboards break" | **odd-collector** Superset/Metabase/Tableau adapters | dashboards arrive as `DataConsumer(inputs)` pointing at the source table, so a failing check has downstream dashboards. Config, not code |
+
+`docs/stack-choices.md` has the health figures behind each row, and the two
+things to watch: `oddrn-generator` (5★, 2024) and `odd-models` (3★, 2024) are
+our own dependencies and the least maintained part of the stack, and there is
+no maintained Helm chart, so deployment is compose.
 
 ### What is actually still missing
 
@@ -114,6 +120,7 @@ does not enter into it.
 | `integrations/odd/` | mapper, incremental push, column statistics |
 | `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
 | `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |
+| `docs/stack-choices.md` | which projects to depend on, with their health figures |
 
 ## Three things this established
 
