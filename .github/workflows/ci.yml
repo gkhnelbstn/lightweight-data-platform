@@ -98,6 +98,50 @@ jobs:
           assert scored >= 2, f"expected a score per contract per day, got {scored}"
           PY
 
+      - name: a result has to be readable on its own
+        run: |
+          python - <<'PY'
+          from core import store
+          with store.connect() as cx:
+              blank = cx.execute(
+                  "select count(*) from check_results where name = ''"
+              ).fetchone()[0]
+              nosql = cx.execute(
+                  "select count(*) from check_results where sql is null"
+              ).fetchone()[0]
+          # `name` is the rule in words and `sql` is what ran; the UI shows
+          # both, and core/sample.py rewrites the second into the failing rows.
+          assert blank == 0, f"{blank} results with no name"
+          assert nosql == 0, f"{nosql} results with no sql"
+          print("every result carries its name and its statement")
+          PY
+
+      - name: re-running a day replaces it
+        run: |
+          python - <<'PY'
+          import subprocess, sys
+          from datetime import date
+          from core import store
+          # A check that existed in an earlier run and does not exist now. An
+          # upsert leaves it behind for ever, and it keeps showing as an open
+          # failure -- which is exactly how the real one was found.
+          with store.connect() as cx:
+              cx.execute(
+                  """insert into check_results (run_at,check_id,contract_id,
+                       dimension,status,failed_rows,total_rows,fail_ratio,
+                       duration_ms,run_window,name,check_type)
+                     values (%s,'ghost','erp.sales_orders','unknown','fail',
+                             1,1,1,0,'incremental','ghost','sql')""",
+                  (date.today(),))
+          subprocess.run([sys.executable, "core/runner.py"], check=True)
+          with store.connect() as cx:
+              left = cx.execute(
+                  "select count(*) from check_results where check_id = 'ghost'"
+              ).fetchone()[0]
+          assert left == 0, "a vanished check survived a re-run"
+          print("the day is replaced, not merged")
+          PY
+
   images:
     name: build the images
     runs-on: ubuntu-latest

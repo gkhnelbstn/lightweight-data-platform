@@ -58,6 +58,11 @@ schema:
         physicalType: text
         required: true
         unique: true
+        # integrations/odd/classify.py found TCKN and VKN in 100% of this
+        # column and tagged it in ODD. Saying it here too is what stops the
+        # values being shown when someone opens a failing check's sample
+        # rows -- see core/sample.py.
+        classification: pii
       - name: segment
         logicalType: string
         physicalType: text

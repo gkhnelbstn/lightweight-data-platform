@@ -231,6 +231,13 @@ def persist(results: dict, contract: dict, as_of: date,
             "status": {"passed": "pass", "failed": "fail"}.get(
                 check.get("result"), "error"),
             "duration_ms": 0,
+            # Kept so a result can be read on its own. `sql` in particular:
+            # it is what ran, and core/sample.py rewrites it into the rows.
+            "name": check.get("name") or "",
+            "check_type": check.get("type") or "",
+            "field": check.get("field"),
+            "reason": check.get("reason"),
+            "sql": check.get("implementation"),
         })
 
     with store.connect() as dq:

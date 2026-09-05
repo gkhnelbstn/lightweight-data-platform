@@ -39,9 +39,9 @@ no maintained Helm chart, so deployment is compose.
 
 ### What is actually still missing
 
-These four are why this repository exists. Nothing above does them. Together
-they are about 400 lines: `core/runner.py`, `core/store.py`,
-`core/scoring.py`, `integrations/odd/`.
+These five are why this repository exists. Nothing above does them. Together
+they are about 470 lines: `core/runner.py`, `core/store.py`,
+`core/scoring.py`, `core/sample.py`, `integrations/odd/`.
 
 1. **Results as a time series.** `datacontract test` runs and forgets: no
    as-of date, no storage, no trend. Here every run is stored under its date in
@@ -62,11 +62,26 @@ they are about 400 lines: `core/runner.py`, `core/store.py`,
 4. **The push to ODD.** Turning `datacontract test` output into
    `DataQualityTest` / `DataQualityTestRun` on the *table's* ODDRN, so a
    failing check inherits the dashboards downstream of it.
+5. **The failing rows.** "522 orders disagree with their lines" is where an
+   investigation starts and none of them end. Neither tool answers *which*:
+   `datacontract test` reports counts, and ODD's run model has no numeric
+   field at all, let alone a row. `core/sample.py` takes the statement the
+   check actually ran — datacontract hands it back in `implementation` — and
+   rewrites it through sqlglot into the rows it counted: keep the FROM and the
+   WHERE, drop the aggregate, add a limit. Because the rewrite goes through a
+   parse tree rather than string surgery, emitting it back as T-SQL turns the
+   `LIMIT` into a `TOP`, so the same code samples SQL Server.
+
+   It is sampled in the same window the result was measured in, or the count
+   and the rows under it disagree — and columns the contract marks
+   `classification:` are masked, which is what `integrations/odd/classify.py`
+   writes back once it has found them.
 
 Plus the one interface neither has: **an analyst can author a rule.** ODD's UI
 annotates what was ingested — there is no "create test" anywhere in it — and
-datacontract-cli is a CLI. `web/index.html` writes SQL, shows the last 14 days
-it would have failed on, and saves the rule back into the contract file.
+datacontract-cli is a CLI. `web/index.html` writes SQL, compiles it against
+the source without saving, shows what it would have caught, and then saves the
+rule back into the contract file.
 
 ![The contract UI](docs/contract-ui.png)
 
@@ -118,6 +133,7 @@ does not enter into it.
 | `core/runner.py` | build the day's views, run `datacontract test`, persist, score, push |
 | `core/scoring.py` | dimension-weighted score |
 | `core/store.py` | DDL, monthly partitions, writes |
+| `core/sample.py` | rewrite a check's SQL into the rows it counted |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
 | `web/index.html` | single-file UI, no build step |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |

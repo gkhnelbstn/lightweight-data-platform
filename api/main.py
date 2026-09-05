@@ -27,7 +27,8 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel
 
 from core import store
-from core.runner import CONTRACTS, ROOT, load_contracts, run
+from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
+                         TABLE_SCOPED_TYPES, load_contracts, run)
 from core.scoring import DIMENSION_WEIGHT
 
 app = FastAPI(title="Contract-driven data quality on ODD")
@@ -113,7 +114,7 @@ def overview() -> dict:
 
     failures = q("""
         select r.check_id, r.contract_id, r.dimension, r.failed_rows,
-               r.total_rows, r.run_at
+               r.total_rows, r.run_at, r.name, r.check_type, r.field, r.reason
         from check_results r
         join (select contract_id, max(run_at) as run_at from check_results
               where run_window = 'incremental' group by contract_id) last
@@ -133,7 +134,8 @@ def contract_detail(contract_id: str) -> dict:
 
     checks = q("""
         select distinct on (check_id) check_id, dimension, status,
-               failed_rows, total_rows, run_at
+               failed_rows, total_rows, run_at, name, check_type, field,
+               reason, sql
         from check_results
         where contract_id = %s and run_window = 'incremental'
         order by check_id, run_at desc""", (contract_id,))
@@ -156,6 +158,105 @@ def check_history(check_id: str) -> list[dict]:
                 from check_results
                 where check_id = %s and run_window = 'incremental'
                 order by run_at""", (check_id,))
+
+
+def _source_conn(server: dict):
+    """A connection to the source, as the role datacontract itself uses.
+
+    Not ERP_DSN: that is the owner, and this runs a rewritten version of a
+    rule someone wrote in the UI. `dq_reader` can only SELECT and gives up
+    after 60 seconds -- see deploy/db-init.sql.
+    """
+    kind = server.get("type")
+    if kind in ("postgres", "postgresql"):
+        return psycopg.connect(
+            host=server["host"], port=server.get("port", 5432),
+            dbname=server["database"],
+            # The statement is unqualified -- `from sales_orders` -- exactly as
+            # datacontract compiled it, so the schema has to arrive the same
+            # way datacontract supplies it: on the connection.
+            options=f"-csearch_path={server.get('schema', 'public')}",
+            user=os.getenv("DATACONTRACT_POSTGRES_USERNAME", "postgres"),
+            password=os.getenv("DATACONTRACT_POSTGRES_PASSWORD", ""))
+    if kind in ("sqlserver", "mssql"):
+        import pyodbc
+        driver = os.getenv("DATACONTRACT_SQLSERVER_DRIVER",
+                           "ODBC Driver 18 for SQL Server")
+        return pyodbc.connect(
+            f"DRIVER={{{driver}}};SERVER={server['host']},"
+            f"{server.get('port', 1433)};DATABASE={server['database']};"
+            f"UID={os.getenv('DATACONTRACT_SQLSERVER_USERNAME', 'sa')};"
+            f"PWD={os.getenv('DATACONTRACT_SQLSERVER_PASSWORD', '')};"
+            "TrustServerCertificate=yes;Encrypt=no", timeout=30)
+    raise HTTPException(400, f"no sampler wired up for a {kind} server")
+
+
+@app.get("/api/checks/{check_id}/sample")
+def check_sample(check_id: str) -> dict:
+    """The rows behind a failed check.
+
+    "150 orders disagree with their lines" is where every investigation
+    starts and none of them end. This is the same statement the check ran,
+    rewritten to return what it counted -- see core/sample.py.
+
+    Columns the contract classifies are masked. The classification is the
+    contract's, so marking a column in the .yaml is enough to keep it out of
+    here and out of anything else that reads the contract.
+    """
+    from core import sample
+
+    rows = q("""select check_id, contract_id, check_type, field, sql, name,
+                       reason, failed_rows, run_window, run_at
+                from check_results where check_id = %s
+                order by run_at desc limit 1""", (check_id,))
+    if not rows:
+        raise HTTPException(404, f"no result stored for {check_id}")
+    check = rows[0]
+
+    doc = yaml.safe_load(
+        _contract_file(check["contract_id"]).read_text(encoding="utf-8"))
+    # The rows have to come from the same window the result did, or the count
+    # in the UI and the rows under it disagree. An incremental result was
+    # measured against the day's views -- except for the table-level
+    # invariants, which core/runner.py deliberately re-runs unwindowed.
+    windowed = (check["run_window"] == "incremental"
+                and check["check_type"] not in TABLE_SCOPED_TYPES)
+    server = next((s for s in doc.get("servers", [])
+                   if s.get("server") == (DAILY_SERVER if windowed else "erp")),
+                  None) or doc["servers"][0]
+    key = check_id[len(check["contract_id"]) + 1:]
+    model = next((m for m in doc.get("schema", [])
+                  if key.startswith(m["name"])), doc["schema"][0])
+    table = model.get("physicalName") or model["name"]
+    if server.get("schema") and server.get("type") in ("sqlserver", "mssql"):
+        table = f"{server['schema']}.{table}"
+
+    statement = sample.rows_query(check, table, server.get("type"))
+    if statement is None:
+        return {"check_id": check_id, "name": check["name"], "sql": check["sql"],
+                "reason": check["reason"], "failed_rows": check["failed_rows"],
+                "run_at": str(check["run_at"]), "scope": server["server"],
+                "rows": [], "columns": [], "masked": [],
+                "note": "Bu kontrolun gosterilecek satiri yok: butun tabloyu "
+                        "toplayan bir kural (ornegin tazelik), hatanin kendisi "
+                        "satirin yoklugu."}
+
+    hidden = sample.classified(doc)
+    with _source_conn(server) as cx:
+        cur = cx.execute(statement)
+        columns = [d[0] for d in cur.description]
+        data = [[sample.MASK if c in hidden else _plain(v)
+                 for c, v in zip(columns, row)] for row in cur.fetchall()]
+    return {"check_id": check_id, "name": check["name"],
+            "reason": check["reason"], "failed_rows": check["failed_rows"],
+            "run_at": str(check["run_at"]), "scope": server["server"],
+            "sql": statement, "columns": columns, "rows": data,
+            "masked": sorted(hidden & set(columns))}
+
+
+def _plain(v):
+    """psycopg hands back dates and Decimals; the browser wants strings."""
+    return v if v is None or isinstance(v, (int, float, str, bool)) else str(v)
 
 
 class RuleDraft(BaseModel):

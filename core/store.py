@@ -26,8 +26,24 @@ create table if not exists check_results (
   fail_ratio numeric not null,
   duration_ms integer not null,
   run_window text not null default 'incremental',
+  -- What a person needs to read the row without opening the contract: the
+  -- rule in words, what kind of check it was, and the sentence datacontract
+  -- wrote about why it failed. `sql` is the statement that actually ran,
+  -- which is also what core/sample.py rewrites to show the failing rows.
+  name text not null default '',
+  check_type text not null default '',
+  field text,
+  reason text,
+  sql text,
   primary key (run_at, check_id, run_window)
 ) partition by range (run_at);
+
+-- Installs that predate the columns above.
+alter table check_results add column if not exists name text not null default '';
+alter table check_results add column if not exists check_type text not null default '';
+alter table check_results add column if not exists field text;
+alter table check_results add column if not exists reason text;
+alter table check_results add column if not exists sql text;
 
 create index if not exists check_results_brin on check_results using brin (run_at);
 
@@ -73,19 +89,38 @@ def init(conn: psycopg.Connection) -> None:
 
 def write_results(conn, run_at: date, contract_id: str, rows: list[dict],
                   window: str = "incremental") -> None:
-    """One run's checks. Re-running a day replaces it rather than appending."""
+    """One run's checks. Re-running a day replaces it rather than appending.
+
+    Replaces, not merges: a check that existed in an earlier run of the same
+    day and does not exist now is deleted. Without this an errored check --
+    `missing_env_DATACONTRACT_SQLSERVER_USERNAME`, from a run before the
+    credentials were set -- survives every later run of that day and keeps
+    showing as an open failure, because an upsert never removes anything. The
+    same reasoning as the `results outlive checks` note in CLAUDE.md, one
+    level down: within a day, this run is the truth.
+    """
+    conn.execute(
+        """delete from check_results
+           where run_at = %s and contract_id = %s and run_window = %s
+             and check_id <> all(%s)""",
+        (run_at, contract_id, window, [r["check_id"] for r in rows] or [""]))
     for r in rows:
         conn.execute(
             """insert into check_results (run_at,check_id,contract_id,dimension,status,
-                   failed_rows,total_rows,fail_ratio,duration_ms,run_window)
-               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   failed_rows,total_rows,fail_ratio,duration_ms,run_window,
+                   name,check_type,field,reason,sql)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                on conflict (run_at,check_id,run_window) do update set
                  status=excluded.status, failed_rows=excluded.failed_rows,
                  total_rows=excluded.total_rows, fail_ratio=excluded.fail_ratio,
-                 dimension=excluded.dimension, duration_ms=excluded.duration_ms""",
+                 dimension=excluded.dimension, duration_ms=excluded.duration_ms,
+                 name=excluded.name, check_type=excluded.check_type,
+                 field=excluded.field, reason=excluded.reason, sql=excluded.sql""",
             (run_at, r["check_id"], contract_id, r["dimension"], r["status"],
              r["failed_rows"], r["total_rows"], r["fail_ratio"],
-             r.get("duration_ms", 0), window))
+             r.get("duration_ms", 0), window,
+             r.get("name", ""), r.get("check_type", ""), r.get("field"),
+             r.get("reason"), r.get("sql")))
 
 
 def write_score(conn, run_at: date, contract_id: str, score: float,
