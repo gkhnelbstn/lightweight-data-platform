@@ -2,8 +2,12 @@
 
 Contract-driven data quality on top of **OpenDataDiscovery**. The catalog,
 search, glossary, alerting and schema discovery are ODD's. The contracts, the
-daily run, the score and the trend are here. Two contracts, 23 derived checks,
+daily run, the score and the trend are here. Ten contracts, 228 checks a day,
 45 days of history, PostgreSQL.
+
+**New here?** [`docs/architecture.md`](docs/architecture.md) is how it works,
+in diagrams. [`docs/tutorial.md`](docs/tutorial.md) is eight lessons that each
+end in something you can see.
 
 ```
 contract.yaml ──> derived checks ──> daily run (as-of date) ──> time series ──> score / SLA
@@ -306,7 +310,9 @@ it, because cancelling an order changed its key.
 
 ## Quick start
 
-Everything is one compose file.
+`compose.yaml` is the platform. `compose.demo.yaml` is the sources the demo
+runs against, kept separate so that what this project *is* cannot be misread as
+requiring a SQL Server and a BI tool.
 
 ```bash
 docker compose up -d db odd-db odd-platform     # wait for ODD to come up
@@ -322,15 +328,21 @@ docker compose exec app python core/runner.py --backfill-days 44 \
 * ODD — http://localhost:8080
 
 That is the Postgres half. The second source, the replication and the chain
-that ends at a dashboard are behind one profile:
+that ends at a dashboard are in the second file:
 
 ```bash
-docker compose --profile demo up -d              # SQL Server, MongoDB, Superset
+docker compose -f compose.yaml -f compose.demo.yaml --profile demo up -d
 ./deploy/odd-bootstrap.sh --demo                 # add them to the collector
 # note the inner quoting: the password lives in the container's environment,
 # so it has to be expanded there rather than by your shell
 docker compose exec -T mssql sh -c '/opt/mssql-tools18/bin/sqlcmd     -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -i /demo/mssql-seed.sql'
 docker compose exec app python demo/mongo-seed.py            # FX rates from a public API
+
+# the warehouse a scheduler would build, the dashboards on top of it, and the
+# lineage that joins them -- the chain that answers "which dashboards break"
+docker compose exec app python demo/medallion.py
+docker compose exec app python demo/superset-assets.py
+docker compose exec app python integrations/odd/lineage.py --url http://odd-platform:8080
 
 # change data capture, and the sync rules the contracts carry
 # turns CDC on, and creates the least-privilege login the collector uses --
@@ -389,7 +401,12 @@ does not enter into it.
 | `deploy/Dockerfile.odd-collector` | odd-collector plus two fixes to its Superset adapter |
 | `deploy/Dockerfile.odd-platform` | ODD with the contract panel on its Data Quality page |
 | `deploy/odd-platform-ui/` | that panel — React, in ODD's own design system |
-| `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
+| `compose.yaml` | the platform: ODD, a collector, the two databases, the app |
+| `compose.demo.yaml` | the sources the demo needs: SQL Server, MongoDB, Superset |
+| `demo/` | the seed, the medallion warehouse and the Superset assets |
+| `Dockerfile`, `deploy/` | the images and the runbook |
+| `docs/architecture.md` | how it works, in diagrams — start here |
+| `docs/tutorial.md` | eight lessons, each ending in something you can see |
 | `docs/adr/` | why each of these decisions exists, and what would retire it |
 | `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |
 | `docs/stack-choices.md` | which projects to depend on, with their health figures |
@@ -443,9 +460,9 @@ not: it returns 201 and stores nothing, and its epic has been open since 2022.
 
 Early. A working vertical slice, not a product.
 
-* **No CDC.** `loaded_at` is a watermark: it sees inserts. A row corrected in
-  place keeps its original watermark, and a deleted row leaves nothing behind.
-  A contract whose table is updated in place can widen its own window —
+* **The window still sees inserts, not corrections.** `loaded_at` is a
+  watermark: a row corrected in place keeps its original one. A contract whose
+  table is updated in place widens its own window —
 
   ```yaml
   customProperties:
@@ -453,11 +470,15 @@ Early. A working vertical slice, not a product.
       value: "{col} = {day} or updated_at::date = {day}"
   ```
 
-  — and a source with real CDC points its contract at the change table and
-  windows on the change timestamp. SQL Server has that built in
-  (`sys.sp_cdc_enable_table`) and it needs no new infrastructure. Deletes on a
-  source with neither are genuinely invisible, and no amount of contract says
-  otherwise.
+  — and a source with neither a watermark nor CDC has genuinely invisible
+  deletes, which no amount of contract fixes. (Replication is a different
+  question and does use CDC; see below.)
+* **Bi-directional replication has no conflict resolution.** Subscriptions are
+  created with `origin = none` (PG16), so a two-way pair does not loop — that
+  much is verified. Two writers touching the same row is last-writer-wins, and
+  a real conflict stops the apply worker silently. It is a documented
+  capability, not a supported mode:
+  [#6](https://github.com/gkhnelbstn/lightweight-data-platform/issues/6).
 * **Custom SQL is executed as written.** The checks connect as `dq_reader` --
   `SELECT` only, `default_transaction_read_only`, a 60s `statement_timeout` --
   so a rule cannot write or hang. That is a smaller blast radius, not a
@@ -466,8 +487,9 @@ Early. A working vertical slice, not a product.
   `/api/rules/preview` compile and run a person's SQL, so they require
   `DQ_API_TOKEN` and refuse when it is unset. Reads are open, and ODD's
   `/ingestion/**` is open by its own design (issue #1740). Private network.
-* **No column-level lineage.** ODD's ingestion model has none — `DataTransformer`
-  is dataset-level — and the issues that would add it have been open since 2022.
+* **No column-level lineage**
+  ([#4](https://github.com/gkhnelbstn/lightweight-data-platform/issues/4)).
+  ODD's ingestion model has none — `DataTransformer` is dataset-level — and the issues that would add it have been open since 2022.
   Table-level lineage works, including the BI chain, and the contract's foreign
   keys are published as column-level ERD relationships, but that is a different
   thing from "which column feeds which".
@@ -481,6 +503,13 @@ Early. A working vertical slice, not a product.
 
 ### Closed, and how
 
+* **Keeping a second database in step.** The contract carries the rule
+  (`syncTo`: target, row filter, replica identity, column list) and each engine
+  applies it with its own mechanism — a Postgres publication and subscription,
+  or SQL Server's CDC change table read forward from a stored LSN. Nothing of
+  ours sits in the stream. The four Postgres preconditions are checked before
+  anything is created, because logical replication fails *after* the initial
+  copy in a worker that only writes to the server log.
 * **`unique` scoped to a single day** meant a duplicate arriving later than its
   original was never seen -- the check passed for 45 days on a table holding 8
   duplicate primary keys. Table-level invariants now re-run against the real
@@ -512,6 +541,7 @@ Early. A working vertical slice, not a product.
 | `datacontract test --filter` unusable on postgres because of the above | [datacontract-cli#1592](https://github.com/datacontract/datacontract-cli/issues/1592) |
 | a row filter is all-or-nothing; uniqueness needs to opt out | [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593) |
 | odd-collector's Superset adapter: int ids, and lineage only for postgresql/sqlite | [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135) |
+| metric ingestion is write-once per family: the second write is an NPE | [odd-platform#1882](https://github.com/opendatadiscovery/odd-platform/issues/1882) |
 
 ## Where this goes next
 
@@ -520,7 +550,9 @@ version of this list said "adopt ODCS and let `datacontract test` derive the
 checks" and "add authentication"; both are done, and what is left is smaller
 and mostly other people's to merge.
 
-1. **Column-level lineage.** The one thing here with no answer, and checked
+1. **Column-level lineage**
+   ([#4](https://github.com/gkhnelbstn/lightweight-data-platform/issues/4)).
+   The one thing here with no answer, and checked
    against 0.29.0 rather than assumed: `DataTransformer` carries lists of
    dataset ODDRNs, and a lineage edge is `{source_id, target_id}`. There is no
    field for a column in either, so this is not something we can add by
@@ -528,18 +560,29 @@ and mostly other people's to merge.
    it and requires Elasticsearch or OpenSearch, which is a cost we have
    already declined. The rule for revisiting is that requirement disappearing,
    not the feature looking attractive.
-2. **Delete `deploy/Dockerfile.odd-collector`** when
+2. **Delete `deploy/Dockerfile.odd-collector`**
+   ([#1](https://github.com/gkhnelbstn/lightweight-data-platform/issues/1)) when
    [odd-collectors#136](https://github.com/opendatadiscovery/odd-collectors/pull/136)
    merges. Carrying a patch is a debt, and the point of sending it upstream is
    to stop paying it.
-3. **Move the window into the contract proper** if
+3. **Move the window into the contract proper**
+   ([#2](https://github.com/gkhnelbstn/lightweight-data-platform/issues/2)) if
    [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593)
    lands — per-rule scoping would retire `TABLE_SCOPED_TYPES` and the second
    unwindowed pass with it.
-4. **Offer the Turkish identifiers to Presidio**, once they have run against
-   real data long enough to be worth someone else's maintenance.
+4. **Offer the Turkish identifiers to Presidio**
+   ([#5](https://github.com/gkhnelbstn/lightweight-data-platform/issues/5)),
+   once they have run against real data long enough to be worth someone else's
+   maintenance.
 5. **Backfill the SQL Server history** before 2026-08-16, which is still
    recorded as errored from the period when that source did not exist.
+6. **Publish the score as an ODD metric**
+   ([#3](https://github.com/gkhnelbstn/lightweight-data-platform/issues/3))
+   once its metrics API accepts a second write to the same family
+   ([odd-platform#1882](https://github.com/opendatadiscovery/odd-platform/issues/1882)).
+
+Every one of these is an open issue, and each says what "done" means and what
+to delete when it is.
 
 ## License
 

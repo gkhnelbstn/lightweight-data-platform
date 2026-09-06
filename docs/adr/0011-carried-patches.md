@@ -46,9 +46,11 @@ being sysadmin, which it should never have been.
   differently, which is exactly the arrangement ODDRNs encourage. Reproduced
   deterministically: one `dataset_field` row → 200, two from disagreeing
   writers → 500.
-* **ODD metrics ingestion is write-once per family.** The second write is an
-  NPE. Not yet filed; the reproduction is in
-  `integrations/odd/entity_page.py` and is three lines.
+* [odd-platform#1882](https://github.com/opendatadiscovery/odd-platform/issues/1882)
+  — metric ingestion is write-once per family: the second write of the same
+  family, byte-identical, is a 500 (`MetricFamilyPojo.getId()` on null). Filed
+  with a narrowed three-line reproduction; the original is in
+  `integrations/odd/entity_page.py`.
 * [ibis#12108](https://github.com/ibis-project/ibis/issues/12108) — sqlglot 30
   renamed `Drop.this` to `Drop.tables` and ignores unknown kwargs, which breaks
   five ibis backends.

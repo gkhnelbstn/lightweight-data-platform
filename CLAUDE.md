@@ -11,6 +11,10 @@ our code is the best outcome available.
 
 ## Commands
 
+`compose.yaml` is the platform; `compose.demo.yaml` is the sources the demo
+needs. Anything touching SQL Server, MongoDB or Superset wants both:
+`docker compose -f compose.yaml -f compose.demo.yaml --profile demo up -d`.
+
 ```bash
 pip install -e ".[dev]"
 pytest -q                                                  # 171 tests, no database needed
@@ -147,6 +151,10 @@ there. What may need changing here is `core/scoring.py` (a dimension it does
 not weight), `integrations/odd/from_datacontract.py` (the ODD expectation
 category) and `core/sample.py` (how to show the rows it failed on). Add the
 case to `tests/test_sample.py`.
+
+**A database a script needs:** `core/bootstrap_db.py`, never
+`deploy/db-init.sql` — that runs once, on an empty volume, and only knows the
+platform's two databases. See ADR 0015.
 
 **A new contract:** drop a `*.odcs.yaml` in `contracts/`. `load_contracts()`
 picks it up; no code change. A Postgres source needs an `erp_daily` server

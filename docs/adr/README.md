@@ -22,6 +22,10 @@ Numbers are the order they were written, not the order they were decided or
 their importance. **[0012](0012-odd-not-openmetadata.md) is the one everything
 else rests on** — it is last because it was written last.
 
+**[0015](0015-the-boundary-what-is-ours.md) is the one to read first on an
+upgrade** — it is the whole register of additions in one table, each with the
+upstream feature that would let it be deleted.
+
 | # | Decision | Retire when |
 |---|---|---|
 | [0012](0012-odd-not-openmetadata.md) | ODD Platform, because it needs no Elasticsearch | OpenMetadata drops the search-engine requirement |
@@ -38,3 +42,4 @@ else rests on** — it is last because it was written last.
 | [0011](0011-carried-patches.md) | Patches we carry for upstream projects | each PR merges |
 | [0013](0013-fill-the-catalogue-from-the-contract.md) | The catalogue is filled from the contract | ODD imports ODCS directly |
 | [0014](0014-declared-lineage.md) | Lineage is declared, because nothing can infer it | the loads move to dbt, whose adapter reads the real project |
+| [0015](0015-the-boundary-what-is-ours.md) | The register of what is ours, and the file layout that follows it | every row above it is retired |
