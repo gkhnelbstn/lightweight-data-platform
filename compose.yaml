@@ -126,6 +126,9 @@ services:
       DQ_DSN: postgresql://postgres:postgres@db:5432/dq
       ODD_PG_HOST: db
       DQ_HOST: dq.local
+      # The address ODD's links point at. Followed from a person's browser,
+      # not from inside this network, so it is not `http://app:8077`.
+      DQ_UI_URL: ${DQ_UI_URL:-http://localhost:8077}
       # Rule authoring compiles and runs a person's SQL. Set a token or the
       # write routes refuse; generate one with `openssl rand -hex 32`.
       DQ_API_TOKEN: ${DQ_API_TOKEN:-}

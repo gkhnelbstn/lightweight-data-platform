@@ -183,10 +183,16 @@ async function load(){
   const keep = STATE.contract && STATE.contract.contract && STATE.contract.contract.id;
   if(worst) await detail(keep || worst.id);
 
-  // #check=<id> opens that check straight away, so a failing check is a link
-  // someone can paste into a ticket rather than a set of directions.
-  const want = decodeURIComponent((location.hash.match(/^#check=(.+)$/)||[])[1]||'');
-  if(want) await toggleSample('f', want);
+  // Deep links, because ODD points at these from a table's own page: #check=
+  // opens a failing check's rows, #contract= opens one contract, #sync scrolls
+  // to the replication rules. A failing check is then a link someone can paste
+  // into a ticket rather than a set of directions.
+  const hash = location.hash;
+  const check = decodeURIComponent((hash.match(/^#check=(.+)$/)||[])[1]||'');
+  if(check) await toggleSample('f', check);
+  const which = decodeURIComponent((hash.match(/^#contract=(.+)$/)||[])[1]||'');
+  if(which){ await detail(which); $('#detail').scrollIntoView({block:'start'}); }
+  if(hash === '#sync') $('#sync').scrollIntoView({block:'start'});
 }
 
 // The same check is listed in both tables, so the drawer's id carries which

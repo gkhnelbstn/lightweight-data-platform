@@ -64,6 +64,17 @@ create table if not exists sync_watermarks (
   updated_at timestamptz not null default now()
 );
 
+-- Which ODD link belongs to which contract. ODD appends links rather than
+-- replacing them and offers no way to read an entity's links back, so the ids
+-- it hands out on creation are ours to remember or the nightly run leaves a
+-- growing pile of identical attachments.
+create table if not exists odd_links (
+  contract_id text not null,
+  name text not null,
+  link_id integer not null,
+  primary key (contract_id, name)
+);
+
 create table if not exists contract_scores (
   run_at date not null,
   contract_id text not null,

@@ -82,7 +82,15 @@ they are about 470 lines: `core/runner.py`, `core/store.py`,
    SQL and standard ODCS, with nothing to patch.
 4. **The push to ODD.** Turning `datacontract test` output into
    `DataQualityTest` / `DataQualityTestRun` on the *table's* ODDRN, so a
-   failing check inherits the dashboards downstream of it.
+   failing check inherits the dashboards downstream of it — and putting a way
+   back to these pages on that same entity, as ODD's own *Attachments*. This
+   is a plugin for a catalog, not a second catalog, and it should not have to
+   be found by knowing a port number.
+
+   The score belongs there too and cannot go: ODD's metrics API takes a family
+   once and answers the second write with a `NullPointerException`, so a daily
+   value is impossible. Measured rather than read; `integrations/odd/entity_page.py`
+   records what a fix would need to know.
 5. **The failing rows.** "522 orders disagree with their lines" is where an
    investigation starts and none of them end. Neither tool answers *which*:
    `datacontract test` reports counts, and ODD's run model has no numeric
@@ -105,6 +113,11 @@ the source without saving, shows what it would have caught, and then saves the
 rule back into the contract file.
 
 ![The contract UI](docs/contract-ui.png)
+
+Reached from ODD, not from a port number — the table's own page carries the way
+in, as ODD's own *Attachments* card:
+
+![Our pages on ODD's entity page](docs/odd-entity-links.png)
 
 ### Keeping a second database in step
 
@@ -276,6 +289,7 @@ does not enter into it.
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
 | `web/index.html` | single-file UI, no build step |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
+| `integrations/odd/entity_page.py` | the links ODD shows on the table's own page |
 | `deploy/Dockerfile.odd-collector` | odd-collector plus two fixes to its Superset adapter |
 | `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
 | `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |

@@ -7,7 +7,7 @@ the operating manual.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 74 tests, no database needed
+pytest -q                                                  # 78 tests, no database needed
 python seed/seed.py                                        # rebuild the demo ERP data
 python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
@@ -85,6 +85,14 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 * SQL Server CDC is a *SQL Server Agent* feature. `sp_cdc_enable_table`
   succeeds with the Agent stopped and then nothing ever lands in the change
   table; `MSSQL_AGENT_ENABLED` in compose.yaml is why the demo works.
+* ODD's metrics API is write-once per family: the second push of the same
+  family, byte-identical, is a 500 (`MetricFamilyPojo.getId()` on null). Its
+  published OpenAPI also disagrees with its own models — `metric_points` is a
+  list, `timestamp` is epoch seconds — and the Overview card truncates values
+  to integers. Do not try to publish the score there until that is fixed.
+* Entity links are the one native place our pages belong. `POST` appends and
+  there is no way to read an entity's links back, so `odd_links` remembers the
+  ids and later runs `PUT`.
 * A publication's column list is a privacy boundary, not an optimisation: a
   column outside it never reaches the replica. Keep classified columns out.
 * `fn_cdc_get_all_changes(..., 'all')` returns operations 1, 2 and 4 — no

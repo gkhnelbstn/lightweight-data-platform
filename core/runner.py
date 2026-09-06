@@ -385,11 +385,20 @@ def push_to_odd(contract: dict, results: dict, url: str) -> int:
                                                     ensure_datasource, post)
     from integrations.odd.mapper import entity_list
 
+    from integrations.odd.entity_page import sync_links
+
     ds = dataset_oddrn(contract, "erp")
     body = entity_list(build(contract, results, ds), HOST).model_dump(
         mode="json", exclude_none=True)
     ensure_datasource(url)
     post(url, body)
+    # The way back to the pages ODD has no model for, on the table's own page
+    # rather than on another port. Not worth failing the run over: the results
+    # are already stored and already in ODD.
+    try:
+        sync_links(url, contract, ds)
+    except Exception as e:
+        print(f"WARN {contract['id']}: links not updated ({e})", flush=True)
     return len(body["items"])
 
 
@@ -436,9 +445,9 @@ def run(as_of: date, contracts: list[dict] | None = None,
                                                                windowed=False))
         counts = table_rows(c, DAILY_SERVER if windowed else "erp")
         rows = persist(results, c, as_of, window, counts)
+        s = score(rows)
         if odd_url:
             push_to_odd(c, results, odd_url)
-        s = score(rows)
         out.append({"contract": c.get("id"), "as_of": str(as_of), "score": s,
                     "failed": sum(1 for r in rows if r["status"] == "fail"),
                     "errored": sum(1 for r in rows if r["status"] == "error"),

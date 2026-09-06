@@ -37,6 +37,7 @@ import yaml
 
 from core import store
 from core.runner import CONTRACTS, load_contracts
+from integrations.odd.entity_page import entity_id
 from integrations.odd.from_datacontract import dataset_oddrn
 
 # What we look for. Everything else Presidio can find is either free-text
@@ -151,28 +152,6 @@ def classify_column(analyzer, values: list[str]) -> tuple[list[str], float]:
             covered)
 
 
-def entity_id(url: str, oddrn: str) -> int | None:
-    """ODD's numeric id for an ODDRN.
-
-    There is no lookup-by-ODDRN in the API, so this goes through search: query
-    for the table name, then match the ODDRN exactly. Matching on the name
-    alone would be wrong -- `customers` is also the name of several checks.
-    """
-    base = url.rstrip("/")
-    name = oddrn.rsplit("/", 1)[-1]
-    search_id = _post(f"{base}/api/search", {"query": name, "filters": {}})["search_id"]
-    page = 1
-    while True:
-        results = _get(f"{base}/api/search/{search_id}/results?page={page}&size=50")
-        items = results.get("items", [])
-        for item in items:
-            if item.get("oddrn") == oddrn:
-                return item["id"]
-        if not (results.get("page_info") or {}).get("has_next"):
-            return None
-        page += 1
-
-
 def field_ids(url: str, dataset_oddrn_: str) -> dict[str, int]:
     """`{column oddrn: dataset_field id}` for one dataset."""
     eid = entity_id(url, dataset_oddrn_)
@@ -180,19 +159,6 @@ def field_ids(url: str, dataset_oddrn_: str) -> dict[str, int]:
         return {}
     structure = _get(f"{url.rstrip('/')}/api/datasets/{eid}/structure")
     return {f["oddrn"]: f["id"] for f in structure.get("field_list", [])}
-
-
-def _get(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=30) as r:
-        return json.loads(r.read() or b"{}")
-
-
-def _post(url: str, body: dict) -> dict:
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 method="POST",
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read() or b"{}")
 
 
 def tag_field(url: str, field_id: int, tags: list[str]) -> int:
