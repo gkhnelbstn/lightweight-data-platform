@@ -38,6 +38,15 @@ DEFAULT_WEIGHT = 3
 
 
 def score(results: list[dict]) -> float:
+    """The score of what was actually measured.
+
+    Checks that errored are excluded rather than counted as failures. An
+    unreachable source used to score near zero, which reads as "the data is
+    terrible" when the truth is "we could not look" -- and the two want
+    different people. Availability is not silently forgiven either: the caller
+    counts the errors and breaks the SLA on them, see core/runner.py.
+    """
+    results = [r for r in results if r["status"] != "error"]
     if not results:
         return 1.0
     inc_num = vol_num = den = 0.0

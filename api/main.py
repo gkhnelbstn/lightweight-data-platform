@@ -102,7 +102,7 @@ def overview() -> dict:
     latest = {r["contract_id"]: r for r in q("""
         select distinct on (contract_id)
                contract_id, score, checks_total, checks_failed, sla_met,
-               sla_min, run_at
+               sla_min, run_at, checks_errored
         from contract_scores where run_window = 'incremental'
         order by contract_id, run_at desc""")}
 

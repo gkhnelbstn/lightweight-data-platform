@@ -73,8 +73,14 @@ create table if not exists contract_scores (
   sla_min numeric not null,
   sla_met boolean not null,
   run_window text not null default 'incremental',
+  -- Checks that could not run. Kept apart from checks_failed because they say
+  -- something different: the first is bad data, the second is a broken
+  -- connection, a missing table or a rule that will not compile.
+  checks_errored int not null default 0,
   primary key (run_at, contract_id, run_window)
 );
+
+alter table contract_scores add column if not exists checks_errored int not null default 0;
 """
 
 
@@ -134,14 +140,19 @@ def write_results(conn, run_at: date, contract_id: str, rows: list[dict],
 
 def write_score(conn, run_at: date, contract_id: str, score: float,
                 total: int, failed: int, sla_min: float,
-                window: str = "incremental") -> None:
+                window: str = "incremental", errored: int = 0) -> None:
+    """A run meets its SLA only if it also managed to run.
+
+    The score deliberately ignores checks that errored -- see core/scoring.py
+    -- so without this an unreachable source would score 1.0 and pass.
+    """
     conn.execute(
         """insert into contract_scores (run_at,contract_id,score,checks_total,
-               checks_failed,sla_min,sla_met,run_window)
-           values (%s,%s,%s,%s,%s,%s,%s,%s)
+               checks_failed,sla_min,sla_met,run_window,checks_errored)
+           values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
            on conflict (run_at,contract_id,run_window) do update set
              score=excluded.score, checks_total=excluded.checks_total,
              checks_failed=excluded.checks_failed, sla_min=excluded.sla_min,
-             sla_met=excluded.sla_met""",
+             sla_met=excluded.sla_met, checks_errored=excluded.checks_errored""",
         (run_at, contract_id, score, total, failed, sla_min,
-         score >= float(sla_min), window))
+         score >= float(sla_min) and errored == 0, window, errored))

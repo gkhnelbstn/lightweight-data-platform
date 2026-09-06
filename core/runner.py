@@ -227,9 +227,14 @@ def persist(results: dict, contract: dict, as_of: date,
             "dimension": check.get("dimension") or "unknown",
             "failed_rows": int(failed), "total_rows": int(total),
             "fail_ratio": round(int(failed) / total, 6) if total else 0.0,
-            # a check that errored is an engineering problem, not a data one
-            "status": {"passed": "pass", "failed": "fail"}.get(
-                check.get("result"), "error"),
+            # A check that errored is an engineering problem, not a data one.
+            # `general` is datacontract's run-level rollup rather than a check:
+            # when the source cannot be reached it is the *only* thing returned,
+            # with result "failed" and an ODBC error for a reason. Storing that
+            # as a data failure is how an outage came to look like bad data.
+            "status": ("error" if check.get("type") == "general" else
+                       {"passed": "pass", "failed": "fail"}.get(
+                           check.get("result"), "error")),
             "duration_ms": 0,
             # Kept so a result can be read on its own. `sql` in particular:
             # it is what ran, and core/sample.py rewrites it into the rows.
@@ -245,9 +250,10 @@ def persist(results: dict, contract: dict, as_of: date,
         store.ensure_partition(dq, as_of)
         store.write_results(dq, as_of, contract_id, rows, window)
         s = score(rows)
-        failed_n = sum(1 for r in rows if r["status"] != "pass")
+        failed_n = sum(1 for r in rows if r["status"] == "fail")
+        errored_n = sum(1 for r in rows if r["status"] == "error")
         store.write_score(dq, as_of, contract_id, s, len(rows), failed_n,
-                          _min_score(contract), window)
+                          _min_score(contract), window, errored_n)
     return rows
 
 
@@ -306,7 +312,8 @@ def run(as_of: date, contracts: list[dict] | None = None,
             push_to_odd(c, results, odd_url)
         s = score(rows)
         out.append({"contract": c.get("id"), "as_of": str(as_of), "score": s,
-                    "failed": sum(1 for r in rows if r["status"] != "pass"),
+                    "failed": sum(1 for r in rows if r["status"] == "fail"),
+                    "errored": sum(1 for r in rows if r["status"] == "error"),
                     "total": len(rows)})
     return out
 
@@ -330,9 +337,14 @@ def main() -> None:
     for i in range(a.backfill_days, -1, -1):
         day = end - timedelta(days=i)
         for r in run(day, contracts, a.window, odd_url=a.odd_url):
-            flag = "OK " if r["failed"] == 0 else "FAIL"
-            print(f"{flag} {r['as_of']} {r['contract']:<20} "
-                  f"score={r['score']:.4f} failed={r['failed']}/{r['total']}")
+            # An errored run is neither OK nor a quality failure: nothing was
+            # measured, so the score says nothing and the flag should not
+            # pretend otherwise.
+            flag = ("ERR" if r["errored"] else
+                    "OK" if r["failed"] == 0 else "FAIL")
+            note = f" errored={r['errored']}" if r["errored"] else ""
+            print(f"{flag:<4} {r['as_of']} {r['contract']:<20} "
+                  f"score={r['score']:.4f} failed={r['failed']}/{r['total']}{note}")
 
 
 if __name__ == "__main__":

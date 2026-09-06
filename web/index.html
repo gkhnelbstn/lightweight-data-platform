@@ -140,7 +140,9 @@ async function load(){
   $('#asof').textContent = last ? `son koşu: ${last.run_at}` : 'henüz koşu yok';
   $('#kpi').textContent = last ? fmt(last.score) : '—';
   const bad = o.contracts.filter(c=>c.sla_met===false).length;
-  $('#kpiSub').innerHTML = `${o.contracts.length} kontrat · ${bad} SLA ihlali · ${o.trend.length} günlük geçmiş`;
+  const err = o.contracts.reduce((n,c)=>n+(c.checks_errored||0),0);
+  $('#kpiSub').innerHTML = `${o.contracts.length} kontrat · ${bad} SLA ihlali · ${
+    o.trend.length} günlük geçmiş${err?` · <span class="bad">${err} kontrol çalışamadı</span>`:''}`;
   $('#chart').innerHTML = line(o.trend);
 
   $('#failures tbody').innerHTML = o.open_failures.length ? o.open_failures.map(f=>`
@@ -161,7 +163,8 @@ async function load(){
       <td class="sub">${c.properties} alan · ${c.rules} kural</td>
       <td class="score ${c.sla_met?'ok':'bad'}">${fmt(c.score)}</td>
       <td class="sub">≥ ${fmt(c.sla_min)}</td>
-      <td>${c.checks_total==null?'—':`${c.checks_total-c.checks_failed}/${c.checks_total} geçti`}</td>
+      <td>${c.checks_total==null?'—':`${c.checks_total-c.checks_failed-(c.checks_errored||0)}/${c.checks_total} geçti`}
+          ${c.checks_errored?`<div class="sub bad">${c.checks_errored} kontrol çalışamadı</div>`:''}</td>
     </tr>`).join('');
   document.querySelectorAll('#contracts tbody tr').forEach(tr=>
     tr.onclick=()=>detail(tr.dataset.id));

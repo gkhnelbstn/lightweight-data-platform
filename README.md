@@ -53,6 +53,12 @@ they are about 470 lines: `core/runner.py`, `core/store.py`,
    `0.6 * weighted pass/fail + 0.4 * weighted (1 - fail_ratio)`, weighted by
    the ODCS quality *dimension* — completeness, uniqueness, consistency and
    timeliness break joins, so they cost more than conformity.
+
+   Checks that *errored* are excluded from it. An unreachable source used to
+   score near zero, which reads as "the data is terrible" when the truth is
+   "we could not look" — and the two want different people. The SLA still
+   breaks: `sla_met` requires the run to have run, and `checks_errored` is
+   stored and shown separately.
 3. **The daily window.** A schema of views over one day's arrivals, addressed
    through a second `servers` entry in the contract. datacontract-cli's
    `--filter` is meant to be this and is **broken in 1.1.3** — a nameless

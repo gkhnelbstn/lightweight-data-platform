@@ -29,3 +29,29 @@ def test_volume_still_matters():
     small = score([_r("accuracy", "fail", 0.01), _r("accuracy", "pass")])
     large = score([_r("accuracy", "fail", 0.90), _r("accuracy", "pass")])
     assert small > large
+
+
+# --- a source you cannot reach is not bad data ------------------------------
+
+def test_errored_checks_are_not_counted_as_failures():
+    """An unreachable source used to score near zero, which reads as "the data
+    is terrible" when the truth is "we could not look" -- and the two want
+    different people. The SLA still breaks; core/store.py does that."""
+    from core.scoring import score
+    good = [{"status": "pass", "dimension": "completeness", "fail_ratio": 0.0}]
+    assert score(good) == 1.0
+    assert score(good + [{"status": "error", "dimension": "unknown",
+                          "fail_ratio": 0.0}]) == 1.0
+
+
+def test_a_run_where_nothing_could_be_measured_is_not_a_failure_either():
+    from core.scoring import score
+    assert score([{"status": "error", "dimension": None, "fail_ratio": 0.0}]) == 1.0
+
+
+def test_the_sla_is_what_an_outage_breaks():
+    """Not the score: the score is about data. sla_met is about the run."""
+    import inspect
+    from core import store
+    src = inspect.getsource(store.write_score)
+    assert "errored == 0" in src
