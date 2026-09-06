@@ -131,6 +131,11 @@ created:
 3. The column list must cover the replica identity.
 4. The target needs the same replica identity. This is the silent one.
 
+Rules 2 and 3 are *logical replication's*, not replication's in general, and
+the UI reported them against the SQL Server contract until the engine was
+passed in. The CDC reader has the whole row out of the change table and is
+bound by neither.
+
 `--status` exists for the same reason: it reports whether the apply worker is
 actually running and how far behind the slot is, rather than letting a dead
 worker look like a quiet one.

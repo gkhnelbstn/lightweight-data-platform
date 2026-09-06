@@ -98,8 +98,16 @@ def filter_columns(expression: str) -> set[str]:
     return {c.name for c in tree.find_all(exp.Column)}
 
 
-def problems(model: dict, rule: dict) -> list[str]:
-    """Every reason this rule would not work, before anything is created."""
+def problems(model: dict, rule: dict, engine: str = "postgres") -> list[str]:
+    """Every reason this rule would not work, before anything is created.
+
+    Rules 2 and 3 are logical replication's, not replication's in general:
+    they exist because Postgres matches an update against the replica identity
+    alone. core/sync_mssql.py reads whole rows out of the change table and is
+    bound by neither, so applying them to a SQL Server source reports a
+    problem that is not one.
+    """
+    replicated = engine in ("postgres", "postgresql")
     identity = identity_columns(model, rule)
     key = identity_columns(model)
     table = model.get("physicalName") or model["name"]
@@ -114,13 +122,13 @@ def problems(model: dict, rule: dict) -> list[str]:
         return out
 
     missing = sorted(filter_columns(rule.get("filter", "")) - set(identity))
-    if missing:
+    if missing and replicated:
         out.append(f"{table}: the row filter reads {', '.join(missing)}, which "
                    f"is not in the replica identity ({', '.join(identity)}); "
                    f"an update or delete would be rejected")
 
     columns = rule.get("columns")
-    if columns and not set(identity) <= set(columns):
+    if columns and replicated and not set(identity) <= set(columns):
         out.append(f"{table}: the column list omits "
                    f"{', '.join(sorted(set(identity) - set(columns)))}, which "
                    f"the replica identity needs")

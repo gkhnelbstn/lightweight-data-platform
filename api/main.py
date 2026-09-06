@@ -259,6 +259,40 @@ def _plain(v):
     return v if v is None or isinstance(v, (int, float, str, bool)) else str(v)
 
 
+@app.get("/api/sync")
+def sync_rules() -> list[dict]:
+    """The replication rules, whether they are sound, and whether they run.
+
+    Read-only and best effort: a target that is not up should show as a
+    problem on the page, not a 500 on the whole page.
+    """
+    from core import sync
+
+    out = []
+    for contract in load_contracts():
+        rule = sync.sync_rule(contract)
+        if not rule:
+            continue
+        engine = next((s for s in contract["servers"]
+                       if s["server"] == "erp"), {}).get("type", "")
+        row = {"contract_id": contract["id"],
+               "title": contract.get("name") or contract["id"], "rule": rule,
+               "engine": engine,
+               "identity": sync.identity_columns(contract["schema"][0], rule)}
+        try:
+            row["problems"] = (
+                sync.problems(contract["schema"][0], rule, engine)
+                + sync.unsound_identity(contract, rule))
+        except Exception as e:
+            row["problems"] = [str(e)]
+        try:
+            row["status"] = sync.status(contract)
+        except Exception as e:
+            row["status"] = {"unreachable": str(e)}
+        out.append(row)
+    return out
+
+
 class RuleDraft(BaseModel):
     contract_id: str
     description: str

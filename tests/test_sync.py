@@ -108,6 +108,14 @@ def test_the_publication_name_survives_a_dotted_contract_id():
 
 # --- the contract in the repository ----------------------------------------
 
+def test_the_logical_replication_rules_do_not_apply_to_a_cdc_source():
+    """Reported as a problem on the SQL Server contract until the engine was
+    passed in -- and it is not one: the CDC reader has the whole row."""
+    rule = {"filter": "country = 'TR'", "columns": ["customer_id", "name"]}
+    assert problems(_model(), rule)                      # postgres: two of them
+    assert problems(_model(), rule, "sqlserver") == []
+
+
 def test_the_shipped_rule_would_actually_work():
     doc = yaml.safe_load(
         (CONTRACTS / "erp_customers.odcs.yaml").read_text(encoding="utf-8"))

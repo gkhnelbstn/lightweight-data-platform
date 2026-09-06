@@ -101,6 +101,15 @@
         <th>Skor</th><th>SLA</th><th>Testler</th></tr></thead><tbody></tbody></table>
   </div>
 
+  <div class="card" id="sync" hidden>
+    <h2>Senkron kuralları</h2>
+    <div class="sub" style="margin:-6px 0 10px">Kontrat nereye replike
+      edileceğini söyler; motor Postgres'in kendi logical replication'ı ya da
+      SQL Server CDC'si. Akışta bizden bir şey yok.</div>
+    <table id="synct"><thead><tr><th>Kontrat</th><th>Hedef</th><th>Kural</th>
+      <th>Kimlik</th><th>Durum</th></tr></thead><tbody></tbody></table>
+  </div>
+
   <div class="card" id="detail" hidden></div>
 </main>
 
@@ -169,6 +178,7 @@ async function load(){
   document.querySelectorAll('#contracts tbody tr').forEach(tr=>
     tr.onclick=()=>detail(tr.dataset.id));
 
+  syncCard();
   const worst=[...o.contracts].sort((a,b)=>(+a.score||1)-(+b.score||1))[0];
   const keep = STATE.contract && STATE.contract.contract && STATE.contract.contract.id;
   if(worst) await detail(keep || worst.id);
@@ -182,6 +192,30 @@ async function load(){
 // The same check is listed in both tables, so the drawer's id carries which
 // table it belongs to -- without it querySelector finds the first one and a
 // click in the contract detail opens a drawer up in the overview.
+async function syncCard(){
+  let rows;
+  try { rows = await (await fetch('/api/sync')).json(); } catch { return; }
+  if(!Array.isArray(rows) || !rows.length) return;
+  $('#sync').hidden = false;
+  $('#synct tbody').innerHTML = rows.map(r=>{
+    const st = r.status || {};
+    const live = st.worker_running===true && st.slot_active===true;
+    const label = st.engine && st.engine!=='logical replication'
+      ? `<span class="pill d-unknown">${esc(st.engine)} CDC</span>`
+      : live ? `<span class="pill d-conformity">akıyor</span>
+                <span class="sub">${esc(st.behind||'')} geride</span>`
+             : `<span class="pill d-consistency">uygulanmadı</span>`;
+    return `<tr>
+      <td><b>${esc(r.title)}</b><div class="sub">${esc(r.contract_id)}</div></td>
+      <td><code>${esc(r.rule.server)}</code></td>
+      <td class="sub">${r.rule.filter?`<code>${esc(r.rule.filter)}</code>`:'tümü'}
+        <div class="sub">kolonlar: ${(r.rule.columns||['*']).map(esc).join(', ')}</div></td>
+      <td class="sub"><code>${(r.identity||[]).map(esc).join(', ')}</code></td>
+      <td>${label}${(r.problems||[]).map(p=>
+        `<div class="sub bad">! ${esc(p)}</div>`).join('')}</td></tr>`;
+  }).join('');
+}
+
 function bindSamples(root, pfx){
   document.querySelectorAll(`${root} tr[data-check]`).forEach(tr=>
     tr.onclick = () => toggleSample(pfx, tr.dataset.check));
