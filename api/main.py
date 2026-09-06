@@ -231,6 +231,15 @@ def check_sample(check_id: str) -> dict:
     if server.get("schema") and server.get("type") in ("sqlserver", "mssql"):
         table = f"{server['schema']}.{table}"
 
+    if windowed:
+        # The `asof` views hold whichever day was built into them last, so a
+        # backfill leaves them pointing at an old date and the rows stop
+        # agreeing with the count above them. Rebuilding for this result's date
+        # is what the next run would do anyway, and it is idempotent -- the
+        # alternative is a sample that quietly answers a different question.
+        from core.runner import build_window
+        build_window(doc, check["run_at"], window=check["run_window"])
+
     statement = sample.rows_query(check, table, server.get("type"))
     if statement is None:
         return {"check_id": check_id, "name": check["name"], "sql": check["sql"],
