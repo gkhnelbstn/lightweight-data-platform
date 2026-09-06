@@ -129,3 +129,29 @@ def test_the_seed_produces_identifiers_the_classifier_accepts():
     from seed.seed import _tckn, _vkn
     assert all(tckn_is_valid(_tckn(i)) for i in range(1, 200))
     assert all(vkn_is_valid(_vkn(i)) for i in range(1, 200))
+
+
+def test_every_contract_can_be_windowed():
+    """The window used to exist for Postgres only, which meant the SQL Server
+    contract was scored over its whole table every day -- the cumulative
+    scoring this project argues against, reintroduced by an omission. Its
+    score did not move for forty-five days."""
+    from core.runner import DAILY_SERVER
+    for path in ODCS:
+        doc = _load(path)
+        servers = {s.get("server"): s for s in doc.get("servers", [])}
+        assert DAILY_SERVER in servers, f"{path.name} cannot be windowed"
+        daily, source = servers[DAILY_SERVER], servers["erp"]
+        # A different schema, or a different database -- T-SQL has no
+        # search_path, so there the window has to be the database.
+        assert (daily.get("schema"), daily.get("database")) != \
+               (source.get("schema"), source.get("database")), path.name
+
+
+def test_the_tsql_window_is_a_database_not_a_schema():
+    """`dbo.sales_orders` in a rule resolves through the user's default schema,
+    so a second schema is invisible to it. Only the database reaches it."""
+    from core.runner import contract_window_database
+    doc = _load(CONTRACTS / "erp_mssql.odcs.yaml")
+    assert contract_window_database(doc) == "erp_asof"
+    assert contract_window_database(_load(CONTRACTS / "erp_customers.odcs.yaml")) is None

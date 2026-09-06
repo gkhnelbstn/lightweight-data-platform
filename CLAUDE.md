@@ -56,6 +56,14 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   `{{scope:alias}}`, never a hardcoded `loaded_at` predicate, or the window
   switch silently does nothing.
 * `psycopg` (v3), not `psycopg2`. `conn.execute(...)` returns a cursor.
+* T-SQL has no `search_path`. The window is a schema on Postgres and a
+  *database* on SQL Server, because a rule written `dbo.sales_orders` cannot
+  see a second schema. `CREATE DATABASE` also refuses to run inside pyodbc's
+  implicit transaction — set `autocommit` first.
+* `datacontract test` gives `row_count` only for the checks it derives. A
+  custom SQL rule has no denominator, so `core/runner.py` counts the table
+  once per run; without it `fail_ratio` is always 0 and the volume half of the
+  score does nothing.
 * Logical replication fails **after** the initial copy, in a background worker
   that only writes to the server log — so a broken sync looks like a working
   one. `core/sync.py` checks all four preconditions up front; do not weaken

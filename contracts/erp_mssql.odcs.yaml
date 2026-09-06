@@ -31,6 +31,18 @@ servers:
     schema: dbo
     driver: ODBC Driver 18 for SQL Server
     trustServerCertificate: true
+  # The same tables as views over one day's arrivals. A separate *database*
+  # rather than a separate schema, unlike the Postgres contracts: T-SQL has no
+  # search_path, and the rules below name `dbo.` explicitly, so only changing
+  # which database `dbo` lives in reaches them. See core/runner.py.
+  - server: erp_daily
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp_asof
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
   # Where CDC changes are applied. SQL Server has no native path to Postgres,
   # so core/sync_mssql.py reads the change table -- see deploy/mssql-cdc.sql.
   - server: replica

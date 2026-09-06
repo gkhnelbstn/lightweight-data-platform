@@ -135,6 +135,9 @@ def build_window(contract: dict, as_of: date, dsn: str = None,
     loaded_at = os.getenv("DQ_LOADED_AT_COLUMN", "loaded_at")
     src_schema = source.get("schema", "public")
     win_schema = daily.get("schema", WINDOW_SCHEMA)
+    if source.get("type") in ("sqlserver", "mssql"):
+        return _build_window_mssql(contract, as_of, source, src_schema,
+                                   win_schema, loaded_at, window)
 
     made = 0
     with psycopg.connect(dsn or store.ERP_DSN, autocommit=True) as cx:
@@ -174,6 +177,108 @@ def build_window(contract: dict, as_of: date, dsn: str = None,
     return made
 
 
+def _build_window_mssql(contract: dict, as_of: date, source: dict,
+                        src_schema: str, win_schema: str, loaded_at: str,
+                        window: str) -> int:
+    """The same schema of views, in T-SQL -- except it is a database.
+
+    Without a window a SQL Server contract is scored over its whole table every
+    day, which is the cumulative scoring this project exists to argue against,
+    quietly reintroduced by having implemented the window for one engine only.
+    Its score sat at 0.8957 for forty-five days without moving.
+
+    The Postgres window is a *schema* because `search_path` makes an
+    unqualified `sales_orders` resolve to the view. SQL Server has no
+    search_path -- an unqualified name resolves through the user's default
+    schema -- and the rules in a T-SQL contract are written `dbo.sales_orders`
+    anyway, so a second schema is invisible to them. A second *database* is
+    not: `erp_asof.dbo.sales_orders` is what `dbo.sales_orders` means once the
+    connection is pointed at it, and the contract needs no rewriting.
+    """
+    from core.sync_mssql import mssql_connect
+
+    window_db = contract_window_database(contract) or f"{source['database']}_asof"
+    with mssql_connect(source) as cx:
+        # CREATE DATABASE cannot run inside a transaction, and pyodbc opens one
+        # for you: "CREATE DATABASE statement not allowed within
+        # multi-statement transaction."
+        cx.autocommit = True
+        cx.cursor().execute(
+            f"if db_id('{window_db}') is null "
+            f"exec('create database [{window_db}]')")
+
+    made = 0
+    named = {physical for _, physical in _tables(contract)}
+    by_table = {(m.get("physicalName") or m["name"]): m
+                for m in contract.get("schema", [])}
+    with mssql_connect(source) as src,             mssql_connect({**source, "database": window_db}) as win:
+        tables = [r[0] for r in src.cursor().execute(
+            "select table_name from information_schema.tables "
+            "where table_schema = ? and table_type = 'BASE TABLE'",
+            src_schema).fetchall()]
+        cur = win.cursor()
+        for table in tables:
+            windowed = src.cursor().execute(
+                "select 1 from information_schema.columns where table_schema = ? "
+                "and table_name = ? and column_name = ?",
+                src_schema, table, loaded_at).fetchone()
+            stmt = (f"create or alter view [{win_schema}].[{table}] as select * "
+                    f"from [{source['database']}].[{src_schema}].[{table}]")
+            if windowed and table in named:
+                template = (window_predicate(contract, by_table.get(table))
+                            if window == "incremental" else "{col} <= {day}")
+                # `as_of` is a date object and the column name comes from
+                # information_schema, so neither is caller text.
+                stmt += " where " + template.format(
+                    col=f"[{loaded_at}]", day=f"'{as_of.isoformat()}'")
+            cur.execute(stmt)
+            made += 1
+        win.commit()
+    return made
+
+
+def contract_window_database(contract: dict) -> str | None:
+    """The database the daily server points at, when it names a different one."""
+    daily, source = _server(contract, DAILY_SERVER), _server(contract, "erp")
+    if daily and source and daily.get("database") != source.get("database"):
+        return daily.get("database")
+    return None
+
+
+def table_rows(contract: dict, server_key: str) -> dict[str, int]:
+    """How many rows each of the contract's tables holds, in the window it was
+    checked in.
+
+    datacontract reports `row_count` for the checks it derives and not for the
+    SQL a person wrote, so every custom rule arrived with `total_rows = 0` and
+    a `fail_ratio` of zero. That silently deleted the volume half of the score:
+    a rule failing on one row and the same rule failing on seven hundred scored
+    identically, which is the opposite of what the blend is for.
+    """
+    server = _server(contract, server_key) or _server(contract, "erp")
+    if server is None:
+        return {}
+    schema = server.get("schema", "public")
+    tables = [physical for _, physical in _tables(contract)]
+    out: dict[str, int] = {}
+    try:
+        if server.get("type") in ("sqlserver", "mssql"):
+            from core.sync_mssql import mssql_connect
+            with mssql_connect(server) as cx:
+                for t in tables:
+                    out[t] = cx.cursor().execute(
+                        f"select count(*) from [{schema}].[{t}]").fetchval()
+        else:
+            with psycopg.connect(store.ERP_DSN) as cx:
+                for t in tables:
+                    out[t] = cx.execute(sql.SQL("select count(*) from {}.{}").format(
+                        sql.Identifier(schema), sql.Identifier(t))).fetchone()[0]
+    except Exception:
+        # A count is a nicety; failing to get one must not fail the run.
+        return {}
+    return out
+
+
 def run_contract(contract: dict, as_of: date, windowed: bool = True) -> dict:
     """`datacontract test` for one contract, as a parsed results document."""
     server = DAILY_SERVER if (windowed and _server(contract, DAILY_SERVER)) else "erp"
@@ -211,7 +316,8 @@ def merge_table_scoped(windowed: dict, unwindowed: dict) -> dict:
 
 
 def persist(results: dict, contract: dict, as_of: date,
-            window: str = "incremental") -> list[dict]:
+            window: str = "incremental",
+            row_counts: dict[str, int] | None = None) -> list[dict]:
     """Store one run's checks and return the rows the score is computed from."""
     contract_id = contract.get("id") or contract.get("name")
     rows = []
@@ -221,7 +327,10 @@ def persist(results: dict, contract: dict, as_of: date,
         if failed is None:
             failed = d.get("value") if d.get("value") is not None else (
                 0 if check.get("result") == "passed" else 1)
-        total = d.get("row_count") or 0
+        # A custom rule has no row_count of its own; the table it is about is
+        # the denominator, counted once per run in the same window.
+        total = d.get("row_count") or (row_counts or {}).get(
+            check.get("model") or "", 0) or _only_count(row_counts)
         rows.append({
             "check_id": f"{contract_id}.{check.get('key') or check['name']}",
             "dimension": check.get("dimension") or "unknown",
@@ -255,6 +364,13 @@ def persist(results: dict, contract: dict, as_of: date,
         store.write_score(dq, as_of, contract_id, s, len(rows), failed_n,
                           _min_score(contract), window, errored_n)
     return rows
+
+
+def _only_count(row_counts: dict[str, int] | None) -> int:
+    """Most contracts describe one table, and datacontract does not always say
+    which model a custom rule belongs to. One table is unambiguous; more than
+    one is left at zero rather than guessed at."""
+    return list(row_counts.values())[0] if row_counts and len(row_counts) == 1 else 0
 
 
 def push_to_odd(contract: dict, results: dict, url: str) -> int:
@@ -300,14 +416,26 @@ def run(as_of: date, contracts: list[dict] | None = None,
     out = []
     for c in contracts:
         # Both windows go through the views; only the predicate differs.
-        windowed = bool(build_window(c, as_of, window=window))
+        #
+        # A source that cannot be reached must not take the whole run down
+        # with it: the window is built by connecting to the source, so before
+        # this the SQL Server contract crashed `core/runner.py` on any machine
+        # without a SQL Server -- CI included. Falling back to unwindowed lets
+        # `datacontract test` fail on its own terms, which is how the run comes
+        # to be recorded as errored rather than as a stack trace.
+        try:
+            windowed = bool(build_window(c, as_of, window=window))
+        except Exception as e:
+            print(f"WARN {as_of} {c.get('id')}: no window ({e})", flush=True)
+            windowed = False
         results = run_contract(c, as_of, windowed=windowed)
         if windowed and _has_table_scoped(c):
             # A second pass against the real tables, for the checks a daily
             # window would make meaningless.
             results = merge_table_scoped(results, run_contract(c, as_of,
                                                                windowed=False))
-        rows = persist(results, c, as_of, window)
+        counts = table_rows(c, DAILY_SERVER if windowed else "erp")
+        rows = persist(results, c, as_of, window, counts)
         if odd_url:
             push_to_odd(c, results, odd_url)
         s = score(rows)

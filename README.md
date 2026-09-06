@@ -54,13 +54,28 @@ they are about 470 lines: `core/runner.py`, `core/store.py`,
    the ODCS quality *dimension* — completeness, uniqueness, consistency and
    timeliness break joins, so they cost more than conformity.
 
+   Both halves have to be real. `datacontract test` reports `row_count` for
+   the checks it derives and not for the SQL a person wrote, so every custom
+   rule arrived with a denominator of zero and a `fail_ratio` of zero — which
+   silently deleted the volume half: a rule failing on one row and the same
+   rule failing on seven hundred scored identically. The table is counted once
+   per run, in the window the checks ran in.
+
    Checks that *errored* are excluded from it. An unreachable source used to
    score near zero, which reads as "the data is terrible" when the truth is
    "we could not look" — and the two want different people. The SLA still
    breaks: `sla_met` requires the run to have run, and `checks_errored` is
    stored and shown separately.
 3. **The daily window.** A schema of views over one day's arrivals, addressed
-   through a second `servers` entry in the contract. datacontract-cli's
+   through a second `servers` entry in the contract. On SQL Server it is a
+   second *database* instead: T-SQL has no `search_path`, an unqualified name
+   resolves through the user's default schema, and the rules in a T-SQL
+   contract are written `dbo.sales_orders` anyway — so a second schema is
+   invisible to them and only a second database reaches them. Implementing the
+   window for Postgres alone had quietly reintroduced exactly the cumulative
+   scoring this project argues against: the SQL Server contract was checked
+   against its whole table every day and its score did not move for
+   forty-five. datacontract-cli's
    `--filter` is meant to be this and is **broken in 1.1.3** — a nameless
    `DROP VIEW IF EXISTS` — and the ibis API under it, `Table.alias`, is
    documented by ibis as not public and due for removal. Views are standard
