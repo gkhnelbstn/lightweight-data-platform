@@ -29,6 +29,16 @@ not carry.
 
 A UI fork, not a patch. It has its own record: ADR 0009.
 
+### Worked around without a patch
+
+odd-collector's `mssql` adapter enumerates every `BASE TABLE` it can see and
+has no schema filter, so enabling CDC put nine of SQL Server's bookkeeping
+tables into the catalogue beside five real ones. Rather than widen the carried
+patch for what is a feature request, the collector now connects as a
+least-privilege login: `information_schema` only shows what the user may see,
+so **the permission grant is the filter**. It also stops a metadata collector
+being sysadmin, which it should never have been.
+
 ## Reported and not patched
 
 * [odd-platform#1880](https://github.com/opendatadiscovery/odd-platform/issues/1880)

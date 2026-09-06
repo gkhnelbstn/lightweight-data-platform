@@ -276,12 +276,15 @@ that ends at a dashboard are behind one profile:
 
 ```bash
 docker compose --profile demo up -d              # SQL Server, MongoDB, Superset
+./deploy/odd-bootstrap.sh --demo                 # add them to the collector
 # note the inner quoting: the password lives in the container's environment,
 # so it has to be expanded there rather than by your shell
 docker compose exec -T mssql sh -c '/opt/mssql-tools18/bin/sqlcmd     -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -i /demo/mssql-seed.sql'
 docker compose exec app python demo/mongo-seed.py            # FX rates from a public API
 
 # change data capture, and the sync rules the contracts carry
+# turns CDC on, and creates the least-privilege login the collector uses --
+# its permissions are what keep CDC's own bookkeeping out of the catalogue
 docker compose exec -T mssql sh -c '/opt/mssql-tools18/bin/sqlcmd     -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -d erp -i /deploy/mssql-cdc.sql'
 docker compose exec app python core/sync.py --check          # nothing is created yet
 docker compose exec app python core/sync.py --apply

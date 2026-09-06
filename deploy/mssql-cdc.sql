@@ -47,3 +47,36 @@ select ct.capture_instance,
        ct.supports_net_changes
 from cdc.change_tables ct order by 2;
 go
+
+-- A login for odd-collector, which until now connected as `sa`.
+--
+-- Two problems, one fix. A metadata collector has no business being sysadmin;
+-- and the mssql adapter has no schema filter -- it enumerates every BASE TABLE
+-- it can see -- so enabling CDC above put nine of its bookkeeping tables into
+-- the catalogue beside five real ones. `information_schema` only shows what
+-- the connected user may see, so the permission grant *is* the filter.
+use erp;
+go
+
+if suser_id('odd_collector') is null
+    create login odd_collector with password = 'C0llect!Reader', check_policy = off;
+go
+
+if user_id('odd_collector') is null
+    create user odd_collector for login odd_collector;
+grant select, view definition on schema::dbo to odd_collector;
+-- CDC's own bookkeeping, and the tracking table it drops into dbo.
+deny select, view definition on schema::cdc to odd_collector;
+deny select, view definition on object::dbo.systranschemas to odd_collector;
+go
+
+-- Under EXECUTE AS, or this reports what `sa` can see and proves nothing.
+execute as user = 'odd_collector';
+select 'odd_collector sees: ' + string_agg(name, ', ')
+from (
+    select distinct t.table_schema + '.' + t.table_name as name
+    from information_schema.tables t
+    where t.table_type = 'BASE TABLE'
+) x;
+revert;
+go

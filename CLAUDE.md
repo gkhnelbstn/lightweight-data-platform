@@ -103,6 +103,15 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   untouched. The patch is two anchors in `DataQualityContent.tsx` and it
   **fails the build** when they move — do not soften that into a warning, and
   do not vendor their file.
+* ODD reports an existing collector's token **masked**, so it cannot be read
+  back. `odd-bootstrap.sh` reuses the token from the config it wrote last time
+  and rotates only when there is no local copy — creating a collector whose
+  name is taken returns no token and fails silently.
+* odd-collector's mssql adapter has no schema filter: it catalogues every
+  table the connected user can see. That is why it connects as `odd_collector`
+  rather than `sa` — the permission grant in `deploy/mssql-cdc.sql` is the
+  filter, and without it CDC's nine bookkeeping tables outnumber the five real
+  ones.
 * ODD wants `{"tag_name_list": [...]}` to tag an entity and `{"tags": [...]}`
   to tag a dataset field. Same platform, same release.
 * A catalogue field is filled from the contract, never by hand — see ADR 0013.
