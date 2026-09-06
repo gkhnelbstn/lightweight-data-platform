@@ -1,5 +1,13 @@
 # ODD Platform vs the contract layer — verified against a running instance
 
+> **Note.** This audit was written against the pre-ODCS codebase and is
+> kept as the record of what was verified against a running ODD instance,
+> not as a map of the current tree. `push.py`, `stats.py`,
+> `deploy/odd-compose.yaml` and `*.contract.yaml` no longer exist: the push
+> lives in `integrations/odd/from_datacontract.py`, the stack is the root
+> `compose.yaml`, and the contracts are `contracts/*.odcs.yaml`. The
+> findings about ODD itself still hold.
+
 The first version of this document was written from the ODD specification and
 `odd-dbt`'s source, without ever starting the platform. This version is the
 same claims re-checked against a real instance. Every verdict below is

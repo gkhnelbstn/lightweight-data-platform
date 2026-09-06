@@ -210,9 +210,8 @@ docker compose up -d db odd-db odd-platform     # wait for ODD to come up
 docker compose up -d                            # + collector + app
 
 docker compose exec app python seed/seed.py                      # 45 days of ERP-ish data
-docker compose exec app python core/runner.py --backfill-days 44
-docker compose exec app python integrations/odd/push.py \
-    --url http://odd-platform:8080 --no-datasets
+docker compose exec app python core/runner.py --backfill-days 44 \
+    --odd-url http://odd-platform:8080
 ```
 
 * contract UI — http://localhost:8077
@@ -403,16 +402,29 @@ Early. A working vertical slice, not a product.
 
 ## Where this goes next
 
-The honest direction is to keep shrinking the part we maintain:
+The direction is still to keep shrinking the part we maintain. The first
+version of this list said "adopt ODCS and let `datacontract test` derive the
+checks" and "add authentication"; both are done, and what is left is smaller
+and mostly other people's to merge.
 
-1. **Adopt ODCS as the contract format** and let `datacontract test` derive and
-   execute the checks. It already returns `failed_rows` and `row_count` per
-   check as structured JSON — the same two numbers `core/compilers/sql.py`
-   exists to produce. That would retire our contract model, our derivation and
-   both artifact compilers, and hand us 24 export formats we never wrote.
-2. **Keep** the results store, the score, the window and the ODD push. Those
-   four are the whole remaining product.
-3. **Authentication** before anyone else uses it.
+1. **Column-level lineage.** The one thing here with no answer. ODD's
+   ingestion model has no place for it — `DataTransformer` is dataset-level —
+   so it is not something we can add by writing more code. OpenMetadata has
+   it and requires Elasticsearch or OpenSearch, which is a cost we have
+   already declined. The rule for revisiting is that requirement disappearing,
+   not the feature looking attractive.
+2. **Delete `deploy/Dockerfile.odd-collector`** when
+   [odd-collectors#136](https://github.com/opendatadiscovery/odd-collectors/pull/136)
+   merges. Carrying a patch is a debt, and the point of sending it upstream is
+   to stop paying it.
+3. **Move the window into the contract proper** if
+   [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593)
+   lands — per-rule scoping would retire `TABLE_SCOPED_TYPES` and the second
+   unwindowed pass with it.
+4. **Offer the Turkish identifiers to Presidio**, once they have run against
+   real data long enough to be worth someone else's maintenance.
+5. **Backfill the SQL Server history** before 2026-08-16, which is still
+   recorded as errored from the period when that source did not exist.
 
 ## License
 
