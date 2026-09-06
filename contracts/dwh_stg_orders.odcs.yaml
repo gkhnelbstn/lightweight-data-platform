@@ -1,0 +1,107 @@
+# The first warehouse hop: the ERP's orders, cleaned.
+#
+# `derivedFrom` is the whole point of this contract. A Prefect flow built this
+# table by selecting from another database in Python, so there is no view
+# definition to parse and no foreign key to follow -- nothing can infer the
+# edge. The contract declares it and integrations/odd/lineage.py publishes it.
+apiVersion: v3.0.2
+kind: DataContract
+id: dwh.stg_orders
+name: Staged Orders
+version: 1.0.0
+status: active
+domain: warehouse
+tenant: data-platform
+description:
+  purpose: >
+    Orders as the warehouse wants them: cancelled orders and orders with no
+    customer are dropped here, so everything downstream can assume both.
+
+customProperties:
+  - property: derivedFrom
+    value: [erp.sales_orders]
+  - property: derivedBy
+    value: >
+      select order_id, customer_id, order_date, status, currency, net_amount,
+             loaded_at
+      from raw.orders
+      where customer_id is not null and status <> 'CANCELLED'
+
+servers:
+  - server: erp
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: stg
+  # Its own window schema: `stg.orders` and `fct.orders` share a table name, so
+  # one shared `asof` schema would have them overwrite each other.
+  - server: erp_daily
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: asof_stg
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: orders
+    physicalName: orders
+    logicalType: object
+    physicalType: table
+    description: One row per order that survived staging.
+    properties:
+      - name: order_id
+        logicalType: integer
+        physicalType: bigint
+        description: "ERP order number, carried through unchanged so the warehouse can be reconciled against the source."
+        required: true
+        unique: true
+        primaryKey: true
+      - name: customer_id
+        logicalType: integer
+        physicalType: bigint
+        description: "The customer. Never null here -- staging drops the rows where it was."
+        required: true
+      - name: order_date
+        logicalType: date
+        physicalType: date
+        description: "The date the order was placed, as the ERP recorded it."
+        required: true
+      - name: status
+        logicalType: string
+        physicalType: text
+        description: "Lifecycle state. Never CANCELLED here; staging drops those."
+        required: true
+      - name: currency
+        logicalType: string
+        physicalType: text
+        description: "ISO currency the order is priced in."
+        required: true
+      - name: net_amount
+        logicalType: number
+        physicalType: numeric
+        description: "Order total excluding tax, in `currency`."
+        required: true
+      - name: loaded_at
+        logicalType: date
+        physicalType: date
+        description: "The date the source row arrived. Carried from the ERP so the warehouse can be windowed the same way."
+        required: true
+
+    quality:
+      - type: sql
+        description: staging must not let a cancelled order through
+        query: select count(*) from orders where status = 'CANCELLED'
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: staging must not let a customerless order through
+        query: select count(*) from orders where customer_id is null
+        mustBe: 0
+        dimension: completeness

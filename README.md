@@ -165,6 +165,51 @@ in, as ODD's own *Attachments* card:
 
 ![Our pages on ODD's entity page](docs/odd-entity-links.png)
 
+### Which dashboards break
+
+A quality failure is only interesting if you can follow it. The demo now
+carries the shape most warehouses actually have — a scheduler reading the ERP
+databases and building a medallion warehouse in Postgres, with the marts
+charted in Superset:
+
+```
+erp.sales_orders          (Postgres, under contract)
+  -> Staged Orders        stg.orders     drops cancelled and customerless rows
+    -> Orders Fact        fct.orders     joined to the customer dimension
+      -> Daily Revenue    mart.revenue_daily
+        -> "Gunluk Ciro (mart)"          a Superset chart
+```
+
+That chain is read straight out of ODD, and it is the answer to the question:
+a failing check on `sales_orders` has a downstream that ends at a dashboard.
+
+**Nothing can infer it.** `demo/medallion.py` builds those tables in Python
+because Postgres cannot query another database and half the ERP is SQL Server
+— which is exactly why a scheduler is doing it in the first place. There is no
+view definition to parse and no foreign key to follow. So the contract declares
+it:
+
+```yaml
+customProperties:
+  - property: derivedFrom
+    value: [erp.sales_orders]
+  - property: derivedBy
+    value: "select ... from raw.orders where customer_id is not null"
+```
+
+`integrations/odd/lineage.py` publishes one `DataTransformer` per contract that
+declares one. A reference is a **contract id** by preference — it survives a
+host or schema change, which an ODDRN written into a yaml does not — with a raw
+ODDRN as the escape hatch for a table that has no contract. An unresolvable
+reference is reported rather than dropped, because a graph that silently loses
+an edge still looks complete.
+
+This is dataset-level lineage, and dataset-level is all "which dashboards
+break" needs. Column-level is a different question, and ODD cannot answer it —
+see [ADR 0012](docs/adr/0012-odd-not-openmetadata.md).
+
+![The first hops of the chain](docs/lineage-medallion.png)
+
 ### Keeping a second database in step
 
 A contract can also say where its table is replicated to, and under what rule:
@@ -296,7 +341,7 @@ docker compose exec app python core/sync.py --apply
 docker compose exec app python core/sync_mssql.py --interval 30
 ```
 
-* Superset — http://localhost:8088 (`admin` / `admin`)
+* Superset — http://localhost:8089 (`admin` / `admin`)
 
 `--check` first is the habit worth keeping: it prints every statement it would
 run and every reason it will not.

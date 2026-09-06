@@ -1,0 +1,102 @@
+# The modelled fact table. Two upstreams, which is exactly the case a single
+# `inputs` list exists for.
+apiVersion: v3.0.2
+kind: DataContract
+id: dwh.fct_orders
+name: Orders Fact
+version: 1.0.0
+status: active
+domain: warehouse
+tenant: data-platform
+description:
+  purpose: >
+    Orders joined to the customer dimension, so a revenue figure can be cut by
+    country or segment without another join.
+
+customProperties:
+  - property: derivedFrom
+    value:
+      - dwh.stg_orders
+      # No contract of its own, so it is named by ODDRN -- the escape hatch.
+      - //postgresql/host/db/databases/dwh/schemas/dim/tables/customer
+  - property: derivedBy
+    value: >
+      select o.order_id, o.customer_id, c.country, c.segment, o.order_date,
+             o.currency, o.net_amount
+      from stg.orders o
+      left join dim.customer c on c.customer_id = o.customer_id
+
+servers:
+  - server: erp
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: fct
+  - server: erp_daily
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: asof_fct
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: orders
+    physicalName: orders
+    logicalType: object
+    physicalType: table
+    description: One row per staged order, with its customer attributes.
+    properties:
+      - name: order_id
+        logicalType: integer
+        physicalType: bigint
+        description: "ERP order number. Still the grain, and still reconcilable to the source."
+        required: true
+        unique: true
+        primaryKey: true
+      - name: customer_id
+        logicalType: integer
+        physicalType: bigint
+        description: "The customer this order belongs to."
+        required: true
+      - name: country
+        logicalType: string
+        physicalType: text
+        description: "Customer's country, denormalised from the dimension so marts need no join."
+      - name: segment
+        logicalType: string
+        physicalType: text
+        description: "Customer's commercial segment, denormalised from the dimension."
+      - name: order_date
+        logicalType: date
+        physicalType: date
+        description: "The date the order was placed."
+        required: true
+      - name: currency
+        logicalType: string
+        physicalType: text
+        description: "ISO currency the order is priced in."
+        required: true
+      - name: net_amount
+        logicalType: number
+        physicalType: numeric
+        description: "Order total excluding tax, in `currency`."
+        required: true
+
+    quality:
+      - type: sql
+        description: the join must not have lost an order
+        query: select count(*) from (select order_id from orders group by order_id having count(*) > 1) d
+        mustBe: 0
+        dimension: uniqueness
+
+      - type: sql
+        description: every order must have resolved to a customer
+        query: select count(*) from orders where country is null
+        mustBe: 0
+        dimension: completeness

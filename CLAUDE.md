@@ -13,11 +13,13 @@ our code is the best outcome available.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 107 tests, no database needed
+pytest -q                                                  # 171 tests, no database needed
 python seed/seed.py                                        # rebuild the demo ERP data
 python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
 python core/runner.py --odd-url http://odd-platform:8080   # ...and send it to ODD
+python demo/medallion.py                                   # rebuild the demo warehouse
+python integrations/odd/lineage.py --url http://odd-platform:8080   # declared lineage
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
 python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
 uvicorn api.main:app --port 8077                           # UI + API
@@ -114,6 +116,12 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   ones.
 * ODD wants `{"tag_name_list": [...]}` to tag an entity and `{"tags": [...]}`
   to tag a dataset field. Same platform, same release.
+* Lineage across a scheduler is declared (`derivedFrom`), never inferred —
+  there is nothing to parse. An unresolvable reference must be reported, not
+  dropped: a graph missing an edge still looks complete. See ADR 0014.
+* `build_window` and `table_rows` connect to **the contract's own server**, not
+  `ERP_DSN`. A warehouse contract lives in another database, and building its
+  window against `erp` succeeds silently in the wrong place.
 * A catalogue field is filled from the contract, never by hand — see ADR 0013.
   Adding a column means adding its description, and the tests enforce it.
 * Entity links are the one native place our pages belong. `POST` appends and

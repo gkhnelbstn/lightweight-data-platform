@@ -114,6 +114,20 @@ def window_predicate(contract: dict, model: dict | None = None) -> str:
     return DEFAULT_PREDICATE
 
 
+def source_dsn(server: dict) -> str:
+    """Where this contract's tables actually live.
+
+    `ERP_DSN` is only right while every contract is in one database. A
+    warehouse contract points at `dwh`, and building its window against `erp`
+    would create the views in the wrong place -- and silently, because `create
+    schema if not exists` succeeds anywhere.
+    """
+    user = os.getenv("SYNC_USERNAME", "postgres")
+    password = os.getenv("SYNC_PASSWORD", "postgres")
+    return (f"host={server['host']} port={server.get('port', 5432)} "
+            f"dbname={server['database']} user={user} password={password}")
+
+
 def build_window(contract: dict, as_of: date, dsn: str = None,
                  window: str = "incremental") -> int:
     """Rebuild the day's views, and return how many were created.
@@ -140,7 +154,7 @@ def build_window(contract: dict, as_of: date, dsn: str = None,
                                    win_schema, loaded_at, window)
 
     made = 0
-    with psycopg.connect(dsn or store.ERP_DSN, autocommit=True) as cx:
+    with psycopg.connect(dsn or source_dsn(source), autocommit=True) as cx:
         cx.execute(f'create schema if not exists "{win_schema}"')
         named = {physical for _, physical in _tables(contract)}
         by_table = {(m.get("physicalName") or m["name"]): m
@@ -269,7 +283,7 @@ def table_rows(contract: dict, server_key: str) -> dict[str, int]:
                     out[t] = cx.cursor().execute(
                         f"select count(*) from [{schema}].[{t}]").fetchval()
         else:
-            with psycopg.connect(store.ERP_DSN) as cx:
+            with psycopg.connect(source_dsn(server)) as cx:
                 for t in tables:
                     out[t] = cx.execute(sql.SQL("select count(*) from {}.{}").format(
                         sql.Identifier(schema), sql.Identifier(t))).fetchone()[0]

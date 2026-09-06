@@ -37,3 +37,4 @@ else rests on** — it is last because it was written last.
 | [0010](0010-rule-vocabulary-and-the-token.md) | Rules from a fixed vocabulary; the token guards only raw SQL | a real identity provider is in front |
 | [0011](0011-carried-patches.md) | Patches we carry for upstream projects | each PR merges |
 | [0013](0013-fill-the-catalogue-from-the-contract.md) | The catalogue is filled from the contract | ODD imports ODCS directly |
+| [0014](0014-declared-lineage.md) | Lineage is declared, because nothing can infer it | the loads move to dbt, whose adapter reads the real project |

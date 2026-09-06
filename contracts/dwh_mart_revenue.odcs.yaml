@@ -1,0 +1,92 @@
+# What the dashboard reads. The end of the chain, and the reason the chain is
+# published at all: a failing check on the ERP's sales_orders has to be
+# followed all the way to here, and then to the Superset chart on top of it.
+apiVersion: v3.0.2
+kind: DataContract
+id: dwh.mart_revenue
+name: Daily Revenue
+version: 1.0.0
+status: active
+domain: warehouse
+tenant: data-platform
+description:
+  purpose: >
+    Revenue by day, currency and country. This is the table Superset charts,
+    so anything wrong upstream of it is wrong on a dashboard.
+
+customProperties:
+  - property: derivedFrom
+    value: [dwh.fct_orders]
+  - property: derivedBy
+    value: >
+      select order_date, currency, country, count(*) as orders,
+             sum(net_amount) as revenue
+      from fct.orders group by order_date, currency, country
+
+servers:
+  - server: erp
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: mart
+  - server: erp_daily
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: asof_mart
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: revenue_daily
+    physicalName: revenue_daily
+    logicalType: object
+    physicalType: table
+    description: One row per day, currency and country.
+    properties:
+      - name: order_date
+        logicalType: date
+        physicalType: date
+        description: "The day being reported. Part of the grain."
+        required: true
+        primaryKey: true
+      - name: currency
+        logicalType: string
+        physicalType: text
+        description: "ISO currency. Part of the grain -- revenue is not summed across currencies here."
+        required: true
+        primaryKey: true
+      - name: country
+        logicalType: string
+        physicalType: text
+        description: "Customer's country. Part of the grain."
+        required: true
+        primaryKey: true
+      - name: orders
+        logicalType: integer
+        physicalType: bigint
+        description: "How many orders went into this row."
+        required: true
+      - name: revenue
+        logicalType: number
+        physicalType: numeric
+        description: "Sum of net_amount for the day, currency and country."
+        required: true
+
+    quality:
+      - type: sql
+        description: revenue must not be negative
+        query: select count(*) from revenue_daily where revenue < 0
+        mustBe: 0
+        dimension: accuracy
+
+      - type: sql
+        description: a row must count at least one order
+        query: select count(*) from revenue_daily where orders < 1
+        mustBe: 0
+        dimension: consistency

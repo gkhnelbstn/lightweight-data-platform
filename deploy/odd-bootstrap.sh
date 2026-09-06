@@ -135,6 +135,14 @@ write_config collector_config.yaml 10 "$COLLECTOR_TOKEN" plugins erp_postgres po
 if [ "$DEMO" = "1" ]; then
   cat >> "$HERE/collector_config.yaml" <<YAML
 
+  - type: postgresql
+    name: dwh
+    host: ${PG_HOST}
+    port: ${PG_PORT}
+    database: ${DWH_DB:-dwh}
+    user: ${PG_USER}
+    password: ${PG_PASSWORD}
+
   - type: mssql
     name: erp_mssql
     host: ${MSSQL_HOST:-mssql}
