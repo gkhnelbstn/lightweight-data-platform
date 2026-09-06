@@ -91,7 +91,18 @@ they are about 470 lines: `core/runner.py`, `core/store.py`,
    once and answers the second write with a `NullPointerException`, so a daily
    value is impossible. Measured rather than read; `integrations/odd/entity_page.py`
    records what a fix would need to know.
-5. **The failing rows.** "522 orders disagree with their lines" is where an
+5. **A catalogue with something in it.** A collector brings the *shape* of a
+   source — tables, columns, types, lineage. Everything a catalogue is actually
+   for arrives as "Not created": who owns this, what is it for, what does this
+   column mean. The contract knows all of it, so
+   `integrations/odd/catalogue.py` pushes the owner, the purpose, every column
+   description, the quality vocabulary as dictionary terms, the rules as query
+   examples, and the SLA and sync rule as metadata — into ODD's own places for
+   them. Filled from the contract, it is reviewed in a pull request and cannot
+   drift; `tests/test_catalogue.py` fails when a column has no description.
+
+   ![A catalogue entry filled from its contract](docs/odd-catalogue-entity.png)
+6. **The failing rows.** "522 orders disagree with their lines" is where an
    investigation starts and none of them end. Neither tool answers *which*:
    `datacontract test` reports counts, and ODD's run model has no numeric
    field at all, let alone a row. `core/sample.py` takes the statement the
@@ -321,6 +332,7 @@ does not enter into it.
 | `web/index.html` | single-file UI, no build step |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
 | `integrations/odd/entity_page.py` | the links ODD shows on the table's own page |
+| `integrations/odd/catalogue.py` | owner, purpose, column meanings, glossary, query examples |
 | `deploy/Dockerfile.odd-collector` | odd-collector plus two fixes to its Superset adapter |
 | `deploy/Dockerfile.odd-platform` | ODD with the contract panel on its Data Quality page |
 | `deploy/odd-platform-ui/` | that panel — React, in ODD's own design system |

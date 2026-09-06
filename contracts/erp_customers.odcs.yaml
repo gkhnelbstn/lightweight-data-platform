@@ -65,20 +65,24 @@ schema:
       - name: customer_id
         logicalType: integer
         physicalType: bigint
+        description: "The customer this order belongs to. A foreign key into customers; nulls here break every revenue-by-customer report."
         required: true
         unique: true
         primaryKey: true
       - name: name
         logicalType: string
         physicalType: text
+        description: "Customer's registered name, as it appears on an invoice."
         required: true
       - name: country
         logicalType: string
         physicalType: text
+        description: "Two-letter country code. Only TR, DE, US and NL are in use, and it is part of the replica identity for the sync rule."
         required: true
       - name: tax_id
         logicalType: string
         physicalType: text
+        description: "Turkish tax identifier: TCKN for a sole trader, VKN for a company. Classified, so it is masked in sample rows and never leaves the source."
         required: true
         unique: true
         # integrations/odd/classify.py found TCKN and VKN in 100% of this
@@ -89,6 +93,7 @@ schema:
       - name: segment
         logicalType: string
         physicalType: text
+        description: "Commercial segment: SMB, MID or ENT. Optional -- a customer that has not been segmented yet has none."
 
     quality:
       - type: sql

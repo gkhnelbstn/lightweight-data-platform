@@ -36,3 +36,4 @@ else rests on** — it is last because it was written last.
 | [0009](0009-fork-odd-platform-ui.md) | Fork ODD's UI to host the contract panel | ODD grows an extension point |
 | [0010](0010-rule-vocabulary-and-the-token.md) | Rules from a fixed vocabulary; the token guards only raw SQL | a real identity provider is in front |
 | [0011](0011-carried-patches.md) | Patches we carry for upstream projects | each PR merges |
+| [0013](0013-fill-the-catalogue-from-the-contract.md) | The catalogue is filled from the contract | ODD imports ODCS directly |

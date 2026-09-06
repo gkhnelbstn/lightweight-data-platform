@@ -67,22 +67,27 @@ schema:
       - name: customer_id
         logicalType: integer
         physicalType: bigint
+        description: "The customer this order belongs to. A foreign key into customers; nulls here break every revenue-by-customer report."
         required: true
       - name: order_date
         logicalType: date
         physicalType: date
+        description: "The date the order was placed, as the ERP recorded it. Not the date it arrived here -- that is loaded_at."
         required: true
       - name: status
         logicalType: string
         physicalType: text
+        description: "Where the order is in its lifecycle: OPEN, SHIPPED, INVOICED or CANCELLED. A cancelled order should carry no value."
         required: true
       - name: currency
         logicalType: string
         physicalType: text
+        description: "ISO currency the order is priced in: TRY, USD or EUR. Converting to one currency needs the FX rates in MongoDB."
         required: true
       - name: net_amount
         logicalType: number
         physicalType: numeric
+        description: "Order total excluding tax, in `currency`. Must equal the sum of its line amounts."
         required: true
 
     quality:

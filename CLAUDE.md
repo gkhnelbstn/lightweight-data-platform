@@ -13,12 +13,13 @@ our code is the best outcome available.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 92 tests, no database needed
+pytest -q                                                  # 107 tests, no database needed
 python seed/seed.py                                        # rebuild the demo ERP data
 python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
 python core/runner.py --odd-url http://odd-platform:8080   # ...and send it to ODD
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
+python integrations/odd/catalogue.py --url http://odd-platform:8080  # owner, docs, glossary
 uvicorn api.main:app --port 8077                           # UI + API
 python core/sync.py --check                                # validate the sync rules
 python core/sync.py --apply                                # publication + subscription
@@ -102,6 +103,10 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   untouched. The patch is two anchors in `DataQualityContent.tsx` and it
   **fails the build** when they move — do not soften that into a warning, and
   do not vendor their file.
+* ODD wants `{"tag_name_list": [...]}` to tag an entity and `{"tags": [...]}`
+  to tag a dataset field. Same platform, same release.
+* A catalogue field is filled from the contract, never by hand — see ADR 0013.
+  Adding a column means adding its description, and the tests enforce it.
 * Entity links are the one native place our pages belong. `POST` appends and
   there is no way to read an entity's links back, so `odd_links` remembers the
   ids and later runs `PUT`.

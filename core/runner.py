@@ -385,6 +385,7 @@ def push_to_odd(contract: dict, results: dict, url: str) -> int:
                                                     ensure_datasource, post)
     from integrations.odd.mapper import entity_list
 
+    from integrations.odd.catalogue import ensure_terms, fill
     from integrations.odd.entity_page import sync_links
 
     ds = dataset_oddrn(contract, "erp")
@@ -392,13 +393,15 @@ def push_to_odd(contract: dict, results: dict, url: str) -> int:
         mode="json", exclude_none=True)
     ensure_datasource(url)
     post(url, body)
-    # The way back to the pages ODD has no model for, on the table's own page
-    # rather than on another port. Not worth failing the run over: the results
+    # Everything a catalogue is for and a collector cannot know -- owner,
+    # purpose, column meanings, the vocabulary -- plus the way back to the
+    # pages ODD has no model for. Not worth failing the run over: the results
     # are already stored and already in ODD.
     try:
         sync_links(url, contract, ds)
+        fill(url, contract, ensure_terms(url))
     except Exception as e:
-        print(f"WARN {contract['id']}: links not updated ({e})", flush=True)
+        print(f"WARN {contract['id']}: catalogue not updated ({e})", flush=True)
     return len(body["items"])
 
 
