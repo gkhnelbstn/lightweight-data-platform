@@ -102,18 +102,24 @@ jobs:
         run: |
           python - <<'PY'
           from core import store
-          with store.connect() as cx:
-              blank = cx.execute(
-                  "select count(*) from check_results where name = ''"
-              ).fetchone()[0]
-              nosql = cx.execute(
-                  "select count(*) from check_results where sql is null"
-              ).fetchone()[0]
           # `name` is the rule in words and `sql` is what ran; the UI shows
           # both, and core/sample.py rewrites the second into the failing rows.
-          assert blank == 0, f"{blank} results with no name"
-          assert nosql == 0, f"{nosql} results with no sql"
-          print("every result carries its name and its statement")
+          # A check that *errored* never got as far as a statement, and that is
+          # an engineering failure rather than a measurement -- it is reported
+          # here but does not fail the build.
+          with store.connect() as cx:
+              blank = cx.execute(
+                  "select check_id from check_results where name = ''"
+              ).fetchall()
+              nosql = cx.execute(
+                  """select check_id, check_type, status from check_results
+                     where sql is null""").fetchall()
+          for row in nosql:
+              print("no statement:", row)
+          assert not blank, f"{len(blank)} results with no name: {blank[:5]}"
+          ran = [r for r in nosql if r[2] != "error"]
+          assert not ran, f"{len(ran)} completed checks with no statement: {ran[:5]}"
+          print("every completed result carries its name and its statement")
           PY
 
       - name: re-running a day replaces it
