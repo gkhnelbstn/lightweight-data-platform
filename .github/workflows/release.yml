@@ -52,6 +52,21 @@ jobs:
             ghcr.io/${{ github.repository }}/odd-collector:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ github.repository }}/odd-collector:latest
 
+      # ODD Platform with the contract panel on its Data Quality page. Only its
+      # UI jar differs from upstream -- see deploy/Dockerfile.odd-platform --
+      # but that makes it a fork, so it is published rather than rebuilt on
+      # every machine: the build clones upstream, generates their API client
+      # and runs vite, which is minutes, not seconds.
+      - name: odd-platform (contract panel)
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy
+          file: deploy/Dockerfile.odd-platform
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/odd-platform:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository }}/odd-platform:latest
+
   release:
     name: create the release
     needs: images

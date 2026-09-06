@@ -107,10 +107,26 @@ they are about 470 lines: `core/runner.py`, `core/store.py`,
    writes back once it has found them.
 
 Plus the one interface neither has: **an analyst can author a rule.** ODD's UI
-annotates what was ingested — there is no "create test" anywhere in it — and
-datacontract-cli is a CLI. `web/index.html` writes SQL, compiles it against
-the source without saving, shows what it would have caught, and then saves the
-rule back into the contract file.
+annotates what was ingested — there is no "create test" anywhere in it, because
+a test arrives through ingestion and belongs to whatever produced it — and
+datacontract-cli is a CLI. Writing SQL, compiling it against the source without
+saving, seeing what it would have caught, and saving it back into the contract
+file is the one thing this repository has that neither dependency does.
+
+**It lives on ODD's own Data Quality page**, not on a second port. ODD has no
+plugin system, no embed and no custom tab, so that is a fork — and a small one:
+the SPA ships as a single jar on the platform's classpath, so only the UI is
+rebuilt, with two lines against upstream and a panel of our own. No Gradle, no
+Java, no backend patch. `deploy/Dockerfile.odd-platform` says what it costs and
+when to retire it.
+
+![The contract panel on ODD's Data Quality page](docs/odd-data-quality-contracts.png)
+
+The panel is written against ODD's own components and type-checks against them,
+which is the point of forking rather than injecting: `tsc` caught a real bug in
+it before the image was ever built. Select a contract to see the rules behind
+its tests, add another — compiled against the source before it is saved — or
+open the rows a failing check counted.
 
 ![The contract UI](docs/contract-ui.png)
 
@@ -291,6 +307,8 @@ does not enter into it.
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
 | `integrations/odd/entity_page.py` | the links ODD shows on the table's own page |
 | `deploy/Dockerfile.odd-collector` | odd-collector plus two fixes to its Superset adapter |
+| `deploy/Dockerfile.odd-platform` | ODD with the contract panel on its Data Quality page |
+| `deploy/odd-platform-ui/` | that panel — React, in ODD's own design system |
 | `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
 | `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |
 | `docs/stack-choices.md` | which projects to depend on, with their health figures |

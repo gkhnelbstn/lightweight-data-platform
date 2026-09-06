@@ -56,7 +56,12 @@ services:
       retries: 20
 
   odd-platform:
-    image: ghcr.io/opendatadiscovery/odd-platform:latest
+    # ODD with the contract panel on its own Data Quality page. See
+    # deploy/Dockerfile.odd-platform for why this is a fork and how small it is.
+    build:
+      context: ./deploy
+      dockerfile: Dockerfile.odd-platform
+    image: lightweight-data-platform/odd-platform:0.29.0
     depends_on:
       odd-db: { condition: service_healthy }
     environment:
@@ -129,6 +134,9 @@ services:
       # The address ODD's links point at. Followed from a person's browser,
       # not from inside this network, so it is not `http://app:8077`.
       DQ_UI_URL: ${DQ_UI_URL:-http://localhost:8077}
+      # Where ODD Platform is served from, since its Data Quality page calls
+      # this API from the browser. Named rather than `*`.
+      DQ_CORS_ORIGINS: ${DQ_CORS_ORIGINS:-http://localhost:8080}
       # Rule authoring compiles and runs a person's SQL. Set a token or the
       # write routes refuse; generate one with `openssl rand -hex 32`.
       DQ_API_TOKEN: ${DQ_API_TOKEN:-}

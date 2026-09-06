@@ -22,6 +22,7 @@ from typing import Any
 import psycopg
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
@@ -32,6 +33,19 @@ from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
 from core.scoring import DIMENSION_WEIGHT
 
 app = FastAPI(title="Contract-driven data quality on ODD")
+
+# ODD Platform's own UI calls this API from its own origin -- the Contracts
+# panel on its Data Quality page is served by ODD and talks to us. A browser
+# calls that cross-origin, so the origins that may do it are named rather than
+# opened to `*`: writes are behind a bearer token, but reads would otherwise be
+# callable by any page the user happens to have open.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o for o in os.getenv(
+        "DQ_CORS_ORIGINS", "http://localhost:8080").split(",") if o],
+    allow_methods=["GET", "POST"],
+    allow_headers=["authorization", "content-type"],
+)
 
 DIMENSIONS = sorted(DIMENSION_WEIGHT)
 

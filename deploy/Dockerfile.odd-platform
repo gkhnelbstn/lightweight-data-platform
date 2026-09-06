@@ -1,0 +1,74 @@
+# ODD Platform with the contract panel on its own Data Quality page.
+#
+# ODD reports quality and cannot edit it: there is no "create test" anywhere in
+# its UI, because a test arrives through ingestion. The contract behind those
+# tests *is* editable, and the place that belongs is next to the dashboard
+# saying a check failed -- not on a second port a person has to be told about.
+# ODD has no plugin system, no embed and no custom tab, so this is a fork.
+#
+# It is deliberately the smallest fork that can work:
+#
+#   * only the UI is rebuilt. The SPA ships as `/app/libs/odd-platform-ui-*.jar`
+#     -- a plain Vite `dist/` under `static/` -- and the platform's own
+#     classpath file names it, so replacing that one file changes the UI and
+#     nothing else. No Gradle, no Java, no backend patch.
+#   * two lines against upstream, applied by a script that fails loudly when
+#     the anchor moves (deploy/odd-platform-dq-panel.mjs). Everything else is
+#     ours, in deploy/odd-platform-ui/.
+#
+# The cost is real and worth stating: this pins an ODD version, and every
+# upgrade means rebuilding and possibly re-reading their page. Retire it the
+# day ODD grows an extension point.
+#
+#   docker compose build odd-platform
+ARG ODD_VERSION=0.29.0
+
+# --- upstream, at the version we run -----------------------------------------
+FROM alpine/git:latest AS src
+ARG ODD_VERSION
+WORKDIR /src
+RUN git clone --depth 1 --branch ${ODD_VERSION} \
+      https://github.com/opendatadiscovery/odd-platform.git .
+
+# --- the TypeScript API client, which upstream does not commit ---------------
+FROM openapitools/openapi-generator-cli:v7.2.0 AS codegen
+WORKDIR /src
+COPY --from=src /src /src
+RUN /usr/local/bin/docker-entrypoint.sh generate \
+      -c odd-platform-ui/openapi-config.yaml
+
+# --- the UI, with our panel in it --------------------------------------------
+# Upstream's .nvmrc, not a rounder number: vite 7 and their toolchain
+# want it, and pnpm warns on every command otherwise.
+FROM node:24-alpine AS ui
+WORKDIR /src
+COPY --from=codegen /src /src
+COPY odd-platform-ui/ /src/odd-platform-ui/src/components/DataQuality/Contracts/
+COPY odd-platform-dq-panel.mjs /tmp/patch.mjs
+RUN node /tmp/patch.mjs /src
+WORKDIR /src/odd-platform-ui
+# pnpm is pinned rather than taken from corepack: the lockfile is version 9.0
+# and corepack hands out whatever is current, which rejects it under
+# --frozen-lockfile. A fork that cannot reproduce its own build is not a fork,
+# it is a snapshot. --ignore-scripts skips upstream's husky preinstall.
+RUN npm install --global --silent pnpm@9.15.9     && pnpm install --frozen-lockfile --ignore-scripts
+# `pnpm build` also runs the code generator, which needs a Docker socket. The
+# generation already happened in the stage above, so only the compile is run
+# here -- and `tsc` is kept, because a panel that type-checks against their
+# components is the point of forking rather than injecting.
+RUN pnpm tsc --noEmit && pnpm build-only
+
+# --- the jar the platform already expects on its classpath -------------------
+FROM alpine:3.20 AS pack
+ARG ODD_VERSION
+RUN apk add --no-cache zip
+WORKDIR /pack
+# `build/ui`, not `dist`: vite.config.ts sets outDir, and upstream's own
+# build.gradle does `from buildUI into 'static'` -- the same move this makes.
+COPY --from=ui /src/odd-platform-ui/build/ui/ ./static/
+RUN zip -qr /odd-platform-ui-${ODD_VERSION}.jar static \
+    && mv /odd-platform-ui-${ODD_VERSION}.jar /ui.jar
+
+FROM ghcr.io/opendatadiscovery/odd-platform:${ODD_VERSION}
+ARG ODD_VERSION
+COPY --from=pack /ui.jar /app/libs/odd-platform-ui-${ODD_VERSION}.jar

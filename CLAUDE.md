@@ -90,6 +90,12 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   published OpenAPI also disagrees with its own models — `metric_points` is a
   list, `timestamp` is epoch seconds — and the Overview card truncates values
   to integers. Do not try to publish the score there until that is fixed.
+* The contract panel lives inside ODD's Data Quality page and that is a fork
+  of `odd-platform-ui`. Keep it the smallest fork that works: the SPA is one
+  jar on the platform's classpath, so only the UI is rebuilt and the backend is
+  untouched. The patch is two anchors in `DataQualityContent.tsx` and it
+  **fails the build** when they move — do not soften that into a warning, and
+  do not vendor their file.
 * Entity links are the one native place our pages belong. `POST` appends and
   there is no way to read an entity's links back, so `odd_links` remembers the
   ids and later runs `PUT`.
