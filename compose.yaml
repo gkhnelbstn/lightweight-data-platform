@@ -161,7 +161,12 @@ services:
       MSSQL_AGENT_ENABLED: "true"
       # SQL Server takes what it is given; on a laptop that is the whole box.
       MSSQL_MEMORY_LIMIT_MB: "2048"
-    volumes: ["mssql-data:/var/opt/mssql"]
+    volumes:
+      - mssql-data:/var/opt/mssql
+      # The seed and the CDC script are run with sqlcmd *inside* this
+      # container, so they have to be reachable from in here.
+      - ./demo:/demo:ro
+      - ./deploy:/deploy:ro
     ports: ["1433:1433"]
     healthcheck:
       test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'select 1' || exit 1"]

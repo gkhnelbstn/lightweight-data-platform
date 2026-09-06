@@ -218,6 +218,28 @@ docker compose exec app python integrations/odd/push.py \
 * contract UI — http://localhost:8077
 * ODD — http://localhost:8080
 
+That is the Postgres half. The second source, the replication and the chain
+that ends at a dashboard are behind one profile:
+
+```bash
+docker compose --profile demo up -d              # SQL Server, MongoDB, Superset
+# note the inner quoting: the password lives in the container's environment,
+# so it has to be expanded there rather than by your shell
+docker compose exec -T mssql sh -c '/opt/mssql-tools18/bin/sqlcmd     -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -i /demo/mssql-seed.sql'
+docker compose exec app python demo/mongo-seed.py            # FX rates from a public API
+
+# change data capture, and the sync rules the contracts carry
+docker compose exec -T mssql sh -c '/opt/mssql-tools18/bin/sqlcmd     -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -d erp -i /deploy/mssql-cdc.sql'
+docker compose exec app python core/sync.py --check          # nothing is created yet
+docker compose exec app python core/sync.py --apply
+docker compose exec app python core/sync_mssql.py --interval 30
+```
+
+* Superset — http://localhost:8088 (`admin` / `admin`)
+
+`--check` first is the habit worth keeping: it prints every statement it would
+run and every reason it will not.
+
 Column profiling is opt-in, because the image is 4.4 GB and idles at ~450 MB:
 
 ```bash
