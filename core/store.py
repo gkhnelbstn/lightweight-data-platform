@@ -55,6 +55,15 @@ create table if not exists odd_pushes (
   primary key (target, run_at)
 );
 
+-- How far core/sync_mssql.py has read each CDC change table. Restarting from
+-- the change table's minimum LSN would replay the whole retained window on
+-- every pass, so the position is stored rather than recomputed.
+create table if not exists sync_watermarks (
+  source text primary key,
+  lsn bytea not null,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists contract_scores (
   run_at date not null,
   contract_id text not null,

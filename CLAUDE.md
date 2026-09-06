@@ -7,12 +7,15 @@ the operating manual.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 19 tests, no database needed
+pytest -q                                                  # 64 tests, no database needed
 python seed/seed.py                                        # rebuild the demo ERP data
 python core/runner.py --backfill-days 44 --emit-artifacts  # rebuild history + artifacts
 python core/runner.py                                      # the daily unit (today)
 python integrations/odd/push.py --out artifacts/odd        # build + validate ODD payloads
 uvicorn api.main:app --port 8077                           # UI + API
+python core/sync.py --check                                # validate the sync rules
+python core/sync.py --apply                                # publication + subscription
+python core/sync_mssql.py --interval 30                    # SQL Server CDC -> Postgres
 ```
 
 Both databases come from the environment; nothing hardcodes a DSN:
@@ -63,6 +66,12 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   table; `MSSQL_AGENT_ENABLED` in compose.yaml is why the demo works.
 * A publication's column list is a privacy boundary, not an optimisation: a
   column outside it never reaches the replica. Keep classified columns out.
+* `fn_cdc_get_all_changes(..., 'all')` returns operations 1, 2 and 4 — no
+  before image. Ask for `'all update old'` or an update that changes an
+  identity column silently duplicates the row.
+* The `identity` widening in a `syncTo` rule is a *logical replication*
+  requirement. The CDC reader has whole rows and does not need it; a mutable
+  column in the identity breaks it there.
 
 ## Adding things
 

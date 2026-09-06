@@ -130,9 +130,37 @@ contract, is left out of the list, and so **does not exist in the replica at
 all** -- masking a column in the UI is no use if the whole column was copied
 into another database.
 
-For SQL Server the mechanism is CDC rather than logical decoding;
-`deploy/mssql-cdc.sql` turns it on, and it is the Agent -- not the T-SQL --
-that people forget.
+For SQL Server the mechanism is CDC rather than logical decoding.
+`deploy/mssql-cdc.sql` turns it on -- and it is the *Agent*, not the T-SQL,
+that people forget: `sp_cdc_enable_table` returns success with the Agent
+stopped and then nothing is ever captured.
+
+There is no native SQL Server to Postgres path, so `core/sync_mssql.py` is the
+one loop in this repository. It is still only a read -- `cdc.fn_cdc_get_all_
+changes_<instance>` is an ordinary function taking two LSNs -- and it adds no
+infrastructure, which is the sixth invariant's actual test: no Debezium, no
+Kafka, no connector runtime, one table scan from a stored watermark. Three
+things it does that a naive poller does not:
+
+* **A row that leaves the filter is deleted, not skipped.** Cancel an order
+  under `status <> 'CANCELLED'` and filtering the stream would simply not see
+  it, leaving the row in the target for ever. Nothing is filtered out of the
+  stream; the filter decides upsert *or delete*.
+* **It asks for the before image.** `fn_cdc_get_all_changes(..., 'all')`
+  returns operations 1, 2 and 4 only -- measured, not assumed. Without
+  `'all update old'` an update that changes an identity column cannot be
+  applied to the right row, and the order exists under both names.
+* **It takes an initial snapshot.** CDC records changes from the moment it was
+  enabled, so the first pass copies the table as it stands. The max LSN is read
+  *before* the snapshot, so anything changing during it is replayed rather than
+  lost -- upserts and deletes are both idempotent, so replaying costs nothing.
+
+The same `syncTo` rule describes both engines, but it does not mean quite the
+same thing in each, and assuming it did produced a wrong answer: the widened
+`identity` exists to satisfy logical replication, which matches an update
+against the replica identity alone. The CDC reader has whole rows and does not
+need it -- and putting a mutable column in the identity there actively broke
+it, because cancelling an order changed its key.
 
 ## Quick start
 
@@ -184,6 +212,7 @@ does not enter into it.
 | `core/store.py` | DDL, monthly partitions, writes |
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
 | `core/sync.py` | derive a Postgres publication/subscription from the contract |
+| `core/sync_mssql.py` | apply SQL Server's CDC change table to a Postgres target |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
 | `web/index.html` | single-file UI, no build step |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |

@@ -31,6 +31,28 @@ servers:
     schema: dbo
     driver: ODBC Driver 18 for SQL Server
     trustServerCertificate: true
+  # Where CDC changes are applied. SQL Server has no native path to Postgres,
+  # so core/sync_mssql.py reads the change table -- see deploy/mssql-cdc.sql.
+  - server: replica
+    type: postgres
+    host: db
+    port: 5432
+    database: erp_replica
+    schema: public
+
+customProperties:
+  - property: syncTo
+    value:
+      server: replica
+      filter: "status <> 'CANCELLED'"
+      # No widened identity here, unlike the Postgres rule. That widening
+      # exists to satisfy logical replication, which matches an update against
+      # the replica identity alone; core/sync_mssql.py reads whole rows from
+      # the change table and does not need it. Putting `status` in the identity
+      # actively broke it -- cancelling an order changed its key, so the delete
+      # looked for a row that no longer existed under that name.
+      identity: [order_id]
+      columns: [order_id, customer_id, order_date, currency, status, net_amount]
 
 schema:
   - name: sales_orders

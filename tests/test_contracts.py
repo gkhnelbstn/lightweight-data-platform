@@ -55,13 +55,17 @@ def test_every_quality_rule_declares_a_dimension(path: Path):
 def test_postgres_contracts_carry_a_daily_server():
     """The window is a second `servers` entry pointing at a schema of views.
     Without it a contract is scored over its whole history, which is the thing
-    that made the trend unreadable."""
+    that made the trend unreadable.
+
+    It is the *source* server that decides this. A contract can now also name a
+    replica it syncs to, and a Postgres replica behind a SQL Server source says
+    nothing about how the source is windowed.
+    """
     from core.runner import DAILY_SERVER
     for path in ODCS:
         doc = _load(path)
         servers = {s.get("server"): s for s in doc.get("servers", [])}
-        if not any(s.get("type") in ("postgres", "postgresql")
-                   for s in servers.values()):
+        if servers.get("erp", {}).get("type") not in ("postgres", "postgresql"):
             continue
         assert DAILY_SERVER in servers, f"{path.name} cannot be windowed"
         assert servers[DAILY_SERVER]["schema"] != servers["erp"]["schema"]
