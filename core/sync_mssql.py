@@ -196,8 +196,13 @@ def apply_changes(pg, schema: str, table: str, columns: list[str],
 
 
 def sync_once(contract: dict) -> dict:
-    from core.sync import _credentials, _server
+    from core.sync import _credentials, _server, unsound_identity
     rule = sync_rule(contract)
+    # Duplicates in the source do not fail here, they merge -- two orders
+    # become one row and nothing says so. Ask the checks first.
+    unsound = unsound_identity(contract, rule)
+    if unsound:
+        return {"contract": contract["id"], "refused": unsound}
     model = contract["schema"][0]
     source, target = _server(contract, "erp"), _server(contract, rule["server"])
     table = model.get("physicalName") or model["name"]

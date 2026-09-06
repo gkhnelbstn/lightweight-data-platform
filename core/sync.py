@@ -58,7 +58,8 @@ import sqlglot
 from psycopg import sql
 from sqlglot import exp
 
-from core.runner import load_contracts
+from core import store
+from core.runner import TABLE_SCOPED_TYPES, load_contracts
 
 IDENTITY_SUFFIX = "_sync_identity"
 # One slot per publication, created explicitly rather than by CREATE
@@ -130,6 +131,37 @@ def problems(model: dict, rule: dict) -> list[str]:
         out.append(f"{table}: the column list names {', '.join(unknown)}, "
                    f"which the contract does not declare")
     return out
+
+
+def unsound_identity(contract: dict, rule: dict) -> list[str]:
+    """Has the identity actually held, the last time anyone looked?
+
+    The contract *declares* a primary key; the checks measure whether it is
+    one. Both engines need it to be true and neither says so usefully when it
+    is not -- Postgres refuses to build the unique index with a message about
+    an index, and the CDC reader silently collapses the duplicates into one
+    row on upsert. So it is asked here, of the results the daily run already
+    stored.
+
+    Missing results are not a failure: a contract that has never run has
+    nothing to disagree with.
+    """
+    identity = set(identity_columns(contract["schema"][0], rule))
+    try:
+        with store.connect() as dq:
+            rows = dq.execute(
+                """select distinct on (check_id) check_id, field, status, reason
+                   from check_results
+                   where contract_id = %s and check_type = any(%s)
+                   order by check_id, run_at desc""",
+                (contract["id"], list(TABLE_SCOPED_TYPES))).fetchall()
+    except Exception as e:                       # no store yet, or unreachable
+        return [f"could not read the check results to confirm the identity: {e}"]
+    return [f"{field}: {reason or 'the uniqueness check is failing'} -- the "
+            f"identity does not hold, so replicating this table would merge "
+            f"rows that are not the same row"
+            for _, field, status, reason in rows
+            if status == "fail" and field in identity]
 
 
 def _identity_statements(model: dict, schema: str,
@@ -204,7 +236,8 @@ def plan(contract: dict) -> dict | None:
         render = lambda s: s.as_string(cx)  # noqa: E731
         return {
             "contract": contract["id"], "engine": "logical replication",
-            "publication": name, "problems": problems(model, rule),
+            "publication": name,
+            "problems": problems(model, rule) + unsound_identity(contract, rule),
             "source": [render(s) for s in
                        _identity_statements(model, source.get("schema", "public"), rule)]
                       + [render(publication_statement(
@@ -226,8 +259,12 @@ def _credentials() -> tuple[str, str]:
 def apply(contract: dict) -> dict:
     """Create the objects. Refuses outright if the rule has any problem."""
     p = plan(contract)
-    if not p or p.get("note"):
-        return p or {}
+    if not p:
+        return {}
+    if p.get("note"):
+        # Not logical replication, but the identity still has to hold.
+        p["problems"] = unsound_identity(contract, sync_rule(contract))
+        return p
     if p["problems"]:
         return p
     rule, model = sync_rule(contract), contract["schema"][0]

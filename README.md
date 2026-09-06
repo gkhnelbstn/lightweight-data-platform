@@ -120,7 +120,11 @@ created:
 1. The source needs a replica identity -- a unique index over NOT NULL columns.
    The contract already names it (`primaryKey`), **so a table whose uniqueness
    check is failing cannot be replicated safely.** That is not a coincidence;
-   it is the same fact twice.
+   it is the same fact twice, and it is enforced rather than remarked upon:
+   `--check` reads the stored results and refuses a table whose key has been
+   measured and does not hold. Neither engine says so usefully on its own --
+   Postgres refuses to build the index with a message about an index, and the
+   CDC reader silently merges the duplicates into one row.
 2. Every column in the row filter must be inside the replica identity, since an
    update is matched against the old row and the old row is only those columns.
    A rule may widen the identity to say so; it may never narrow it.

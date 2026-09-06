@@ -122,6 +122,25 @@ jobs:
           print("every completed result carries its name and its statement")
           PY
 
+      - name: a table whose key does not hold is refused for replication
+        run: |
+          python - <<'PY'
+          from core.runner import load_contracts
+          from core.sync import unsound_identity
+          by = {c["id"]: c for c in load_contracts()}
+          # sales_orders carries duplicate order_ids on purpose -- it is what
+          # the windowed-vs-unwindowed uniqueness argument is built on. A
+          # replica of it would merge two orders into one row and say nothing,
+          # so both engines refuse.
+          bad = unsound_identity(by["erp.sales_orders"], {})
+          good = unsound_identity(by["erp.customers"], {})
+          print("sales_orders:", bad)
+          print("customers:", good)
+          assert bad, "duplicate order_ids should block replication"
+          assert "order_id" in bad[0]
+          assert not good, f"customers should be replicable: {good}"
+          PY
+
       - name: re-running a day replaces it
         run: |
           python - <<'PY'
