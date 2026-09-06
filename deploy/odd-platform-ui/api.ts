@@ -97,6 +97,22 @@ export interface Sample {
   note?: string;
 }
 
+export interface SyncRule {
+  contract_id: string;
+  title: string;
+  engine: string;
+  identity: string[];
+  rule: { server: string; filter?: string; columns?: string[]; identity?: string[] };
+  problems: string[];
+  status?: {
+    engine?: string;
+    slot_active?: boolean;
+    worker_running?: boolean;
+    behind?: string | null;
+    unreachable?: string;
+  };
+}
+
 export interface RuleType {
   kind: string;
   dimension: string;
@@ -158,6 +174,8 @@ function authoring(draft: RuleDraft, token: string): RequestInit {
     body: JSON.stringify(draft),
   };
 }
+
+export const getSyncRules = () => json<SyncRule[]>('/api/sync');
 
 export const getRuleTypes = () =>
   json<{ rules: RuleType[]; dimensions: string[] }>('/api/rules/catalogue');

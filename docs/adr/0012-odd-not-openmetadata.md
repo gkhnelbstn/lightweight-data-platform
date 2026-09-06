@@ -33,10 +33,14 @@ it stores metadata, so the size of the source data does not enter into it.
 
 * ODD is thinner than OpenMetadata, and the gaps it leaves are why most of the
   other records in this directory exist. That trade was made knowingly.
-* **Column-level lineage is the one gap with no answer.** ODD's ingestion model
-  has no place for it — `DataTransformer` is dataset-level — so it cannot be
-  closed by writing more code here. Table-level lineage and the BI chain
-  ("which dashboards break") do work.
+* **Column-level lineage is the one gap with no answer.** Checked against
+  0.29.0 rather than remembered: `DataTransformer` carries `inputs`, `outputs`,
+  `sql` and `source_code_url` — lists of dataset ODDRNs — and the lineage the
+  API returns is `DataEntityLineageEdge {source_id, target_id}`. Entity to
+  entity, with no column anywhere in either. So it cannot be closed by writing
+  more code here; the model has no field to put it in. Table-level lineage, the
+  BI chain ("which dashboards break") and column-level *relationships* (foreign
+  keys, as `ERDRelationship`) all work.
 * ODD Platform is maintained by a bot plus roughly one human: 63 of its last 86
   commits are `odd-contributor[bot]`. `docs/stack-choices.md` has the figures.
   This is the real risk of the choice, and it is larger than the Elasticsearch

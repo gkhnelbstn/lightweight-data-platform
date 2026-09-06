@@ -147,6 +147,11 @@ than an injection, because the SQL is built from sqlglot expressions and never
 from a format string. The vocabulary lives in `core/rules.py` and the UI
 fetches it, so adding a rule kind is a change in one place.
 
+The score over time and the replication rules are on that page too, which is
+what finally retired the standalone UI on :8077 — it was a second copy of the
+same thing, and two of anything is two to maintain. That port now serves the
+API and a page saying where the panel is.
+
 Writing SQL by hand is still there as an escape hatch, and it is the only thing
 that needs the API token — the form does not, because a fixed vocabulary has
 nothing to smuggle in. **The token is not something to invent, either:** the
@@ -332,7 +337,7 @@ does not enter into it.
 | `core/sync_mssql.py` | apply SQL Server's CDC change table to a Postgres target |
 | `deploy/mssql-cdc.sql` | turn on SQL Server CDC for the demo tables |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
-| `web/index.html` | single-file UI, no build step |
+| `web/index.html` | a page saying the UI is in ODD, and listing the API routes |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
 | `integrations/odd/entity_page.py` | the links ODD shows on the table's own page |
 | `integrations/odd/curate.py` | owner, purpose, column meanings, glossary, query examples |
@@ -470,9 +475,11 @@ version of this list said "adopt ODCS and let `datacontract test` derive the
 checks" and "add authentication"; both are done, and what is left is smaller
 and mostly other people's to merge.
 
-1. **Column-level lineage.** The one thing here with no answer. ODD's
-   ingestion model has no place for it — `DataTransformer` is dataset-level —
-   so it is not something we can add by writing more code. OpenMetadata has
+1. **Column-level lineage.** The one thing here with no answer, and checked
+   against 0.29.0 rather than assumed: `DataTransformer` carries lists of
+   dataset ODDRNs, and a lineage edge is `{source_id, target_id}`. There is no
+   field for a column in either, so this is not something we can add by
+   writing more code. OpenMetadata has
    it and requires Elasticsearch or OpenSearch, which is a cost we have
    already declined. The rule for revisiting is that requirement disappearing,
    not the feature looking attractive.

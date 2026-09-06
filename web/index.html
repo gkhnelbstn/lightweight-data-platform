@@ -1,382 +1,50 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Veri Kalitesi — Kontrat Odaklı</title>
+<title>Contract quality — the UI moved into ODD</title>
 <style>
-  :root{
-    --bg:#0f1115; --panel:#161a21; --panel2:#1c212a; --line:#252b36;
-    --fg:#e6e9ef; --mut:#8d96a8; --acc:#4c8dff;
-    --ok:#3ecf8e; --warn:#f0b429; --bad:#f2585b;
-    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);font-size:14px}
-  header{padding:20px 28px;border-bottom:1px solid var(--line);display:flex;
-    align-items:baseline;gap:14px;flex-wrap:wrap}
-  h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.2px}
-  .sub{color:var(--mut);font-size:12.5px}
-  main{padding:22px 28px;max-width:1240px;margin:0 auto}
-  .grid{display:grid;gap:16px}
-  .cols{grid-template-columns:1fr 1fr}
-  @media(max-width:980px){.cols{grid-template-columns:1fr}}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-    padding:16px 18px}
-  .card h2{font-size:13px;margin:0 0 12px;font-weight:600;color:var(--mut);
-    text-transform:uppercase;letter-spacing:.6px}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);
-    font-size:13px;vertical-align:top}
-  th{color:var(--mut);font-weight:500;font-size:11.5px;text-transform:uppercase;
-    letter-spacing:.5px}
-  tr:last-child td{border-bottom:none}
-  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
-    font-weight:600;white-space:nowrap}
-  .d-completeness,.d-uniqueness{background:rgba(76,141,255,.15);color:#8fb6ff}
-  .d-consistency,.d-accuracy{background:rgba(240,180,41,.15);color:var(--warn)}
-  .d-conformity,.d-schema{background:rgba(62,207,142,.15);color:var(--ok)}
-  .d-timeliness,.d-coverage{background:rgba(186,120,255,.16);color:#c79bff}
-  .d-unknown{background:rgba(141,150,168,.15);color:var(--mut)}
-  .bad{color:var(--bad)} .ok{color:var(--ok)} .muted{color:var(--mut)}
-  .score{font-variant-numeric:tabular-nums;font-weight:600}
-  .strip{display:flex;gap:1.5px}
-  .strip i{width:4px;height:15px;border-radius:1px;background:var(--ok);display:block}
-  .strip i.f{background:var(--bad)} .strip i.e{background:var(--warn)}
-  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
-    border-radius:7px;padding:7px 12px;font-size:13px;cursor:pointer}
-  button:hover{border-color:var(--acc)}
-  button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
-  input,textarea,select{width:100%;background:#10141b;color:var(--fg);
-    border:1px solid var(--line);border-radius:7px;padding:8px 10px;
-    font-size:13px;font-family:inherit}
-  textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;min-height:110px}
-  label{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;
-    text-transform:uppercase;letter-spacing:.5px}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .kpi{font-size:30px;font-weight:650;font-variant-numeric:tabular-nums}
-  code{font-family:ui-monospace,Menlo,monospace;font-size:12px;
-    background:#10141b;padding:1px 5px;border-radius:4px;color:#b8c4dc}
-  pre{background:#10141b;border:1px solid var(--line);border-radius:8px;
-    padding:12px;overflow:auto;font-size:12px;max-height:220px;margin:8px 0 0}
-  .clickable{cursor:pointer} .clickable:hover>td{background:var(--panel2)}
-  .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
-  .tabs button.on{border-color:var(--acc);color:var(--acc)}
-  .drawer td{background:#12161d;padding:14px 16px}
-  .scroll{overflow-x:auto}
-  .scroll table{min-width:max-content;font-size:12px}
-  .scroll td,.scroll th{white-space:nowrap;padding:5px 9px}
-  .mask{color:var(--warn);letter-spacing:2px}
-  .tag{font-size:10.5px;color:var(--mut);border:1px solid var(--line);
-    border-radius:5px;padding:1px 5px;margin-left:5px}
+  :root{ color-scheme:dark; font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif }
+  body{ margin:0; display:grid; place-items:center; min-height:100vh; padding:24px;
+        background:#0f1115; color:#e6e9ef }
+  main{ max-width:580px }
+  h1{ font-size:20px; margin:0 0 6px }
+  p{ color:#8d96a8; font-size:14px; line-height:1.6 }
+  a.go{ display:inline-block; margin:16px 0 22px; padding:9px 14px; border-radius:8px;
+        background:#4c8dff; color:#fff; text-decoration:none; font-size:14px }
+  code{ font-family:ui-monospace,Menlo,monospace; font-size:12.5px;
+        background:#161a21; padding:1px 5px; border-radius:4px; color:#b8c4dc }
+  ul{ padding-left:18px; color:#8d96a8; font-size:13.5px; line-height:1.75 }
 </style>
 </head>
 <body>
-<header>
-  <h1>Kontrat Odaklı Veri Kalitesi</h1>
-  <span class="sub">ODCS kontrat → datacontract test → günlük pencere → skor → ODD</span>
-  <span class="sub" style="margin-left:auto" id="asof"></span>
-</header>
-<main class="grid">
-  <div class="grid cols">
-    <div class="card">
-      <h2>Platform skoru (günlük, artımlı pencere)</h2>
-      <div class="row" style="align-items:flex-end;gap:18px">
-        <div><div class="kpi" id="kpi">—</div><div class="sub" id="kpiSub"></div></div>
-        <div style="flex:1;min-width:220px" id="chart"></div>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Açık bulgular — son koşu</h2>
-      <div class="sub" style="margin:-6px 0 8px">Satıra tıkla: kuralı takan
-        satırları getirir.</div>
-      <table id="failures"><tbody></tbody></table>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Kontratlar</h2>
-    <table id="contracts">
-      <thead><tr><th>Kontrat</th><th>Kaynak</th><th>Alan / Kural</th>
-        <th>Skor</th><th>SLA</th><th>Testler</th></tr></thead><tbody></tbody></table>
-  </div>
-
-  <div class="card" id="sync" hidden>
-    <h2>Senkron kuralları</h2>
-    <div class="sub" style="margin:-6px 0 10px">Kontrat nereye replike
-      edileceğini söyler; motor Postgres'in kendi logical replication'ı ya da
-      SQL Server CDC'si. Akışta bizden bir şey yok.</div>
-    <table id="synct"><thead><tr><th>Kontrat</th><th>Hedef</th><th>Kural</th>
-      <th>Kimlik</th><th>Durum</th></tr></thead><tbody></tbody></table>
-  </div>
-
-  <div class="card" id="detail" hidden></div>
+<main>
+  <h1>The contract panel lives inside ODD</h1>
+  <p>
+    Contracts, their rules, the rows a failing check counted and the replication
+    rules are on <strong>ODD Platform's own Data Quality page</strong> &mdash;
+    next to the dashboard that says a check failed, rather than on a second
+    port. This page used to be a second copy of that, and two of anything is
+    two to maintain.
+  </p>
+  <a class="go" id="odd" href="http://localhost:8080/data-quality">Open Data Quality in ODD &rarr;</a>
+  <p>This port is the API the panel talks to. The routes worth knowing:</p>
+  <ul>
+    <li><code>GET /api/overview</code> &mdash; scores, the trend, open failures</li>
+    <li><code>GET /api/contracts/{id}</code> &mdash; one contract, its rules and checks</li>
+    <li><code>GET /api/checks/{id}/sample</code> &mdash; the rows a check failed on</li>
+    <li><code>GET /api/rules/catalogue</code> &mdash; the rules a form can offer</li>
+    <li><code>POST /api/rules/structured</code> &mdash; add a rule without writing SQL</li>
+    <li><code>GET /api/sync</code> &mdash; the replication rules, and whether they run</li>
+  </ul>
+  <p>The full list is at <a href="/docs" style="color:#4c8dff">/docs</a>.</p>
 </main>
-
 <script>
-const $ = (s,r=document)=>r.querySelector(s);
-const esc = s => String(s??'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-const fmt = n => (n===null||n===undefined) ? "—" : Number(n).toFixed(3);
-const dim = d => `<span class="pill d-${esc(d||'unknown')}">${esc(d||'unknown')}</span>`;
-const cssId = s => String(s).replace(/[^a-zA-Z0-9]/g,'_');
-const tok = () => localStorage.getItem('dq_token')||'';
-
-let STATE = {overview:null, contract:null, tab:'checks'};
-
-function line(series, w=420, h=90){
-  if(!series.length) return "";
-  const xs=i=> 4 + i*(w-8)/Math.max(1,series.length-1);
-  const lo=Math.min(...series.map(p=>+p.score))-0.01, hi=1.0;
-  const ys=v=> h-6 - ((v-lo)/Math.max(0.0001,hi-lo))*(h-16);
-  const d=series.map((p,i)=>`${i?'L':'M'}${xs(i).toFixed(1)},${ys(+p.score).toFixed(1)}`).join(' ');
-  const area=`${d}L${xs(series.length-1).toFixed(1)},${h}L4,${h}Z`;
-  const pts=series.map((p,i)=>+p.score<0.95
-    ? `<circle cx="${xs(i).toFixed(1)}" cy="${ys(+p.score).toFixed(1)}" r="2.6" fill="#f2585b"><title>${p.run_at}: ${fmt(p.score)}</title></circle>` : '').join('');
-  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}">
-    <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1">
-      <stop offset="0" stop-color="#4c8dff" stop-opacity=".35"/>
-      <stop offset="1" stop-color="#4c8dff" stop-opacity="0"/></linearGradient></defs>
-    <path d="${area}" fill="url(#g)"/><path d="${d}" fill="none" stroke="#4c8dff" stroke-width="1.8"/>
-    ${pts}</svg>`;
-}
-
-const strip = h => `<div class="strip">${h.map(x=>
-  `<i class="${x.status==='fail'?'f':x.status==='error'?'e':''}" title="${x.run_at}: ${x.status} (${x.failed_rows})"></i>`).join('')}</div>`;
-
-async function load(){
-  const o = STATE.overview = await (await fetch('/api/overview')).json();
-  const last = o.trend.at(-1);
-  $('#asof').textContent = last ? `son koşu: ${last.run_at}` : 'henüz koşu yok';
-  $('#kpi').textContent = last ? fmt(last.score) : '—';
-  const bad = o.contracts.filter(c=>c.sla_met===false).length;
-  const err = o.contracts.reduce((n,c)=>n+(c.checks_errored||0),0);
-  $('#kpiSub').innerHTML = `${o.contracts.length} kontrat · ${bad} SLA ihlali · ${
-    o.trend.length} günlük geçmiş${err?` · <span class="bad">${err} kontrol çalışamadı</span>`:''}`;
-  $('#chart').innerHTML = line(o.trend);
-
-  $('#failures tbody').innerHTML = o.open_failures.length ? o.open_failures.map(f=>`
-    <tr class="clickable" data-check="${esc(f.check_id)}">
-      <td>${dim(f.dimension)}</td>
-      <td><b>${esc(f.name||f.check_id.split('.').pop())}</b>
-          <div class="sub">${esc(f.reason||'')}</div></td>
-      <td style="text-align:right" class="bad">${f.failed_rows}${f.total_rows?`<span class="sub">/${f.total_rows}</span>`:''}</td>
-    </tr>
-    <tr class="drawer" id="dr-f-${cssId(f.check_id)}" hidden><td colspan="3"></td></tr>`).join('')
-    : `<tr><td class="muted">Son koşuda açık bulgu yok.</td></tr>`;
-  bindSamples('#failures', 'f');
-
-  $('#contracts tbody').innerHTML = o.contracts.map(c=>`
-    <tr class="clickable" data-id="${esc(c.id)}">
-      <td><b>${esc(c.title)}</b><div class="sub">${esc(c.id)}</div></td>
-      <td><code>${esc(c.source_table)}</code><span class="tag">${esc(c.server_type)}</span></td>
-      <td class="sub">${c.properties} alan · ${c.rules} kural</td>
-      <td class="score ${c.sla_met?'ok':'bad'}">${fmt(c.score)}</td>
-      <td class="sub">≥ ${fmt(c.sla_min)}</td>
-      <td>${c.checks_total==null?'—':`${c.checks_total-c.checks_failed-(c.checks_errored||0)}/${c.checks_total} geçti`}
-          ${c.checks_errored?`<div class="sub bad">${c.checks_errored} kontrol çalışamadı</div>`:''}</td>
-    </tr>`).join('');
-  document.querySelectorAll('#contracts tbody tr').forEach(tr=>
-    tr.onclick=()=>detail(tr.dataset.id));
-
-  syncCard();
-  const worst=[...o.contracts].sort((a,b)=>(+a.score||1)-(+b.score||1))[0];
-  const keep = STATE.contract && STATE.contract.contract && STATE.contract.contract.id;
-  if(worst) await detail(keep || worst.id);
-
-  // Deep links, because ODD points at these from a table's own page: #check=
-  // opens a failing check's rows, #contract= opens one contract, #sync scrolls
-  // to the replication rules. A failing check is then a link someone can paste
-  // into a ticket rather than a set of directions.
-  const hash = location.hash;
-  const check = decodeURIComponent((hash.match(/^#check=(.+)$/)||[])[1]||'');
-  if(check) await toggleSample('f', check);
-  const which = decodeURIComponent((hash.match(/^#contract=(.+)$/)||[])[1]||'');
-  if(which){ await detail(which); $('#detail').scrollIntoView({block:'start'}); }
-  if(hash === '#sync') $('#sync').scrollIntoView({block:'start'});
-}
-
-// The same check is listed in both tables, so the drawer's id carries which
-// table it belongs to -- without it querySelector finds the first one and a
-// click in the contract detail opens a drawer up in the overview.
-async function syncCard(){
-  let rows;
-  try { rows = await (await fetch('/api/sync')).json(); } catch { return; }
-  if(!Array.isArray(rows) || !rows.length) return;
-  $('#sync').hidden = false;
-  $('#synct tbody').innerHTML = rows.map(r=>{
-    const st = r.status || {};
-    const live = st.worker_running===true && st.slot_active===true;
-    const label = st.engine && st.engine!=='logical replication'
-      ? `<span class="pill d-unknown">${esc(st.engine)} CDC</span>`
-      : live ? `<span class="pill d-conformity">akıyor</span>
-                <span class="sub">${esc(st.behind||'')} geride</span>`
-             : `<span class="pill d-consistency">uygulanmadı</span>`;
-    return `<tr>
-      <td><b>${esc(r.title)}</b><div class="sub">${esc(r.contract_id)}</div></td>
-      <td><code>${esc(r.rule.server)}</code></td>
-      <td class="sub">${r.rule.filter?`<code>${esc(r.rule.filter)}</code>`:'tümü'}
-        <div class="sub">kolonlar: ${(r.rule.columns||['*']).map(esc).join(', ')}</div></td>
-      <td class="sub"><code>${(r.identity||[]).map(esc).join(', ')}</code></td>
-      <td>${label}${(r.problems||[]).map(p=>
-        `<div class="sub bad">! ${esc(p)}</div>`).join('')}</td></tr>`;
-  }).join('');
-}
-
-function bindSamples(root, pfx){
-  document.querySelectorAll(`${root} tr[data-check]`).forEach(tr=>
-    tr.onclick = () => toggleSample(pfx, tr.dataset.check));
-}
-
-async function toggleSample(pfx, checkId){
-  const dr = $(`#dr-${pfx}-${cssId(checkId)}`);
-  if(!dr) return;
-  if(!dr.hidden){ dr.hidden = true; return; }
-  dr.hidden = false;
-  const cell = dr.querySelector('td');
-  cell.innerHTML = '<span class="sub">yükleniyor…</span>';
-  let s;
-  try { s = await (await fetch(`/api/checks/${encodeURIComponent(checkId)}/sample`)).json(); }
-  catch(e){ cell.innerHTML = `<span class="bad">alınamadı: ${esc(e)}</span>`; return; }
-  if(s.detail){ cell.innerHTML = `<span class="bad">${esc(s.detail)}</span>`; return; }
-  cell.innerHTML = sampleView(s);
-}
-
-function sampleView(s){
-  const head = `<div class="row sub" style="margin-bottom:8px">
-      <span>${esc(s.run_at||'')}</span>
-      <span>kapsam: <code>${esc(s.scope||'—')}</code></span>
-      <span>kayıtlı hatalı satır: <b class="${s.failed_rows?'bad':'ok'}">${s.failed_rows??'—'}</b></span>
-      ${s.masked&&s.masked.length?`<span class="mask">•••</span><span>maskeli: ${s.masked.map(esc).join(', ')} — kontratta <code>classification</code></span>`:''}
-    </div>`;
-  if(s.note) return head + `<div class="sub">${esc(s.note)}</div><pre>${esc(s.sql||'')}</pre>`;
-  const body = s.rows.length ? `<div class="scroll"><table>
-      <thead><tr>${s.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead>
-      <tbody>${s.rows.map(r=>`<tr>${r.map(v=>
-        `<td class="${v==='•••'?'mask':''}">${v===null?'<span class="muted">null</span>':esc(v)}</td>`).join('')}</tr>`).join('')}
-      </tbody></table></div>`
-    : `<div class="sub">Bu pencerede kuralı takan satır yok.</div>`;
-  return head + body + `<div class="sub" style="margin-top:10px">Çalışan sorgu —
-    kontrolün kendi SQL'i, saydığı satırları döndürecek şekilde yeniden yazıldı:</div>
-    <pre>${esc(s.sql||'')}</pre>`;
-}
-
-async function detail(id){
-  const d = STATE.contract = await (await fetch(`/api/contracts/${encodeURIComponent(id)}`)).json();
-  const hist = {}; d.history.forEach(h=>(hist[h.check_id] ||= []).push(h));
-  const el = $('#detail'); el.hidden=false;
-  const t = STATE.tab;
-  el.innerHTML = `
-    <h2>${esc(d.contract.title)} — <code>${esc(d.file)}</code></h2>
-    <div class="tabs">
-      <button class="${t==='checks'?'on':''}" onclick="tab('checks')">Testler (${d.checks.length})</button>
-      <button class="${t==='schema'?'on':''}" onclick="tab('schema')">Şema (${d.properties.length})</button>
-      <button class="${t==='rules'?'on':''}" onclick="tab('rules')">Kurallar (${d.rules.length})</button>
-      <button class="${t==='new'?'on':''}" onclick="tab('new')">+ Kural ekle</button>
-    </div>
-    <div id="tabbody"></div>`;
-  $('#tabbody').innerHTML = {checks:checksTab, schema:schemaTab,
-                             rules:rulesTab, new:newTab}[t](d, hist);
-  if(t==='checks') bindSamples('#tabbody', 'c');
-}
-function tab(name){ STATE.tab=name; detail(STATE.contract.contract.id); }
-
-function checksTab(d, hist){
-  return `<div class="sub" style="margin-bottom:10px">Testlerin hiçbiri elle
-    yazılmadı: <code>datacontract test</code> bunları kontrattaki alanlardan ve
-    kalite kurallarından türetti. Satıra tıkla → takılan satırlar.</div>
-  <table><thead><tr><th>Test</th><th>Boyut</th><th>Tür</th><th>Son sonuç</th>
-    <th>Geçmiş</th></tr></thead><tbody>
-    ${d.checks.map(c=>`
-      <tr class="clickable" data-check="${esc(c.check_id)}">
-        <td><b>${esc(c.name||c.check_id)}</b>
-            <div class="sub">${esc(c.reason||'')}</div></td>
-        <td>${dim(c.dimension)}</td>
-        <td class="sub"><code>${esc(c.check_type||'—')}</code>${c.field?`<span class="tag">${esc(c.field)}</span>`:''}</td>
-        <td class="${c.status==='pass'?'ok':'bad'}">${c.status==='pass'?'geçti'
-          :`${c.failed_rows}${c.total_rows?'/'+c.total_rows:''} satır`}</td>
-        <td>${strip(hist[c.check_id]||[])}</td></tr>
-      <tr class="drawer" id="dr-c-${cssId(c.check_id)}" hidden><td colspan="5"></td></tr>`).join('')}
-  </tbody></table>`;
-}
-
-function schemaTab(d){
-  return `<div class="sub" style="margin-bottom:10px">Kontratın beyan ettiği
-    şema. <code>required</code>, <code>unique</code> ve <code>primaryKey</code>
-    doğrudan teste dönüşür; <code>classification</code> ise örnek satırlarda
-    maskelenir.</div>
-  <table><thead><tr><th>Alan</th><th>Mantıksal</th><th>Fiziksel</th>
-    <th>Kısıt</th><th>Sınıflandırma</th></tr></thead><tbody>
-  ${d.properties.map(p=>`<tr>
-    <td><code>${esc(p.name)}</code></td>
-    <td class="sub">${esc(p.logicalType||'')}</td>
-    <td class="sub">${esc(p.physicalType||'')}</td>
-    <td class="sub">${[p.required&&'required',p.unique&&'unique',
-        p.primaryKey&&'primaryKey'].filter(Boolean).join(' · ')||'—'}</td>
-    <td>${p.classification?`<span class="pill d-timeliness">${esc(p.classification)}</span>`:'<span class="muted">—</span>'}</td>
-  </tr>`).join('')}</tbody></table>`;
-}
-
-function rulesTab(d){
-  if(!d.rules.length) return `<div class="sub">Bu kontratta elle yazılmış kural yok.</div>`;
-  return d.rules.map(r=>`<div style="margin-bottom:14px">
-    <div class="row"><b>${esc(r.description||'')}</b>${dim(r.dimension)}
-      <span class="sub">mustBe ${esc(r.mustBe??0)}</span></div>
-    <pre>${esc(r.query||'')}</pre></div>`).join('');
-}
-
-function newTab(d){
-  return `<div class="sub" style="margin-bottom:10px">Kaydedilen kural
-    <code>${esc(d.file)}</code> dosyasına ODCS <code>quality</code> girdisi
-    olarak yazılır ve kontrat yeniden koşar. Kontrat tek doğruluk kaynağı;
-    burası onun editörü.</div>
-  <div class="grid cols">
-    <div><label>Açıklama (testin adı olur)</label>
-      <input id="rdesc" value="ornek: iptal siparis tutar tasimamali"/></div>
-    <div><label>Boyut (skoru ağırlıklandırır)</label><select id="rdim">
-      ${(STATE.overview.dimensions||[]).map(x=>`<option ${x==='conformity'?'selected':''}>${esc(x)}</option>`).join('')}
-    </select></div>
-  </div>
-  <label>SQL — tek sayı döndürmeli (hatalı satır sayısı)</label>
-  <textarea id="rsql">select count(*) from ${esc(d.contract.source_table)}
-where status = 'CANCELLED' and net_amount &lt;&gt; 0</textarea>
-  <label>API token (DQ_API_TOKEN) — yazma uçları token'sız 503 döner</label>
-  <input id="rtok" type="password" value="${esc(tok())}" placeholder="openssl rand -hex 32"/>
-  <div class="row" style="margin-top:10px">
-    <button onclick="previewRule()">Önizle</button>
-    <button class="primary" onclick="saveRule()">Kaydet ve koş</button>
-  </div>
-  <div id="prev" style="margin-top:12px"></div>`;
-}
-
-function draft(){
-  localStorage.setItem('dq_token', $('#rtok').value);
-  return {contract_id:STATE.contract.contract.id, description:$('#rdesc').value,
-          query:$('#rsql').value, dimension:$('#rdim').value, must_be:0};
-}
-const authed = () => ({'content-type':'application/json',
-                       'authorization':`Bearer ${$('#rtok').value}`});
-
-async function previewRule(){
-  const res = await fetch('/api/rules/preview',
-    {method:'POST', headers:authed(), body:JSON.stringify(draft())});
-  const r = await res.json();
-  if(!res.ok){ $('#prev').innerHTML=`<div class="bad">${esc(r.detail||res.status)}</div>`; return; }
-  $('#prev').innerHTML = r.ok
-    ? `<div class="row"><span class="pill d-conformity">derlendi</span>
-       <span class="sub">sonuç: <b>${esc(r.result)}</b> · hatalı satır:
-       <b class="${r.failed_rows?'bad':'ok'}">${r.failed_rows??'—'}</b></span></div>
-       <pre>${esc(r.compiled_sql||'')}</pre>`
-    : `<div class="bad">${esc(r.error||r.reason||'kural derlenmedi')}</div>`;
-}
-
-async function saveRule(){
-  const res = await fetch('/api/rules',
-    {method:'POST', headers:authed(), body:JSON.stringify(draft())});
-  const r = await res.json();
-  if(!res.ok){ $('#prev').innerHTML=`<div class="bad">${esc(r.detail||res.status)}</div>`; return; }
-  STATE.tab='checks';
-  await load();
-}
-load();
+  // Same host as this page, ODD's port -- beats hardcoding localhost for
+  // anyone reaching this from another machine.
+  document.getElementById('odd').href =
+    `${location.protocol}//${location.hostname}:8080/data-quality`;
 </script>
-</body></html>
+</body>
+</html>

@@ -50,8 +50,10 @@ non-async state updater before the image was ever built.
 * The API base URL is resolved at runtime (`location.hostname:8077`, overridable
   by `window.__DQ_API__`) rather than baked in by Vite, so one image works
   everywhere.
-* `web/index.html` still exists and is now a second UI. It is useful when ODD
-  is not running; it is also double maintenance.
+* `web/index.html` was a second UI for a while and is not any more. Once the
+  score trend and the replication rules moved into the panel it had nothing of
+  its own left, and two of anything is two to maintain. That port now serves
+  the API and a page saying where the panel is.
 
 ## On upgrade
 

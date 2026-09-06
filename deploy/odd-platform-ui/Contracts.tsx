@@ -9,12 +9,14 @@ import type {
   RuleType,
   Sample,
   StructuredRule,
+  SyncRule,
 } from './api';
 import {
   getContract,
   getOverview,
   getRuleTypes,
   getSample,
+  getSyncRules,
   previewRule,
   previewStructured,
   saveRule,
@@ -98,6 +100,9 @@ export const Contracts: React.FC = () => {
 
   return (
     <>
+      <Typography variant='h4'>Contract quality over time</Typography>
+      <Trend points={overview.trend} />
+
       <Typography variant='h4'>Contracts</Typography>
       <Typography variant='subtitle2' color='texts.secondary'>
         The tests above are derived from these. Select one to see its rules, add
@@ -192,6 +197,8 @@ export const Contracts: React.FC = () => {
           })}
         </S.Panel>
       )}
+
+      <SyncRules />
     </>
   );
 };
@@ -234,6 +241,126 @@ const Rows: React.FC<{ sample: Sample }> = ({ sample }) => (
     {sample.sql && <S.Sql>{sample.sql}</S.Sql>}
   </S.Panel>
 );
+
+/**
+ * The daily score, as a line.
+ *
+ * ODD's own Data Quality page counts tests; it has nowhere to put a weighted
+ * score over time, because its run model has no numeric field. This is the
+ * one chart that was only on the standalone page, and the reason that page
+ * could not simply be deleted until now.
+ */
+const Trend: React.FC<{ points: { run_at: string; score: string | number }[] }> = ({
+  points,
+}) => {
+  if (points.length < 2) return null;
+  const w = 420;
+  const h = 72;
+  const values = points.map(p => Number(p.score));
+  const lo = Math.min(...values) - 0.01;
+  const hi = 1;
+  const x = (i: number) => 2 + (i * (w - 4)) / (points.length - 1);
+  const y = (v: number) => h - 4 - ((v - lo) / Math.max(0.0001, hi - lo)) * (h - 12);
+  const path = values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const last = values[values.length - 1] ?? 0;
+
+  return (
+    <S.Actions>
+      <div>
+        <Typography variant='h1'>{last.toFixed(3)}</Typography>
+        <Typography variant='caption' color='texts.secondary'>
+          {points.length} days · dimension-weighted
+        </Typography>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} width='100%' height={h} style={{ maxWidth: w }}>
+        <path d={path} fill='none' stroke='currentColor' strokeWidth='1.6' opacity={0.7} />
+        {values.map((v, i) =>
+          v < 0.95 ? (
+            // eslint-disable-next-line react/no-array-index-key
+            <circle key={i} cx={x(i)} cy={y(v)} r='2.4' fill='currentColor'>
+              <title>{`${points[i]?.run_at}: ${v.toFixed(3)}`}</title>
+            </circle>
+          ) : null
+        )}
+      </svg>
+    </S.Actions>
+  );
+};
+
+/**
+ * The replication rules, and whether they are actually running.
+ *
+ * A dead apply worker and a quiet one look identical from the outside, which
+ * is the whole reason this reports `slot_active` and `worker_running` rather
+ * than just the rule.
+ */
+const SyncRules: React.FC = () => {
+  const [rows, setRows] = useState<SyncRule[] | null>(null);
+
+  useEffect(() => {
+    getSyncRules().then(setRows).catch(() => setRows([]));
+  }, []);
+
+  if (!rows || rows.length === 0) return null;
+
+  return (
+    <>
+      <Typography variant='h4'>Replication</Typography>
+      <Typography variant='subtitle2' color='texts.secondary'>
+        The contract says where its table is replicated to; the engine is the
+        database&apos;s own. Nothing of ours sits in the stream.
+      </Typography>
+      <div>
+        <S.HeaderRow>
+          <Typography variant='caption'>Contract</Typography>
+          <Typography variant='caption'>Target</Typography>
+          <Typography variant='caption'>Rule</Typography>
+          <Typography variant='caption'>Identity</Typography>
+          <Typography variant='caption'>State</Typography>
+        </S.HeaderRow>
+        {rows.map(r => {
+          const status = r.status ?? {};
+          const streaming = status.worker_running === true && status.slot_active === true;
+          return (
+            <S.Grid key={r.contract_id}>
+              <div>
+                <Typography variant='body1'>{r.title}</Typography>
+                <Typography variant='caption' color='texts.secondary'>
+                  {r.contract_id}
+                </Typography>
+              </div>
+              <Typography variant='body2'>{r.rule.server}</Typography>
+              <div>
+                <Typography variant='body2'>{r.rule.filter ?? 'everything'}</Typography>
+                <Typography variant='caption' color='texts.secondary'>
+                  {(r.rule.columns ?? ['all columns']).join(', ')}
+                </Typography>
+              </div>
+              <Typography variant='body2'>{(r.identity ?? []).join(', ')}</Typography>
+              <div>
+                <Typography
+                  variant='body2'
+                  color={streaming ? 'success.main' : 'texts.secondary'}
+                >
+                  {status.engine && status.engine !== 'logical replication'
+                    ? `${status.engine} CDC`
+                    : streaming
+                      ? `streaming · ${status.behind ?? ''} behind`
+                      : 'not applied'}
+                </Typography>
+                {(r.problems ?? []).map(p => (
+                  <Typography key={p} variant='caption' color='error.main'>
+                    {p}
+                  </Typography>
+                ))}
+              </div>
+            </S.Grid>
+          );
+        })}
+      </div>
+    </>
+  );
+};
 
 interface PanelProps {
   detail: ContractDetail;
