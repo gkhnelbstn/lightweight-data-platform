@@ -1,9 +1,15 @@
-# The whole stack, in one file.
+# The platform: ODD, a collector, the two databases, and the app.
 #
 #   docker compose up -d db odd-db odd-platform
 #   ./deploy/odd-bootstrap.sh                    # collector tokens
 #   docker compose up -d                         # + collector + app
 #   docker compose --profile profiling up -d     # + column profiler (4.4 GB image)
+#
+# The sources the demo runs against -- SQL Server, MongoDB, Superset -- are in
+# compose.demo.yaml, so that what this project *is* cannot be misread as
+# requiring them. To bring both up:
+#
+#   docker compose -f compose.yaml -f compose.demo.yaml --profile demo up -d
 #
 # Ports: 8077 the contract UI, 8080 ODD, 5442 the source database, 5433 ODD's.
 # 5442 rather than 5432 so a Postgres already installed on the host does not
@@ -153,77 +159,6 @@ services:
     ports: ["8077:8077"]
     restart: always
 
-  # ---- demo sources, behind `--profile demo` -------------------------------
-  # A second shape of the same problem: an ERP in SQL Server, reference data
-  # pulled from a public API into MongoDB, and Superset reading both. The point
-  # is the chain that ends at a dashboard -- odd-collector maps a chart to the
-  # tables behind it, so a failing check has a blast radius.
-
-  mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    profiles: ["demo"]
-    environment:
-      ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
-      MSSQL_PID: Developer
-      # CDC is a SQL Server Agent feature: `sp_cdc_enable_table` succeeds
-      # without the Agent and then nothing ever populates the change table.
-      # The image ships the Agent stopped.
-      MSSQL_AGENT_ENABLED: "true"
-      # SQL Server takes what it is given; on a laptop that is the whole box.
-      MSSQL_MEMORY_LIMIT_MB: "2048"
-    volumes:
-      - mssql-data:/var/opt/mssql
-      # The seed and the CDC script are run with sqlcmd *inside* this
-      # container, so they have to be reachable from in here.
-      - ./demo:/demo:ro
-      - ./deploy:/deploy:ro
-    ports: ["1433:1433"]
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'select 1' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-
-  mongo:
-    image: mongo:7
-    profiles: ["demo"]
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: rootpass
-    volumes: ["mongo-data:/data/db"]
-    ports: ["27017:27017"]
-    command: ["--wiredTigerCacheSizeGB", "0.5"]
-    healthcheck:
-      # `db.adminCommand(1)` is not valid in mongosh -- it wants a string or an
-      # object -- so this reported unhealthy for ever while Mongo was fine and
-      # the collector was reading it happily.
-      test: ["CMD-SHELL", "mongosh --quiet -u root -p rootpass --authenticationDatabase admin --eval \"db.adminCommand({ping: 1})\" || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-
-  superset:
-    image: apache/superset:latest
-    profiles: ["demo"]
-    depends_on:
-      mssql: { condition: service_healthy }
-    environment:
-      SUPERSET_SECRET_KEY: "demo-not-a-secret-change-me"
-      SUPERSET_LOAD_EXAMPLES: "no"
-      FLASK_APP: superset
-      # bootstrap.sh pip-installs the SQL Server driver as the superset user,
-      # which lands in ~/.local and is not on gunicorn's path by default.
-      PYTHONPATH: /app/superset_home/.local/lib/python3.10/site-packages
-    volumes:
-      - superset-home:/app/superset_home
-      - ./demo/superset-bootstrap.sh:/app/bootstrap.sh:ro
-    ports: ["8089:8088"]
-    entrypoint: ["/bin/bash", "/app/bootstrap.sh"]
-
 volumes:
   db-data:
   odd-db-data:
-  mssql-data:
-  mongo-data:
-  superset-home:

@@ -56,6 +56,20 @@ def land(dwh, schema: str, table: str, columns: list[str], types: list[str],
 
 
 def main() -> None:
+    # The warehouse is the demo's, so the demo makes it -- deploy/db-init.sql
+    # is the product's two databases and runs once, on an empty volume.
+    from core.bootstrap_db import ensure_database, grant_reader
+
+    host = os.getenv("DWH_HOST", "db")
+    port = int(os.getenv("DWH_PORT", "5432"))
+    warehouse = os.getenv("DWH_NAME", "dwh")
+    if ensure_database(host, port, warehouse):
+        print(f"  created database {warehouse}")
+    # asof_* is where the runner materialises a windowed view of a mart; the
+    # reader has to see those too or every warehouse check fails on permission.
+    grant_reader(host, port, warehouse,
+                 list(SCHEMAS) + [f"asof_{s}" for s in SCHEMAS])
+
     with psycopg.connect(ERP_DSN) as erp, psycopg.connect(DWH_DSN, autocommit=True) as dwh:
         for schema in SCHEMAS:
             dwh.execute(f'create schema if not exists "{schema}"')

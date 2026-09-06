@@ -340,6 +340,14 @@ def apply(contract: dict) -> dict:
             cx.execute("select pg_create_logical_replication_slot(%s, 'pgoutput')",
                        (slot,))
 
+    # Nothing else makes it: db-init.sql runs once on an empty volume, long
+    # before a contract names a replica.
+    from core.bootstrap_db import ensure_database, grant_reader
+    if ensure_database(target["host"], target.get("port", 5432),
+                       target["database"]):
+        grant_reader(target["host"], target.get("port", 5432),
+                     target["database"], [target.get("schema", "public")])
+
     with psycopg.connect(_dsn(target, user, password), autocommit=True) as cx:
         cx.execute(target_table_statement(
             model, target.get("schema", "public"), rule, source.get("type")))
