@@ -53,6 +53,16 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   `{{scope:alias}}`, never a hardcoded `loaded_at` predicate, or the window
   switch silently does nothing.
 * `psycopg` (v3), not `psycopg2`. `conn.execute(...)` returns a cursor.
+* Logical replication fails **after** the initial copy, in a background worker
+  that only writes to the server log — so a broken sync looks like a working
+  one. `core/sync.py` checks all four preconditions up front; do not weaken
+  that into a warning. `--status` is how you tell a dead worker from a quiet
+  one.
+* SQL Server CDC is a *SQL Server Agent* feature. `sp_cdc_enable_table`
+  succeeds with the Agent stopped and then nothing ever lands in the change
+  table; `MSSQL_AGENT_ENABLED` in compose.yaml is why the demo works.
+* A publication's column list is a privacy boundary, not an optimisation: a
+  column outside it never reaches the replica. Keep classified columns out.
 
 ## Adding things
 

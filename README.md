@@ -85,6 +85,55 @@ rule back into the contract file.
 
 ![The contract UI](docs/contract-ui.png)
 
+### Keeping a second database in step
+
+A contract can also say where its table is replicated to, and under what rule:
+
+```yaml
+customProperties:
+  - property: syncTo
+    value:
+      server: replica                 # a servers[] entry
+      filter: "country = 'TR'"
+      identity: [customer_id, country]
+      columns: [customer_id, name, country, segment]
+```
+
+`core/sync.py` turns that into a Postgres publication and subscription. **No
+replication engine is written here** -- Postgres has logical decoding and since
+15 a publication carries a row filter and a column list, which is precisely
+"the rules that decide what is synced". Nothing of ours sits in the stream.
+
+What is ours is refusing to create objects that would not work, because logical
+replication fails *silently*: the initial copy succeeds, the rows land, and
+every subsequent change then dies in a background worker that writes only to
+the server log. It looks synced and is not. Four rules, all found on a running
+pair and all checked by `python core/sync.py --check` before anything is
+created:
+
+1. The source needs a replica identity -- a unique index over NOT NULL columns.
+   The contract already names it (`primaryKey`), **so a table whose uniqueness
+   check is failing cannot be replicated safely.** That is not a coincidence;
+   it is the same fact twice.
+2. Every column in the row filter must be inside the replica identity, since an
+   update is matched against the old row and the old row is only those columns.
+   A rule may widen the identity to say so; it may never narrow it.
+3. The column list must cover the replica identity.
+4. The target needs the same replica identity. This is the silent one.
+
+`--status` exists for the same reason: it reports whether the apply worker is
+actually running and how far behind the slot is, rather than letting a dead
+worker look like a quiet one.
+
+The column list doubles as a privacy control. `tax_id` is classified in the
+contract, is left out of the list, and so **does not exist in the replica at
+all** -- masking a column in the UI is no use if the whole column was copied
+into another database.
+
+For SQL Server the mechanism is CDC rather than logical decoding;
+`deploy/mssql-cdc.sql` turns it on, and it is the Agent -- not the T-SQL --
+that people forget.
+
 ## Quick start
 
 Everything is one compose file.
@@ -134,6 +183,7 @@ does not enter into it.
 | `core/scoring.py` | dimension-weighted score |
 | `core/store.py` | DDL, monthly partitions, writes |
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
+| `core/sync.py` | derive a Postgres publication/subscription from the contract |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
 | `web/index.html` | single-file UI, no build step |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |

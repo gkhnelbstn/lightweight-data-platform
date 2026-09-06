@@ -25,6 +25,10 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    # `replica` is the default and it is not enough to decode changes. Logical
+    # replication is how a Postgres source keeps a second database in step
+    # without any process of ours in the middle -- see core/sync.py.
+    command: ["postgres", "-c", "wal_level=logical"]
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./deploy/db-init.sql:/docker-entrypoint-initdb.d/10-databases.sql:ro
@@ -151,6 +155,10 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
       MSSQL_PID: Developer
+      # CDC is a SQL Server Agent feature: `sp_cdc_enable_table` succeeds
+      # without the Agent and then nothing ever populates the change table.
+      # The image ships the Agent stopped.
+      MSSQL_AGENT_ENABLED: "true"
       # SQL Server takes what it is given; on a laptop that is the whole box.
       MSSQL_MEMORY_LIMIT_MB: "2048"
     volumes: ["mssql-data:/var/opt/mssql"]

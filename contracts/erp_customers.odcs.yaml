@@ -27,6 +27,29 @@ servers:
     port: 5432
     database: erp
     schema: asof
+  # Where the sync rule below lands. A servers entry rather than a connection
+  # string in the rule, so the target lives where ODCS already puts one.
+  - server: replica
+    type: postgres
+    host: db
+    port: 5432
+    database: erp_replica
+    schema: public
+
+customProperties:
+  # Keep a second database in step, filtered. core/sync.py turns this into a
+  # Postgres publication and subscription; nothing of ours sits in the stream.
+  # tax_id is deliberately absent from the column list -- it is classified
+  # below, and a column left out of a publication never leaves the source.
+  - property: syncTo
+    value:
+      server: replica
+      filter: "country = 'TR'"
+      # Wider than the primary key on purpose: an update or delete is matched
+      # against the replica identity alone, so a filter on `country` is only
+      # expressible if `country` is part of it.
+      identity: [customer_id, country]
+      columns: [customer_id, name, country, segment]
 
 slaProperties:
   - property: frequency
