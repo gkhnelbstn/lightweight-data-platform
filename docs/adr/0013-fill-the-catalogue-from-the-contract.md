@@ -55,9 +55,14 @@ same thing to sales as to finance.
 
 ## On upgrade
 
-* Bumping ODD: re-run `python integrations/odd/catalogue.py` and read the
+* Bumping ODD: re-run `python integrations/odd/curate.py` and read the
   counts. A field that stops being accepted shows as a 4xx, not as silence.
 * ODD drops floats and lists from metadata silently, so everything is rendered
   to a string before it is sent. If that is ever fixed, sending typed values is
   better — but check the entity page afterwards rather than trusting the 201.
 * If ODD grows an import for ODCS directly, most of this module is deletable.
+* The module is `curate.py`, not `catalogue.py`. `catalogue` is a PyPI package
+  spaCy's registry depends on, and a module of that name here shadowed it the
+  moment anything in the directory ran as a script — `classify.py` died with
+  `module 'catalogue' has no attribute 'create'`. Do not name a module after a
+  dependency.

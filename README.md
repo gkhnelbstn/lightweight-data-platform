@@ -95,7 +95,7 @@ they are about 470 lines: `core/runner.py`, `core/store.py`,
    source — tables, columns, types, lineage. Everything a catalogue is actually
    for arrives as "Not created": who owns this, what is it for, what does this
    column mean. The contract knows all of it, so
-   `integrations/odd/catalogue.py` pushes the owner, the purpose, every column
+   `integrations/odd/curate.py` pushes the owner, the purpose, every column
    description, the quality vocabulary as dictionary terms, the rules as query
    examples, and the SLA and sync rule as metadata — into ODD's own places for
    them. Filled from the contract, it is reviewed in a pull request and cannot
@@ -335,7 +335,7 @@ does not enter into it.
 | `web/index.html` | single-file UI, no build step |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
 | `integrations/odd/entity_page.py` | the links ODD shows on the table's own page |
-| `integrations/odd/catalogue.py` | owner, purpose, column meanings, glossary, query examples |
+| `integrations/odd/curate.py` | owner, purpose, column meanings, glossary, query examples |
 | `deploy/Dockerfile.odd-collector` | odd-collector plus two fixes to its Superset adapter |
 | `deploy/Dockerfile.odd-platform` | ODD with the contract panel on its Data Quality page |
 | `deploy/odd-platform-ui/` | that panel — React, in ODD's own design system |

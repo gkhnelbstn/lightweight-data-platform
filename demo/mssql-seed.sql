@@ -72,6 +72,30 @@ with n as (
 select i into #n from n;
 go
 
+/* ---- a valid Turkish VKN, so the classifier has something real to find ----
+   The first version emitted sequential ten-digit numbers, and the classifier
+   correctly refused them: TR_VKN is checksum-validated, not "any ten digits".
+   That left the contract declaring `classification: pii` on a column the
+   scanner said was not, which is a contradiction a reader would rightly
+   distrust. The algorithm is the official one -- see
+   integrations/odd/classify.py for the same check in Python. */
+go
+create or alter function dbo.vkn(@seed bigint) returns char(10) as
+begin
+    declare @base varchar(9) = right('000000000'
+        + cast(@seed * 7919 % 999999999 as varchar(9)), 9);
+    declare @i int = 0, @total int = 0, @tmp int;
+    while @i < 9
+    begin
+        set @tmp = (cast(substring(@base, @i + 1, 1) as int) + 10 - (@i + 1)) % 10;
+        set @total = @total + case when @tmp = 9 then 9
+                                   else (@tmp * power(2, 9 - @i)) % 9 end;
+        set @i = @i + 1;
+    end
+    return @base + cast((10 - @total % 10) % 10 as char(1));
+end
+go
+
 declare @today date = cast(getutcdate() as date);
 declare @days  int  = 45;
 
@@ -81,7 +105,7 @@ select i,
        concat(N'Müşteri ', i),
        -- 2% have no tax id at all
        case when i % 50 = 0 then null
-            else right('0000000000' + cast(i * 7919 % 9999999999 as varchar(10)), 10) end,
+            else dbo.vkn(i) end,
        -- 1% are not addresses
        case when i % 100 = 0 then concat(N'musteri', i, N'.example.com')
             else concat(N'musteri', i, N'@example.com') end,

@@ -1,0 +1,103 @@
+# Customer master data in the SQL Server ERP. Note `email`, which the Postgres
+# copy does not have -- it is what makes this table worth classifying.
+apiVersion: v3.0.2
+kind: DataContract
+id: erp.mssql.customers
+name: Customers (SQL Server)
+version: 1.0.0
+status: active
+domain: sales
+tenant: master-data
+description:
+  purpose: >
+    Customer master data as the SQL Server ERP holds it. Every order joins to
+    this, so a missing row here is a revenue figure that cannot be attributed.
+
+servers:
+  - server: erp
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
+  # A separate database rather than a schema; see ADR 0002 for why T-SQL leaves
+  # no other option.
+  - server: erp_daily
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp_asof
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: customers
+    physicalName: customers
+    logicalType: object
+    physicalType: table
+    description: One row per customer.
+    properties:
+      - name: customer_id
+        logicalType: integer
+        physicalType: int
+        description: "ERP customer number. The primary key, and what every order joins on."
+        required: true
+        unique: true
+        primaryKey: true
+      - name: name
+        logicalType: string
+        physicalType: nvarchar
+        description: "Customer's registered name, as it appears on an invoice."
+        required: true
+      - name: tax_id
+        logicalType: string
+        physicalType: varchar
+        description: "Turkish tax identifier: TCKN for a sole trader, VKN for a company. Classified, so it is masked in sample rows and never leaves the source."
+        classification: pii
+      - name: email
+        logicalType: string
+        physicalType: nvarchar
+        description: "Contact address for order confirmations. Personal data, so it is classified and masked."
+        classification: pii
+      - name: country
+        logicalType: string
+        physicalType: char
+        description: "Two-letter country code."
+        required: true
+      - name: segment
+        logicalType: string
+        physicalType: varchar
+        description: "Commercial segment: SMB, MID or ENT."
+        required: true
+      - name: loaded_at
+        logicalType: date
+        physicalType: date
+        description: "The date this row arrived in the warehouse. The watermark the daily window is built on -- see ADR 0002."
+        required: true
+
+    quality:
+      - type: sql
+        description: country must be one of TR, DE, US, NL
+        query: select count(*) from dbo.customers where country not in ('TR','DE','US','NL')
+        mustBe: 0
+        dimension: conformity
+
+      - type: sql
+        description: segment must be one of SMB, MID, ENT
+        query: select count(*) from dbo.customers where segment not in ('SMB','MID','ENT')
+        mustBe: 0
+        dimension: conformity
+
+      - type: sql
+        description: an email address must look like one
+        query: select count(*) from dbo.customers where email is not null and email not like '%_@_%.__%'
+        mustBe: 0
+        dimension: conformity

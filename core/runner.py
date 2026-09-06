@@ -385,7 +385,7 @@ def push_to_odd(contract: dict, results: dict, url: str) -> int:
                                                     ensure_datasource, post)
     from integrations.odd.mapper import entity_list
 
-    from integrations.odd.catalogue import ensure_terms, fill
+    from integrations.odd.curate import ensure_terms, fill
     from integrations.odd.entity_page import sync_links
 
     ds = dataset_oddrn(contract, "erp")

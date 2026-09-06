@@ -26,7 +26,12 @@ Everything here is idempotent, and by lookup rather than by remembering ids:
 each of these endpoints has a listing to check against, which the entity links
 in entity_page.py did not.
 
-    python integrations/odd/catalogue.py --url http://odd-platform:8080
+    python integrations/odd/curate.py --url http://odd-platform:8080
+
+Named `curate` rather than `catalogue`: `catalogue` is a PyPI package that
+spaCy's registry depends on, and a module of that name in this directory
+shadows it the moment anything here is run as a script -- which broke
+classify.py with `module 'catalogue' has no attribute 'create'`.
 """
 from __future__ import annotations
 

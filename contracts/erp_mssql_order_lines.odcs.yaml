@@ -1,0 +1,117 @@
+# The order lines behind the SQL Server sales_orders. Richer than the Postgres
+# copy: it carries unit_price, so the line total can be checked against it.
+apiVersion: v3.0.2
+kind: DataContract
+id: erp.mssql.order_lines
+name: Sales Order Lines (SQL Server)
+version: 1.0.0
+status: active
+domain: sales
+tenant: sales-ops
+description:
+  purpose: >
+    The line items of every SQL Server sales order. The header total is checked
+    against the sum of these, and each line's own amount is checked against its
+    quantity and unit price -- so an arithmetic error is caught where it
+    happened rather than where it surfaced.
+
+servers:
+  - server: erp
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
+  - server: erp_daily
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp_asof
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: sales_order_lines
+    physicalName: sales_order_lines
+    logicalType: object
+    physicalType: table
+    description: One row per line on an order.
+    properties:
+      - name: line_id
+        logicalType: integer
+        physicalType: bigint
+        description: "Surrogate key for the line. Unique across every order."
+        required: true
+        unique: true
+        primaryKey: true
+      - name: order_id
+        logicalType: integer
+        physicalType: bigint
+        description: "The order this line belongs to. The join back to sales_orders."
+        required: true
+      - name: product_id
+        logicalType: integer
+        physicalType: int
+        description: "The product on this line. A foreign key into products."
+        required: true
+      - name: quantity
+        logicalType: integer
+        physicalType: int
+        description: "How many units. A line with none is a data error, not a cancellation."
+        required: true
+      - name: unit_price
+        logicalType: number
+        physicalType: decimal
+        description: "Price actually charged per unit, which may differ from the product's list price after a discount."
+        required: true
+      - name: line_amount
+        logicalType: number
+        physicalType: decimal
+        description: "Value of the line. Must equal quantity times unit_price, and the header total must equal the sum of these."
+        required: true
+      - name: loaded_at
+        logicalType: date
+        physicalType: date
+        description: "The date this row arrived in the warehouse. The watermark the daily window is built on -- see ADR 0002."
+        required: true
+
+    quality:
+      - type: sql
+        description: line_amount must equal quantity times unit_price
+        query: >
+          select count(*) from dbo.sales_order_lines
+          where abs(line_amount - (quantity * unit_price)) > 0.01
+        mustBe: 0
+        dimension: accuracy
+
+      - type: sql
+        description: every line must belong to an order that exists
+        query: >
+          select count(*) from dbo.sales_order_lines l
+          left join dbo.sales_orders o on o.order_id = l.order_id
+          where o.order_id is null
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: every line must refer to a product that exists
+        query: >
+          select count(*) from dbo.sales_order_lines l
+          left join dbo.products p on p.product_id = l.product_id
+          where p.product_id is null
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: quantity must be positive
+        query: select count(*) from dbo.sales_order_lines where quantity <= 0
+        mustBe: 0
+        dimension: accuracy

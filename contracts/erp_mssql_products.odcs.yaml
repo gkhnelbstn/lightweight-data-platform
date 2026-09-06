@@ -1,0 +1,100 @@
+# The product catalogue behind every order line.
+apiVersion: v3.0.2
+kind: DataContract
+id: erp.mssql.products
+name: Products (SQL Server)
+version: 1.0.0
+status: active
+domain: sales
+tenant: master-data
+description:
+  purpose: >
+    The products an order line can refer to, with the list price a line is
+    expected to be near. Reference data: it changes rarely, which is exactly
+    why nobody notices when it changes wrongly.
+
+servers:
+  - server: erp
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
+  - server: erp_daily
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: erp_asof
+    schema: dbo
+    driver: ODBC Driver 18 for SQL Server
+    trustServerCertificate: true
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: products
+    physicalName: products
+    logicalType: object
+    physicalType: table
+    description: One row per product.
+    properties:
+      - name: product_id
+        logicalType: integer
+        physicalType: int
+        description: "ERP product number. The primary key order lines refer to."
+        required: true
+        unique: true
+        primaryKey: true
+      - name: sku
+        logicalType: string
+        physicalType: varchar
+        description: "Stock keeping unit. Unique, and the code humans use rather than product_id."
+        required: true
+        unique: true
+      - name: name
+        logicalType: string
+        physicalType: nvarchar
+        description: "Product name as it appears on an invoice line."
+        required: true
+      - name: category
+        logicalType: string
+        physicalType: varchar
+        description: "Commercial category. Reports group by this, so an unexpected value is a missing row in a chart."
+        required: true
+      - name: list_price
+        logicalType: number
+        physicalType: decimal
+        description: "Catalogue price before any discount. A line priced far from this is worth looking at."
+        required: true
+      - name: loaded_at
+        logicalType: date
+        physicalType: date
+        description: "The date this row arrived in the warehouse. The watermark the daily window is built on -- see ADR 0002."
+        required: true
+
+    quality:
+      - type: sql
+        description: list_price must be positive
+        query: select count(*) from dbo.products where list_price <= 0
+        mustBe: 0
+        dimension: accuracy
+
+      - type: sql
+        description: sku must not repeat
+        query: >
+          select count(*) from (
+            select sku from dbo.products group by sku having count(*) > 1
+          ) d
+        mustBe: 0
+        dimension: uniqueness
+
+      - type: sql
+        description: every product must have a category
+        query: select count(*) from dbo.products where category is null or ltrim(rtrim(category)) = ''
+        mustBe: 0
+        dimension: completeness

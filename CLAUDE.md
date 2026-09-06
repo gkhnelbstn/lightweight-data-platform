@@ -19,7 +19,7 @@ python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
 python core/runner.py --odd-url http://odd-platform:8080   # ...and send it to ODD
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
-python integrations/odd/catalogue.py --url http://odd-platform:8080  # owner, docs, glossary
+python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
 uvicorn api.main:app --port 8077                           # UI + API
 python core/sync.py --check                                # validate the sync rules
 python core/sync.py --apply                                # publication + subscription

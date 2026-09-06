@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from core.scoring import DIMENSION_WEIGHT
-from integrations.odd.catalogue import (DIMENSION_MEANING, entity_tags,
+from integrations.odd.curate import (DIMENSION_MEANING, entity_tags,
                                         metadata_values)
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"

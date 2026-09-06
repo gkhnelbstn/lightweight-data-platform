@@ -37,7 +37,7 @@ import yaml
 
 from core import store
 from core.runner import CONTRACTS, load_contracts
-from integrations.odd.entity_page import entity_id
+from integrations.odd.entity_page import _get, entity_id
 from integrations.odd.from_datacontract import dataset_oddrn
 
 # What we look for. Everything else Presidio can find is either free-text
@@ -123,6 +123,16 @@ def sample_column(cx, schema: str, table: str, column: str) -> list[str]:
     return [r[0] for r in rows if r[0]]
 
 
+def sample_column_mssql(cx, schema: str, table: str, column: str) -> list[str]:
+    """The same, in T-SQL. Without it the classifier could only see half the
+    demo -- and the half it could not see is the one with an email column in
+    it, which is the case a PII scanner exists for."""
+    rows = cx.cursor().execute(
+        f"select top {SAMPLE} cast([{column}] as nvarchar(4000)) "
+        f"from [{schema}].[{table}] where [{column}] is not null").fetchall()
+    return [r[0] for r in rows if r[0]]
+
+
 def classify_column(analyzer, values: list[str]) -> tuple[list[str], float]:
     """Which regulated types a column holds, and what share of it they cover.
 
@@ -181,28 +191,48 @@ def main() -> None:
     analyzer = build_analyzer()
     findings: list[tuple[str, str, str, float]] = []
 
-    with psycopg.connect(store.ERP_DSN) as cx:
+    postgres = psycopg.connect(store.ERP_DSN)
+    mssql_by_host: dict[str, object] = {}
+    try:
         for contract in load_contracts():
             if a.contract not in (None, contract.get("id")):
                 continue
             server = next((s for s in contract.get("servers", [])
                            if s.get("server") == "erp"), None)
-            if not server or server.get("type") not in ("postgres", "postgresql"):
-                continue  # only the postgres sources are reachable from here
+            if not server:
+                continue
+            kind = server.get("type")
             model = contract["schema"][0]
             table = model.get("physicalName") or model["name"]
             schema = server.get("schema", "public")
 
+            if kind in ("postgres", "postgresql"):
+                take = lambda c: sample_column(postgres, schema, table, c)  # noqa: E731
+            elif kind in ("sqlserver", "mssql"):
+                from core.sync_mssql import mssql_connect
+                key = f"{server['host']}/{server['database']}"
+                if key not in mssql_by_host:
+                    mssql_by_host[key] = mssql_connect(server)
+                cx = mssql_by_host[key]
+                take = lambda c, cx=cx: sample_column_mssql(cx, schema, table, c)  # noqa: E731
+            else:
+                continue  # nothing else is reachable from here
+
             for prop in model.get("properties") or []:
-                values = sample_column(cx, schema, table, prop["name"])
-                entities, ratio = classify_column(analyzer, values)
+                entities, ratio = classify_column(analyzer, take(prop["name"]))
                 if entities:
                     findings.append((contract["id"], table, prop["name"],
                                      entities, ratio))
+    finally:
+        postgres.close()
+        for cx in mssql_by_host.values():
+            cx.close()
 
     for cid, table, column, entities, ratio in findings:
-        print(f"  {table}.{column:<14} {', '.join(entities):<24} "
-              f"{ratio:.0%} of {len(entities) and SAMPLE} sampled")
+        # The contract, not just the table: two sources can both have a
+        # `customers.tax_id`, and they do.
+        print(f"  {cid}.{column:<14} {', '.join(entities):<24} "
+              f"{ratio:.0%} of {SAMPLE} sampled")
     if not findings:
         print("no columns matched above the threshold")
         return
