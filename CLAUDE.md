@@ -3,11 +3,17 @@
 Contract-driven data quality. Read `README.md` first for the why; this file is
 the operating manual.
 
+**Before changing anything that touches a dependency version, read
+`docs/adr/`.** Every decision here has a record with an *On upgrade* section
+saying what to check and what would let the decision be deleted. Several exist
+only because an upstream project has a gap; closing one of those by deleting
+our code is the best outcome available.
+
 ## Commands
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 78 tests, no database needed
+pytest -q                                                  # 92 tests, no database needed
 python seed/seed.py                                        # rebuild the demo ERP data
 python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
@@ -109,6 +115,10 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   column in the identity breaks it there.
 
 ## Adding things
+
+**A new rule someone can pick from the form:** one entry in `core/rules.py`
+(builder, dimension, description, menu label) plus its parameters. The UI reads
+the catalogue, so it needs no change. Add a case to `tests/test_rules.py`.
 
 **A new check kind:** it is datacontract-cli's, not ours — open an issue
 there. What may need changing here is `core/scoring.py` (a dimension it does

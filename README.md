@@ -125,8 +125,22 @@ when to retire it.
 The panel is written against ODD's own components and type-checks against them,
 which is the point of forking rather than injecting: `tsc` caught a real bug in
 it before the image was ever built. Select a contract to see the rules behind
-its tests, add another — compiled against the source before it is saved — or
-open the rows a failing check counted.
+its tests, add another, or open the rows a failing check counted.
+
+**Adding a rule does not mean writing SQL.** Pick a column, pick a rule — is
+never empty, is one of a list, is between two numbers, has no duplicates,
+exists in another table — and the service composes the statement, in the
+source's own dialect. `LENGTH` becomes `LEN` on SQL Server, `CURRENT_DATE`
+becomes `GETDATE()`, and a value containing a quote is a quoted literal rather
+than an injection, because the SQL is built from sqlglot expressions and never
+from a format string. The vocabulary lives in `core/rules.py` and the UI
+fetches it, so adding a rule kind is a change in one place.
+
+Writing SQL by hand is still there as an escape hatch, and it is the only thing
+that needs the API token — the form does not, because a fixed vocabulary has
+nothing to smuggle in. **The token is not something to invent, either:** the
+service mints one on first use, keeps it, and prints it at startup. See
+[ADR 0010](docs/adr/0010-rule-vocabulary-and-the-token.md).
 
 ![The contract UI](docs/contract-ui.png)
 
@@ -298,6 +312,7 @@ does not enter into it.
 | `core/runner.py` | build the day's views, run `datacontract test`, persist, score, push |
 | `core/scoring.py` | dimension-weighted score |
 | `core/store.py` | DDL, monthly partitions, writes |
+| `core/rules.py` | the rule vocabulary, and the SQL it compiles to per dialect |
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
 | `core/sync.py` | derive a Postgres publication/subscription from the contract |
 | `core/sync_mssql.py` | apply SQL Server's CDC change table to a Postgres target |
@@ -310,6 +325,7 @@ does not enter into it.
 | `deploy/Dockerfile.odd-platform` | ODD with the contract panel on its Data Quality page |
 | `deploy/odd-platform-ui/` | that panel — React, in ODD's own design system |
 | `compose.yaml`, `Dockerfile`, `deploy/` | the stack and its runbook |
+| `docs/adr/` | why each of these decisions exists, and what would retire it |
 | `docs/odd-gap-analysis.md` | what ODD does and does not do, verified against a running instance |
 | `docs/stack-choices.md` | which projects to depend on, with their health figures |
 

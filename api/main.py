@@ -11,7 +11,9 @@ truth; this is an editor for it, not a second store.
 """
 from __future__ import annotations
 
+import contextlib
 import os
+import secrets
 import subprocess
 import tempfile
 from hmac import compare_digest
@@ -32,7 +34,20 @@ from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
                          TABLE_SCOPED_TYPES, load_contracts, run)
 from core.scoring import DIMENSION_WEIGHT
 
-app = FastAPI(title="Contract-driven data quality on ODD")
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Print the token once. A generated secret nobody can find is no better
+    than one nobody set. `on_event` would do this too and is deprecated."""
+    try:
+        source = "DQ_API_TOKEN" if os.getenv("DQ_API_TOKEN") else "generated"
+        print(f"raw-SQL rule authoring token ({source}): {api_token()}",
+              flush=True)
+    except Exception as e:  # the store may not be up yet; it is not fatal
+        print(f"could not resolve the API token yet: {e}", flush=True)
+    yield
+
+
+app = FastAPI(title="Contract-driven data quality on ODD", lifespan=lifespan)
 
 # ODD Platform's own UI calls this API from its own origin -- the Contracts
 # panel on its Data Quality page is served by ODD and talks to us. A browser
@@ -49,19 +64,40 @@ app.add_middleware(
 
 DIMENSIONS = sorted(DIMENSION_WEIGHT)
 
-# The two write routes compile a person's SQL and run it against the source.
-# That is the one thing here worth a door, so it fails closed: with no token
-# configured they refuse rather than run. Reads are open, and the compose says
-# to keep the whole thing on a private network either way.
-API_TOKEN = os.getenv("DQ_API_TOKEN") or ""
+# The raw-SQL route compiles a statement someone typed and runs it against the
+# source. That is the one thing here worth a door.
+#
+# The door is not asked for, though. Requiring an operator to invent a token
+# means it is pasted into a form on every visit, which is how a secret becomes
+# "admin"; so it is generated once and kept, and `DQ_API_TOKEN` overrides it
+# for anyone who would rather manage it themselves. Rules built from the form
+# need none of this -- see core/rules.py -- because the vocabulary is fixed and
+# there is nothing to guard that the read routes do not already expose.
+_TOKEN: str | None = None
+
+
+def api_token() -> str:
+    """The token for the raw-SQL route, generated on first use and kept."""
+    global _TOKEN
+    if _TOKEN:
+        return _TOKEN
+    configured = os.getenv("DQ_API_TOKEN")
+    if configured:
+        _TOKEN = configured
+        return _TOKEN
+    with store.connect() as dq:
+        store.init(dq)
+        dq.execute(
+            """insert into api_tokens (name, token) values ('default', %s)
+               on conflict (name) do nothing""", (secrets.token_hex(32),))
+        _TOKEN = dq.execute(
+            "select token from api_tokens where name = 'default'").fetchone()[0]
+    return _TOKEN
 
 
 def authorised(authorization: str = Header(default="")) -> None:
-    if not API_TOKEN:
-        raise HTTPException(
-            503, "DQ_API_TOKEN is not set; rule authoring is disabled")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not compare_digest(token, API_TOKEN):
+    if scheme.lower() != "bearer" or not compare_digest(token, api_token()):
         raise HTTPException(401, "bad or missing bearer token")
 
 
@@ -338,8 +374,70 @@ def _run_datacontract(path: Path, server: str = "erp") -> dict:
         return json.loads(out.read_text(encoding="utf-8"))
 
 
-@app.post("/api/rules/preview", dependencies=[Depends(authorised)])
-def preview_rule(draft: RuleDraft) -> dict:
+class StructuredRule(BaseModel):
+    """A rule chosen from a fixed vocabulary rather than written as SQL.
+
+    No token: the client picks a rule name, a column and some values, and the
+    SQL is composed here. There is no statement to smuggle in.
+    """
+    contract_id: str
+    kind: str
+    column: str
+    params: dict = {}
+    dimension: str | None = None
+
+
+@app.get("/api/rules/catalogue")
+def rule_catalogue() -> dict:
+    """What the form can offer, so the UI holds no vocabulary of its own."""
+    from core.rules import catalogue
+    return {"rules": catalogue(), "dimensions": DIMENSIONS}
+
+
+def _as_draft(rule: StructuredRule) -> RuleDraft:
+    from core import rules
+
+    doc = yaml.safe_load(
+        _contract_file(rule.contract_id).read_text(encoding="utf-8"))
+    model = doc["schema"][0]
+    server = next((s for s in doc.get("servers", [])
+                   if s.get("server") == "erp"), None) or doc["servers"][0]
+    declared = {p["name"] for p in model.get("properties") or []}
+    if rule.column not in declared:
+        raise HTTPException(
+            400, f"{rule.column!r} is not a column the contract declares")
+    table = model.get("physicalName") or model["name"]
+    if server.get("type") in ("sqlserver", "mssql") and server.get("schema"):
+        # The rules in a T-SQL contract name their schema; see core/runner.py.
+        table = f"{server['schema']}.{table}"
+    try:
+        description, sql, dimension = rules.build(
+            rule.kind, table, rule.column, rule.params, server.get("type"))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return RuleDraft(contract_id=rule.contract_id, description=description,
+                     query=sql, dimension=rule.dimension or dimension, must_be=0)
+
+
+@app.post("/api/rules/structured")
+def save_structured_rule(rule: StructuredRule) -> dict:
+    """Compose the SQL, check it runs, and save it into the contract."""
+    return _save(_as_draft(rule))
+
+
+@app.post("/api/rules/structured/preview")
+def preview_structured_rule(rule: StructuredRule) -> dict:
+    draft = _as_draft(rule)
+    return {**_preview(draft), "description": draft.description,
+            "query": draft.query, "dimension": draft.dimension}
+
+
+# The two below are the implementations, deliberately without the guard.
+# `Depends` runs when FastAPI routes a request and not when one Python function
+# calls another, so a route handler calling another route handler would look
+# authorised and not be. The routes are thin wrappers; the structured routes
+# call these directly, and are unguarded on purpose -- see core/rules.py.
+def _preview(draft: RuleDraft) -> dict:
     """Run the rule without saving it.
 
     The draft is written to a copy of the contract in a temporary directory and
@@ -377,10 +475,9 @@ def preview_rule(draft: RuleDraft) -> dict:
             "compiled_sql": check.get("implementation")}
 
 
-@app.post("/api/rules", dependencies=[Depends(authorised)])
-def save_rule(draft: RuleDraft) -> dict:
+def _save(draft: RuleDraft) -> dict:
     """Append the rule to the contract file, then re-run the contract."""
-    prev = preview_rule(draft)
+    prev = _preview(draft)
     if not prev["ok"]:
         raise HTTPException(400, prev.get("reason") or "invalid rule")
 
@@ -398,6 +495,18 @@ def save_rule(draft: RuleDraft) -> dict:
     doc["_path"] = str(path)
     return {"saved": draft.description, "file": path.name,
             "reran": run(date.today(), [doc])}
+
+
+@app.post("/api/rules/preview", dependencies=[Depends(authorised)])
+def preview_rule(draft: RuleDraft) -> dict:
+    """Raw SQL, so behind the token."""
+    return _preview(draft)
+
+
+@app.post("/api/rules", dependencies=[Depends(authorised)])
+def save_rule(draft: RuleDraft) -> dict:
+    """Raw SQL, so behind the token."""
+    return _save(draft)
 
 
 @app.get("/")

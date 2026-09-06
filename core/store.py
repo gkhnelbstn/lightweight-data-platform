@@ -68,6 +68,15 @@ create table if not exists sync_watermarks (
 -- replacing them and offers no way to read an entity's links back, so the ids
 -- it hands out on creation are ours to remember or the nightly run leaves a
 -- growing pile of identical attachments.
+-- The token guarding the raw-SQL route. Generated here rather than asked of
+-- an operator with `openssl rand`: a secret someone has to invent is a secret
+-- they paste into a form every time, and that is how it ends up being "admin".
+create table if not exists api_tokens (
+  name text primary key,
+  token text not null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists odd_links (
   contract_id text not null,
   name text not null,

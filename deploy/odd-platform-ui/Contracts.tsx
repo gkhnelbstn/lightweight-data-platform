@@ -6,15 +6,23 @@ import type {
   Overview,
   PreviewResult,
   RuleDraft,
+  RuleType,
   Sample,
+  StructuredRule,
 } from './api';
 import {
   getContract,
   getOverview,
+  getRuleTypes,
   getSample,
   previewRule,
+  previewStructured,
   saveRule,
+  saveStructured,
 } from './api';
+
+/** A preview, whichever route produced it. */
+type PreviewShape = PreviewResult & { description?: string; query?: string };
 import * as S from './Contracts.styles';
 
 /**
@@ -40,11 +48,17 @@ export const Contracts: React.FC = () => {
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<ContractDetail | null>(null);
   const [samples, setSamples] = useState<Record<string, Sample | string>>({});
+  const [ruleTypes, setRuleTypes] = useState<RuleType[]>([]);
 
   useEffect(() => {
     getOverview()
       .then(setOverview)
       .catch((e: Error) => setError(e.message));
+    // The rule vocabulary belongs to the service; fetching it means adding a
+    // rule kind is a change in one place rather than two.
+    getRuleTypes()
+      .then(r => setRuleTypes(r.rules))
+      .catch(() => setRuleTypes([]));
   }, []);
 
   const select = useCallback((id: string) => {
@@ -133,7 +147,12 @@ export const Contracts: React.FC = () => {
       </div>
 
       {selected && detail && (
-        <ContractPanel detail={detail} dimensions={overview.dimensions} onSaved={reload} />
+        <ContractPanel
+          detail={detail}
+          dimensions={overview.dimensions}
+          ruleTypes={ruleTypes}
+          onSaved={reload}
+        />
       )}
 
       {overview.open_failures.length > 0 && (
@@ -219,10 +238,223 @@ const Rows: React.FC<{ sample: Sample }> = ({ sample }) => (
 interface PanelProps {
   detail: ContractDetail;
   dimensions: string[];
+  ruleTypes: RuleType[];
   onSaved: () => void;
 }
 
-const ContractPanel: React.FC<PanelProps> = ({ detail, dimensions, onSaved }) => {
+const ContractPanel: React.FC<PanelProps> = ({
+  detail,
+  dimensions,
+  ruleTypes,
+  onSaved,
+}) => {
+  const [raw, setRaw] = useState(false);
+
+  return (
+    <S.Panel>
+      <Typography variant='h4'>
+        {detail.contract.title} — {detail.file}
+      </Typography>
+
+      {detail.rules.length > 0 && (
+        <div>
+          <Typography variant='subtitle2' color='texts.secondary'>
+            Rules written for this contract. The rest of the tests are derived
+            from its schema.
+          </Typography>
+          {detail.rules.map(rule => (
+            <div key={rule.description}>
+              <Typography variant='body1'>
+                {rule.description}{' '}
+                <Typography variant='caption' color='texts.secondary'>
+                  {rule.dimension}
+                </Typography>
+              </Typography>
+              <S.Sql>{rule.query}</S.Sql>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <S.Actions>
+        <Typography variant='h4'>Add a rule</Typography>
+        <Button
+          buttonType='tertiary-sm'
+          text={raw ? 'Use the form' : 'Write SQL instead'}
+          onClick={() => setRaw(v => !v)}
+        />
+      </S.Actions>
+      <Typography variant='subtitle2' color='texts.secondary'>
+        Saved as an ODCS quality entry in {detail.file}, then re-run. The
+        contract stays the source of truth; this is an editor for it.
+      </Typography>
+
+      {raw ? (
+        <RawSqlRule detail={detail} dimensions={dimensions} onSaved={onSaved} />
+      ) : (
+        <RuleBuilder
+          detail={detail}
+          dimensions={dimensions}
+          ruleTypes={ruleTypes}
+          onSaved={onSaved}
+        />
+      )}
+    </S.Panel>
+  );
+};
+
+/**
+ * A rule chosen rather than written.
+ *
+ * The vocabulary comes from the service, not from here, so adding a rule kind
+ * is a change in one place. The SQL is composed there too, which is why this
+ * form needs no token: there is no statement for a caller to smuggle in.
+ */
+const RuleBuilder: React.FC<PanelProps> = ({
+  detail,
+  dimensions,
+  ruleTypes,
+  onSaved,
+}) => {
+  const columns = detail.properties.map(p => p.name);
+  const [column, setColumn] = useState(columns[0] ?? '');
+  const [kind, setKind] = useState(ruleTypes[0]?.kind ?? '');
+  const [params, setParams] = useState<Record<string, string>>({});
+  const [dimension, setDimension] = useState('');
+  const [preview, setPreview] = useState<PreviewShape | string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const selected = ruleTypes.find(r => r.kind === kind);
+
+  const rule = useCallback((): StructuredRule => {
+    const values: Record<string, unknown> = {};
+    (selected?.parameters ?? []).forEach(p => {
+      const value = params[p.name] ?? '';
+      if (p.type === 'list') {
+        values[p.name] = value
+          .split(',')
+          .map(v => v.trim())
+          .filter(Boolean);
+      } else if (p.type === 'number') {
+        values[p.name] = value === '' ? null : Number(value);
+      } else {
+        values[p.name] = value;
+      }
+    });
+    return {
+      contract_id: detail.contract.id,
+      kind,
+      column,
+      params: values,
+      ...(dimension ? { dimension } : {}),
+    };
+  }, [detail.contract.id, kind, column, params, dimension, selected]);
+
+  const run = useCallback(
+    async (save: boolean) => {
+      setBusy(true);
+      try {
+        if (save) {
+          await saveStructured(rule());
+          setPreview(null);
+          onSaved();
+        } else {
+          setPreview(await previewStructured(rule()));
+        }
+      } catch (e) {
+        setPreview((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [rule, onSaved]
+  );
+
+  return (
+    <>
+      <S.Actions>
+        <label>
+          <Typography variant='caption' color='texts.secondary'>
+            Column
+          </Typography>
+          <select value={column} onChange={e => setColumn(e.target.value)}>
+            {columns.map(c => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <Typography variant='caption' color='texts.secondary'>
+            Rule
+          </Typography>
+          <select
+            value={kind}
+            onChange={e => {
+              setKind(e.target.value);
+              setParams({});
+              setPreview(null);
+            }}
+          >
+            {ruleTypes.map(r => (
+              <option key={r.kind} value={r.kind}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <Typography variant='caption' color='texts.secondary'>
+            Dimension — weights the score
+          </Typography>
+          <select value={dimension} onChange={e => setDimension(e.target.value)}>
+            <option value=''>default ({selected?.dimension ?? '—'})</option>
+            {dimensions.map(d => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </label>
+      </S.Actions>
+
+      {(selected?.parameters ?? []).map(p => (
+        <Input
+          key={p.name}
+          variant='main-m'
+          type={p.type === 'number' ? 'number' : 'text'}
+          label={p.label}
+          value={params[p.name] ?? ''}
+          onChange={e => setParams({ ...params, [p.name]: e.target.value })}
+        />
+      ))}
+
+      <S.Actions>
+        <Button
+          buttonType='secondary-m'
+          text='Preview'
+          isLoading={busy}
+          onClick={() => run(false)}
+        />
+        <Button
+          buttonType='main-m'
+          text='Save and run'
+          isLoading={busy}
+          onClick={() => run(true)}
+        />
+      </S.Actions>
+      <PreviewResultView preview={preview} />
+    </>
+  );
+};
+
+/** The escape hatch: SQL someone wrote, so it carries the token. */
+const RawSqlRule: React.FC<Omit<PanelProps, 'ruleTypes'>> = ({
+  detail,
+  dimensions,
+  onSaved,
+}) => {
   const [draft, setDraft] = useState<RuleDraft>({
     contract_id: detail.contract.id,
     description: '',
@@ -235,7 +467,7 @@ const ContractPanel: React.FC<PanelProps> = ({ detail, dimensions, onSaved }) =>
   const [token, setToken] = useState(
     () => window.localStorage.getItem('dq_token') ?? ''
   );
-  const [preview, setPreview] = useState<PreviewResult | string | null>(null);
+  const [preview, setPreview] = useState<PreviewShape | string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(
@@ -260,43 +492,14 @@ const ContractPanel: React.FC<PanelProps> = ({ detail, dimensions, onSaved }) =>
   );
 
   return (
-    <S.Panel>
-      <Typography variant='h4'>
-        {detail.contract.title} — {detail.file}
-      </Typography>
-
-      {detail.rules.length > 0 && (
-        <div>
-          <Typography variant='subtitle2' color='texts.secondary'>
-            Rules written by hand. The rest of the tests are derived from the
-            schema.
-          </Typography>
-          {detail.rules.map(rule => (
-            <div key={rule.description}>
-              <Typography variant='body1'>
-                {rule.description}{' '}
-                <Typography variant='caption' color='texts.secondary'>
-                  {rule.dimension}
-                </Typography>
-              </Typography>
-              <S.Sql>{rule.query}</S.Sql>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Typography variant='h4'>Add a rule</Typography>
-      <Typography variant='subtitle2' color='texts.secondary'>
-        Saved as an ODCS quality entry in {detail.file}, then re-run. The
-        contract stays the source of truth; this is an editor for it.
-      </Typography>
+    <>
       <Input
         variant='main-m'
         label='Description — becomes the test name'
         value={draft.description}
         onChange={e => setDraft({ ...draft, description: e.target.value })}
       />
-      <div>
+      <label>
         <Typography variant='caption' color='texts.secondary'>
           Dimension — weights the score
         </Typography>
@@ -310,7 +513,7 @@ const ContractPanel: React.FC<PanelProps> = ({ detail, dimensions, onSaved }) =>
             </option>
           ))}
         </select>
-      </div>
+      </label>
       <div>
         <Typography variant='caption' color='texts.secondary'>
           SQL — must return one number, the count of bad rows
@@ -323,7 +526,7 @@ const ContractPanel: React.FC<PanelProps> = ({ detail, dimensions, onSaved }) =>
       <Input
         variant='main-m'
         type='password'
-        label='API token — authoring runs SQL against the source'
+        label='API token — only this route needs one, and the service prints it at startup'
         value={token}
         onChange={e => setToken(e.target.value)}
       />
@@ -341,22 +544,39 @@ const ContractPanel: React.FC<PanelProps> = ({ detail, dimensions, onSaved }) =>
           onClick={() => run(true)}
         />
       </S.Actions>
-      {typeof preview === 'string' && (
-        <Typography variant='body2' color='error.main'>
-          {preview}
-        </Typography>
+      <PreviewResultView preview={preview} />
+    </>
+  );
+};
+
+const PreviewResultView: React.FC<{
+  preview: PreviewShape | string | null;
+}> = ({ preview }) => {
+  if (!preview) return null;
+  if (typeof preview === 'string') {
+    return (
+      <Typography variant='body2' color='error.main'>
+        {preview}
+      </Typography>
+    );
+  }
+  return (
+    <div>
+      {preview.description && (
+        <Typography variant='body1'>{preview.description}</Typography>
       )}
-      {preview && typeof preview !== 'string' && (
-        <div>
-          <Typography variant='body2' color={preview.ok ? 'success.main' : 'error.main'}>
-            {preview.ok
-              ? `compiled · result ${preview.result} · failing rows ${preview.failed_rows ?? '—'}`
-              : (preview.error ?? preview.reason ?? 'the rule did not compile')}
-          </Typography>
-          {preview.compiled_sql && <S.Sql>{preview.compiled_sql}</S.Sql>}
-        </div>
+      <Typography
+        variant='body2'
+        color={preview.ok ? 'success.main' : 'error.main'}
+      >
+        {preview.ok
+          ? `compiled · result ${preview.result} · failing rows ${preview.failed_rows ?? '—'}`
+          : (preview.error ?? preview.reason ?? 'the rule did not compile')}
+      </Typography>
+      {(preview.compiled_sql ?? preview.query) && (
+        <S.Sql>{preview.compiled_sql ?? preview.query}</S.Sql>
       )}
-    </S.Panel>
+    </div>
   );
 };
 

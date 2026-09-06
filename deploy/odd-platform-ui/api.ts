@@ -97,6 +97,21 @@ export interface Sample {
   note?: string;
 }
 
+export interface RuleType {
+  kind: string;
+  dimension: string;
+  label: string;
+  parameters: { name: string; type: string; label: string }[];
+}
+
+export interface StructuredRule {
+  contract_id: string;
+  kind: string;
+  column: string;
+  params: Record<string, unknown>;
+  dimension?: string;
+}
+
 export interface RuleDraft {
   contract_id: string;
   description: string;
@@ -143,6 +158,31 @@ function authoring(draft: RuleDraft, token: string): RequestInit {
     body: JSON.stringify(draft),
   };
 }
+
+export const getRuleTypes = () =>
+  json<{ rules: RuleType[]; dimensions: string[] }>('/api/rules/catalogue');
+
+/**
+ * Rules built from the form need no token: the vocabulary is fixed and the SQL
+ * is composed by the service, so there is no statement to smuggle in. Only the
+ * raw-SQL escape hatch below is guarded.
+ */
+function structured(rule: StructuredRule): RequestInit {
+  return {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(rule),
+  };
+}
+
+export const previewStructured = (rule: StructuredRule) =>
+  json<PreviewResult & { description: string; query: string }>(
+    '/api/rules/structured/preview',
+    structured(rule)
+  );
+
+export const saveStructured = (rule: StructuredRule) =>
+  json<{ saved: string; file: string }>('/api/rules/structured', structured(rule));
 
 export const previewRule = (draft: RuleDraft, token: string) =>
   json<PreviewResult>('/api/rules/preview', authoring(draft, token));
