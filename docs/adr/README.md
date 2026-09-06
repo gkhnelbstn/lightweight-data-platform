@@ -18,8 +18,13 @@ Several of these exist only because an upstream project has a gap. Those say
 so, and say what to remove when it closes. **Deleting one of these records
 because upstream fixed something is a good outcome, not a loss.**
 
+Numbers are the order they were written, not the order they were decided or
+their importance. **[0012](0012-odd-not-openmetadata.md) is the one everything
+else rests on** — it is last because it was written last.
+
 | # | Decision | Retire when |
 |---|---|---|
+| [0012](0012-odd-not-openmetadata.md) | ODD Platform, because it needs no Elasticsearch | OpenMetadata drops the search-engine requirement |
 | [0001](0001-odcs-and-datacontract-cli.md) | ODCS contracts, checks run by datacontract-cli | never — this is the foundation |
 | [0002](0002-the-daily-window.md) | The window is a database object, per engine | `datacontract test --filter` works, or ODCS scopes a rule |
 | [0003](0003-scoring.md) | Dimension-weighted score; an outage is not bad data | ODD's own score becomes weightable |
