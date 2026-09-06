@@ -133,3 +133,53 @@ def test_a_classified_column_is_not_replicated():
         (CONTRACTS / "erp_customers.odcs.yaml").read_text(encoding="utf-8"))
     rule = sync_rule(doc)
     assert not (classified(doc) & set(rule.get("columns") or []))
+
+
+# --- the target nothing else creates ----------------------------------------
+
+def test_the_target_table_comes_from_the_contract():
+    """Logical replication replicates into a table that must already exist,
+    and the CDC reader upserts into one. It was created by hand while this was
+    written, so a clean install of the whole stack failed at the first sync."""
+    from core.sync import target_table_statement
+    stmt = target_table_statement(
+        _model(), "public",
+        {"columns": ["customer_id", "name", "country"],
+         "identity": ["customer_id", "country"]}, "postgres").as_string()
+    assert 'create table if not exists "public"."customers"' in stmt
+    assert '"customer_id"' in stmt and '"country"' in stmt
+
+
+def test_only_the_replicated_columns_exist_in_the_target():
+    """The privacy boundary is physical, not a filter: a classified column left
+    out of the rule has no column in the replica to leak from."""
+    from core.sync import target_table_statement
+    stmt = target_table_statement(
+        _model(), "public", {"columns": ["customer_id", "name"]},
+        "postgres").as_string()
+    assert "tax_id" not in stmt
+
+
+def test_identity_columns_are_not_null_in_the_target():
+    """A replica identity index has to be over NOT NULL columns."""
+    from core.sync import target_table_statement
+    stmt = target_table_statement(
+        _model(), "public",
+        {"columns": ["customer_id", "name"]}, "postgres").as_string()
+    assert '"customer_id" text not null' in stmt or "not null" in stmt
+
+
+def test_sql_server_types_are_translated():
+    """The contract states physical types in the *source's* dialect, so
+    replicating SQL Server into Postgres needs a translation -- `int` and
+    `decimal` are not Postgres spellings."""
+    from core.sync import target_table_statement
+    model = {"name": "sales_orders", "physicalName": "sales_orders",
+             "properties": [
+                 {"name": "order_id", "physicalType": "bigint", "primaryKey": True},
+                 {"name": "customer_id", "physicalType": "int"},
+                 {"name": "net_amount", "physicalType": "decimal"},
+                 {"name": "currency", "physicalType": "char"}]}
+    stmt = target_table_statement(model, "public", {}, "sqlserver").as_string()
+    assert "integer" in stmt and "numeric" in stmt
+    assert " int," not in stmt and "decimal" not in stmt

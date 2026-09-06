@@ -155,6 +155,14 @@ bound by neither.
 actually running and how far behind the slot is, rather than letting a dead
 worker look like a quiet one.
 
+The target table is built from the contract as well. Nothing else creates it
+-- logical replication replicates into a table that must already exist, and
+the CDC reader upserts into one -- so a clean install would otherwise fail at
+the first sync. Only the replicated columns are created, which is what makes
+the next paragraph physical rather than a filter. The contract states physical
+types in the *source's* dialect, so replicating SQL Server into Postgres
+translates them.
+
 The column list doubles as a privacy control. `tax_id` is classified in the
 contract, is left out of the list, and so **does not exist in the replica at
 all** -- masking a column in the UI is no use if the whole column was copied
@@ -243,6 +251,7 @@ does not enter into it.
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
 | `core/sync.py` | derive a Postgres publication/subscription from the contract |
 | `core/sync_mssql.py` | apply SQL Server's CDC change table to a Postgres target |
+| `deploy/mssql-cdc.sql` | turn on SQL Server CDC for the demo tables |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
 | `web/index.html` | single-file UI, no build step |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |

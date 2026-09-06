@@ -233,6 +233,17 @@ def sync_once(contract: dict) -> dict:
     with psycopg.connect(
             f"host={target['host']} port={target.get('port', 5432)} "
             f"dbname={target['database']} user={user} password={password}") as pg:
+        # Same reason as core/sync.py: nothing else creates the target. The
+        # identity statements come with it -- the upsert is `on conflict
+        # (identity)`, which needs the unique index that makes the identity
+        # one, not merely columns of the right name.
+        from core.sync import _identity_statements, target_table_statement
+        schema = target.get("schema", "public")
+        pg.execute(target_table_statement(model, schema, rule,
+                                          source.get("type")))
+        for stmt in _identity_statements(model, schema, rule):
+            pg.execute(stmt)
+        pg.commit()
         # A snapshot was filtered by the source in its WHERE clause, so
         # re-testing every row here would be one round trip per row for an
         # answer already known.

@@ -2,6 +2,10 @@
 -- about it. Postgres runs this once, when the volume is empty.
 create database erp;
 create database dq;
+-- The target of the sync rules. Logical replication does not create tables on
+-- the subscriber and neither does anything else, so core/sync.py builds them
+-- from the contract; it still needs a database to build them in.
+create database erp_replica;
 
 -- Contract checks are SQL a person wrote, executed against the source. They
 -- should not be able to write to it, and they should not be able to sit on a

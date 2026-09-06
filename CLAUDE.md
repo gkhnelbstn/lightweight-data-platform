@@ -7,7 +7,7 @@ the operating manual.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 64 tests, no database needed
+pytest -q                                                  # 74 tests, no database needed
 python seed/seed.py                                        # rebuild the demo ERP data
 python core/runner.py --backfill-days 44 --emit-artifacts  # rebuild history + artifacts
 python core/runner.py                                      # the daily unit (today)

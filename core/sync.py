@@ -172,6 +172,50 @@ def unsound_identity(contract: dict, rule: dict) -> list[str]:
             if status == "fail" and field in identity]
 
 
+# The contract states a physical type per property, in the *source's* dialect.
+# Replicating SQL Server into Postgres therefore needs a translation, and only
+# for the types the contracts actually use -- guessing at the rest would be a
+# type mapping library nobody asked for.
+TSQL_TO_PG = {"int": "integer", "smallint": "smallint", "bigint": "bigint",
+              "bit": "boolean", "char": "text", "nchar": "text",
+              "varchar": "text", "nvarchar": "text", "text": "text",
+              "date": "date", "datetime": "timestamp",
+              "datetime2": "timestamp", "decimal": "numeric",
+              "numeric": "numeric", "float": "double precision",
+              "money": "numeric", "uniqueidentifier": "uuid"}
+
+
+def target_table_statement(model: dict, schema: str, rule: dict,
+                           source_type: str) -> sql.Composed:
+    """The target table, as the contract describes it.
+
+    Nothing creates this: logical replication replicates into a table that has
+    to be there already, and the CDC reader upserts into one. It was created by
+    hand while this was being built, which meant a clean install of the whole
+    stack would have failed at the first sync.
+
+    Only the replicated columns, so a column left out of the rule does not
+    exist in the target at all -- the privacy boundary is physical.
+    """
+    columns = rule.get("columns") or [p["name"] for p in model["properties"]]
+    identity = set(identity_columns(model, rule))
+    types = {p["name"]: p.get("physicalType") or "text"
+             for p in model.get("properties") or []}
+    mssql = source_type in ("sqlserver", "mssql")
+    defs = []
+    for name in columns:
+        physical = str(types.get(name, "text")).lower()
+        if mssql:
+            physical = TSQL_TO_PG.get(physical.split("(")[0], "text")
+        defs.append(sql.SQL("{} {}").format(
+            sql.Identifier(name), sql.SQL(physical))
+            + (sql.SQL(" not null") if name in identity else sql.SQL("")))
+    return sql.SQL("create table if not exists {}.{} ({})").format(
+        sql.Identifier(schema), sql.Identifier(
+            model.get("physicalName") or model["name"]),
+        sql.SQL(", ").join(defs))
+
+
 def _identity_statements(model: dict, schema: str,
                          rule: dict) -> list[sql.Composed]:
     """The NOT NULL, the unique index and the REPLICA IDENTITY, in that order.
@@ -250,7 +294,10 @@ def plan(contract: dict) -> dict | None:
                        _identity_statements(model, source.get("schema", "public"), rule)]
                       + [render(publication_statement(
                           model, source.get("schema", "public"), rule, name))],
-            "target": [render(s) for s in
+            "target": [render(target_table_statement(
+                           model, target.get("schema", "public"), rule,
+                           source.get("type")))]
+                      + [render(s) for s in
                        _identity_statements(model, target.get("schema", "public"), rule)]
                       + [f"create subscription {name} connection '...' "
                          f"publication {name} with (create_slot = false, "
@@ -294,6 +341,8 @@ def apply(contract: dict) -> dict:
                        (slot,))
 
     with psycopg.connect(_dsn(target, user, password), autocommit=True) as cx:
+        cx.execute(target_table_statement(
+            model, target.get("schema", "public"), rule, source.get("type")))
         for stmt in _identity_statements(model, target.get("schema", "public"), rule):
             cx.execute(stmt)
         cx.execute(sql.SQL("drop subscription if exists {}").format(
