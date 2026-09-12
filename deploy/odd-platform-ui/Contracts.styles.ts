@@ -30,6 +30,15 @@ export const Row = styled(Grid)<{ $selected?: boolean }>(
     &:hover {
       background: ${theme.palette.backgrounds.primary};
     }
+
+    /* role="button" on a div gets none of the UA's default focus styling.
+       currentColor rather than a named token: nothing else here has needed
+       one, and this fork does not carry a copy of ODD's theme to check one
+       against -- see ADR 0009. */
+    &:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: -2px;
+    }
   `
 );
 

@@ -96,7 +96,13 @@ export const Contracts: React.FC = () => {
       </Typography>
     );
   }
-  if (!overview) return null;
+  if (!overview) {
+    return (
+      <Typography variant='body2' color='texts.secondary'>
+        Loading contracts…
+      </Typography>
+    );
+  }
 
   return (
     <>
@@ -122,6 +128,18 @@ export const Contracts: React.FC = () => {
             key={c.id}
             $selected={selected === c.id}
             onClick={() => select(c.id)}
+            role='button'
+            tabIndex={0}
+            aria-expanded={selected === c.id}
+            onKeyDown={e => {
+              // A row is a toggle, not a link -- Space and Enter both open it,
+              // the way a real <button> would; Space's default (page scroll)
+              // is the one thing worth preventing.
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                select(c.id);
+              }
+            }}
           >
             <div>
               <Typography variant='body1'>{c.title}</Typography>
@@ -272,7 +290,16 @@ const Trend: React.FC<{ points: { run_at: string; score: string | number }[] }> 
           {points.length} days · dimension-weighted
         </Typography>
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} width='100%' height={h} style={{ maxWidth: w }}>
+      {/* Decorative: the number and day count beside it already say what this
+          shows. Per-point detail lives in the title tooltips, mouse-only --
+          the concise summary text is the accessible fallback, not the SVG. */}
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        width='100%'
+        height={h}
+        style={{ maxWidth: w }}
+        aria-hidden='true'
+      >
         <path d={path} fill='none' stroke='currentColor' strokeWidth='1.6' opacity={0.7} />
         {values.map((v, i) =>
           v < 0.95 ? (
