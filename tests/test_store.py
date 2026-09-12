@@ -93,3 +93,62 @@ def test_audit_rows_are_scoped_to_their_own_contract(dq):
                       "b", {"query": "select 1"})
     assert len(rows(dq, "erp.customers")) == 1
     assert len(rows(dq, "dwh.fct_orders")) == 1
+
+
+# --- check_results / contract_scores have queries with no leading-column
+# match on their primary key (run_at); api/main.py filters contract_id,
+# check_id or run_window and orders by run_at, none of which the PK alone
+# serves. Measured on the shipped demo data before this: every one of these
+# was a sequential scan across every check_results partition. See core/store.py.
+
+def test_the_indexes_api_main_needs_actually_exist(dq):
+    names = {r[0] for r in dq.execute(
+        """select indexname from pg_indexes
+            where tablename in ('check_results', 'contract_scores')""").fetchall()}
+    assert "check_results_contract" in names
+    assert "check_results_check_id" in names
+    assert "check_results_window_status" in names
+    assert "contract_scores_window" in names
+
+
+def test_a_partitioned_index_covers_a_partition_created_after_it(dq):
+    """core/bootstrap_db's ensure_partition() creates a partition per month,
+    on whatever day a contract is first checked -- possibly long after
+    store.init() runs. A partitioned index has to reach a partition attached
+    later without anyone re-running the index statements for it."""
+    from datetime import date
+    from core import store
+    store.ensure_partition(dq, date(2031, 6, 1))
+    local = {r[0] for r in dq.execute(
+        """select indexname from pg_indexes
+            where tablename = 'check_results_2031_06'""").fetchall()}
+    assert any(name.startswith("check_results_2031_06_contract_id")
+              for name in local)
+
+
+def test_contract_detail_query_uses_the_index_not_a_seq_scan(dq):
+    """The regression this guards: /api/contracts/{id} read every partition in
+    full because contract_id and run_window had no index. A brand-new table
+    plans a seq scan regardless of the index -- there is nothing to seek
+    past -- so this seeds enough rows for the planner to have an opinion,
+    the same reason ANALYZE ran against the real demo data, not an empty one.
+    """
+    from datetime import date
+    from core import store
+    store.ensure_partition(dq, date(2026, 1, 1))
+    for i in range(500):
+        dq.execute(
+            """insert into check_results (run_at, check_id, contract_id,
+                   status, failed_rows, total_rows, fail_ratio, duration_ms,
+                   run_window)
+               values (%s, %s, %s, 'pass', 0, 1, 0, 1, 'incremental')""",
+            (date(2026, 1, 1), f"check_{i}",
+             "erp.customers" if i % 50 == 0 else f"other.contract_{i}"))
+    dq.execute("analyze check_results")
+
+    plan = "\n".join(r[0] for r in dq.execute(
+        """explain select distinct on (check_id) check_id, run_at
+             from check_results
+            where contract_id = 'erp.customers' and run_window = 'incremental'
+            order by check_id, run_at desc""").fetchall())
+    assert "Seq Scan" not in plan

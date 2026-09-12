@@ -47,6 +47,24 @@ alter table check_results add column if not exists sql text;
 
 create index if not exists check_results_brin on check_results using brin (run_at);
 
+-- The PK's leading column is run_at, but api/main.py never filters on it --
+-- every read filters contract_id or check_id plus run_window and orders by
+-- run_at, which the PK cannot serve (leftmost-prefix). Measured on the
+-- shipped demo data: /api/contracts/{id} was a sequential scan of every
+-- partition. A partitioned index created here propagates to every existing
+-- partition immediately and to every future one core/bootstrap_db's
+-- ensure_partition() creates, with no change needed there.
+create index if not exists check_results_contract
+  on check_results (contract_id, run_window, run_at desc);
+create index if not exists check_results_check_id
+  on check_results (check_id, run_window, run_at desc);
+-- The open-failures query on /api/overview: filtered and grouped by
+-- contract_id within run_window, same shape as check_results_contract, so it
+-- reuses that index for the "last run per contract" half; this one covers the
+-- "status <> 'pass'" half without a second full scan.
+create index if not exists check_results_window_status
+  on check_results (run_window, status);
+
 create table if not exists odd_pushes (
   target text not null,
   run_at date not null,
@@ -101,6 +119,12 @@ create table if not exists contract_scores (
 );
 
 alter table contract_scores add column if not exists checks_errored int not null default 0;
+
+-- Same leftmost-prefix gap as check_results: /api/overview's trend and
+-- latest-per-contract queries both filter run_window and either group or
+-- order by run_at/contract_id, none of which the PK's leading run_at serves.
+create index if not exists contract_scores_window
+  on contract_scores (run_window, contract_id, run_at desc);
 
 -- What api/main.py's _save() and save_sync_rule() changed, and when. No `who`:
 -- there is no identity provider (ADR 0010) -- every caller of the guarded
