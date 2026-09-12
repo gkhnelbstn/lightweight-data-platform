@@ -43,9 +43,37 @@ Four preconditions, each found by hitting it on a running pair:
 The target table itself is built from the contract, because nothing else
 creates it.
 
+## Bi-directional replication is out of scope
+
+`origin = none` on the subscription (PostgreSQL 16) makes a two-way pair
+possible without the change echoing back and forth forever — that much was
+verified on the running stack. What it does not give is a **conflict
+policy**: two writers touching the same row is last-writer-wins at best, and
+a genuine conflict — a duplicate key on the subscriber — stops the apply
+worker the way logical replication always fails here, silently, in a
+background process that only writes to the server log.
+
+A real policy would be a `syncTo` pair rejected unless the two sides'
+row filters can be shown to touch disjoint rows — `country = 'TR'` on one
+side and `country = 'DE'` on the other, proven from the filter expressions
+rather than assumed. That proof is a small theorem prover over arbitrary SQL
+predicates, and a wrong "yes" is worse than the feature not existing: it is
+exactly the silent-corruption shape this ADR exists to avoid, and there is no
+contract in this repository that needs it to find out whether it works.
+
+So: **bi-directional stays out of scope until a real pair needs it.**
+Nothing here builds toward it, and nothing should — `core/sync.py` treats
+every `syncTo` rule as one direction, and a person wiring up two rules that
+point at each other gets exactly what is described above, unguarded.
+Revisit this the day a contract actually wants two-way sync; the disjointness
+proof gets designed against that real pair, not a hypothetical one.
+
 ## Consequences
 
 * `--status` exists because a dead apply worker and a quiet one look identical.
+* Bi-directional is unguarded, not merely unbuilt — see above. `--status` still
+  tells a stopped worker from a quiet one either way, which is the one piece
+  of this that has to work regardless of direction.
 * Rules 2 and 3 are *logical replication's*, not replication's in general. The
   CDC reader has whole rows and is bound by neither — applying them to a SQL
   Server contract reported a problem that was not one, and carrying the widened
