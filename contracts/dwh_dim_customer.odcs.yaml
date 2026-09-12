@@ -36,7 +36,11 @@ customProperties:
       insert into dim.customer (customer_id, name, country, segment,
                                 valid_from, loaded_at)
       select s.customer_id, s.name, s.country,
-             coalesce(s.segment, 'UNKNOWN'), s.loaded_at, s.loaded_at
+             coalesce(s.segment, 'UNKNOWN'),
+             case when exists (select 1 from dim.customer x
+                                where x.customer_id = s.customer_id)
+                  then s.loaded_at else date '0001-01-01' end,
+             s.loaded_at
       from raw.customers s
       left join dim.customer d
         on d.customer_id = s.customer_id and d.is_current
