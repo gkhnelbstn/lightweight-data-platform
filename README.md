@@ -477,23 +477,36 @@ Early. A working vertical slice, not a product.
   — and a source with neither a watermark nor CDC has genuinely invisible
   deletes, which no amount of contract fixes. (Replication is a different
   question and does use CDC; see below.)
-* **Bi-directional replication has no conflict resolution.** Subscriptions are
-  created with `origin = none` (PG16), so a two-way pair does not loop — that
-  much is verified. Two writers touching the same row is last-writer-wins, and
-  a real conflict stops the apply worker silently. It is a documented
-  capability, not a supported mode:
+* **Bi-directional replication has no conflict resolution, by decision.**
+  Subscriptions are created with `origin = none` (PG16), so a two-way pair does
+  not loop — that much is verified. Two writers touching the same row is
+  last-writer-wins, and a real conflict stops the apply worker silently. A real
+  policy would mean proving two `syncTo` row filters touch disjoint rows —
+  a small theorem prover over arbitrary SQL, and a wrong "yes" there is worse
+  than the feature not existing. Nothing here is bi-directional, so it stays
+  out of scope until a real pair needs it:
+  [ADR 0008](docs/adr/0008-replication.md#bi-directional-replication-is-out-of-scope),
+  decided in
   [#6](https://github.com/gkhnelbstn/lightweight-data-platform/issues/6).
 * **Custom SQL is executed as written.** The checks connect as `dq_reader` --
   `SELECT` only, `default_transaction_read_only`, a 60s `statement_timeout` --
   so a rule cannot write or hang. That is a smaller blast radius, not a
   sandbox: it can still read every column it is granted and cost a table scan.
-* **Only the write routes are authenticated.** `/api/rules` and
-  `/api/rules/preview` compile and run a person's SQL, so they require
-  `DQ_API_TOKEN` and refuse when it is unset. Reads are open, and ODD's
-  `/ingestion/**` is open by its own design (issue #1740). Private network.
-* **No column-level lineage**
-  ([#4](https://github.com/gkhnelbstn/lightweight-data-platform/issues/4)).
-  ODD's ingestion model has none — `DataTransformer` is dataset-level — and the issues that would add it have been open since 2022.
+* **Authenticated where SQL a person typed would otherwise run or ship.**
+  `/api/rules` and `/api/rules/preview` compile and run raw SQL; `/api/sync/rules`
+  turns a typed row filter into a publication's `WHERE` clause. All three
+  require `DQ_API_TOKEN` and refuse when it is unset. `/api/rules/structured`
+  needs none — the vocabulary is fixed and composed server-side, so there is
+  nothing to smuggle in. Reads are open, and ODD's `/ingestion/**` is open by
+  its own design (issue #1740). Private network.
+* **No column-level lineage, by decision.** ODD's ingestion model has none —
+  `DataTransformer` is dataset-level — checked against 0.29.0 rather than
+  assumed: there is no field for a column pair. Modelling it ourselves (parsing
+  `derivedBy` with sqlglot) is real work with no concrete demand behind it yet,
+  so the decision is to do neither, and ask instead:
+  [odd-platform#1895](https://github.com/opendatadiscovery/odd-platform/issues/1895),
+  decided in
+  [#4](https://github.com/gkhnelbstn/lightweight-data-platform/issues/4).
   Table-level lineage works, including the BI chain, and the contract's foreign
   keys are published as column-level ERD relationships, but that is a different
   thing from "which column feeds which".
@@ -529,11 +542,44 @@ Early. A working vertical slice, not a product.
 * **No PII classification.** `integrations/odd/classify.py` samples each column
   and tags it in ODD — `pii:TR_TCKN`, `pii:EMAIL_ADDRESS` — as first-class,
   searchable tags. The recognisers are Microsoft's **Presidio** (MIT, ~10k
-  stars) rather than patterns of our own; the Turkish identifiers are ours
-  because Presidio has none, and they validate the checksum rather than
+  stars) rather than patterns of our own; the Turkish identifiers were ours
+  because Presidio had none, and they validate the checksum rather than
   matching eleven digits. It costs ~265 MB in the image, which is the small
   spaCy model rather than the 425 MB default — a column of identifiers is not
-  free text, so the NLP half earns very little here.
+  free text, so the NLP half earns very little here. TCKN has since shipped
+  upstream independently
+  ([microsoft/presidio#1995](https://github.com/microsoft/presidio/pull/1995));
+  VKN was offered
+  ([presidio#2250](https://github.com/data-privacy-stack/presidio/pull/2250),
+  the project having moved) and is tracked in
+  [#5](https://github.com/gkhnelbstn/lightweight-data-platform/issues/5) —
+  ours gets deleted, not kept alongside, once either ships in a release.
+* **The customer dimension overwrote history.** `dim.customer` was Type 1:
+  dropped and rebuilt from the source every run, so a re-graded customer's
+  earlier segment stopped existing the moment sales changed it, and a closed
+  month's revenue could move between segments after the fact. It is Type 2
+  now — a surrogate key, a half-open `[valid_from, valid_to)` interval,
+  `is_current` — and `fct.orders` joins as of the order date:
+  [#9](https://github.com/gkhnelbstn/lightweight-data-platform/issues/9).
+* **`syncTo` rules were read-only.** `/api/sync` could report whether a
+  replication rule was sound but not create or change one — that meant
+  hand-editing a contract's YAML. `POST /api/sync/rules` authors one the way a
+  quality rule already is: rejected before writing, with the specific reason,
+  against ADR 0008's own four preconditions run on the rule as proposed:
+  [#10](https://github.com/gkhnelbstn/lightweight-data-platform/issues/10).
+* **A saved rule left no record of what it replaced.** Beyond git blame on a
+  file a script also writes, nothing said what a rule used to be. Every write
+  through `/api/rules`, `/api/rules/structured` or `/api/sync/rules` now logs
+  to `contract_audit` — what changed, when, and an optional free-text label —
+  read back at `GET /api/contracts/{id}/audit`. Deliberately not *who*: there
+  is no identity provider (ADR 0010), so a verified-looking column would be
+  lying:
+  [#12](https://github.com/gkhnelbstn/lightweight-data-platform/issues/12).
+* **The test suite had no in-container equivalent.** `pytest -q` worked only
+  against a host install; the app image carried neither `tests/` nor `pytest`.
+  Both are there now, the same way `core/` and `api/` are bind-mounted rather
+  than only baked in: `docker compose exec app pytest -q tests`:
+  [#7](https://github.com/gkhnelbstn/lightweight-data-platform/issues/7).
 
 ### Reported upstream
 
@@ -546,6 +592,7 @@ Early. A working vertical slice, not a product.
 | a row filter is all-or-nothing; uniqueness needs to opt out | [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593) |
 | odd-collector's Superset adapter: int ids, and lineage only for postgresql/sqlite | [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135) |
 | metric ingestion is write-once per family: the second write is an NPE | [odd-platform#1882](https://github.com/opendatadiscovery/odd-platform/issues/1882) |
+| column-level lineage edges, alongside the existing dataset-level ones | [odd-platform#1895](https://github.com/opendatadiscovery/odd-platform/issues/1895) |
 
 ## Where this goes next
 
@@ -554,39 +601,32 @@ version of this list said "adopt ODCS and let `datacontract test` derive the
 checks" and "add authentication"; both are done, and what is left is smaller
 and mostly other people's to merge.
 
-1. **Column-level lineage**
-   ([#4](https://github.com/gkhnelbstn/lightweight-data-platform/issues/4)).
-   The one thing here with no answer, and checked
-   against 0.29.0 rather than assumed: `DataTransformer` carries lists of
-   dataset ODDRNs, and a lineage edge is `{source_id, target_id}`. There is no
-   field for a column in either, so this is not something we can add by
-   writing more code. OpenMetadata has
-   it and requires Elasticsearch or OpenSearch, which is a cost we have
-   already declined. The rule for revisiting is that requirement disappearing,
-   not the feature looking attractive.
-2. **Delete `deploy/Dockerfile.odd-collector`**
+1. **Delete `deploy/Dockerfile.odd-collector`**
    ([#1](https://github.com/gkhnelbstn/lightweight-data-platform/issues/1)) when
    [odd-collectors#136](https://github.com/opendatadiscovery/odd-collectors/pull/136)
    merges. Carrying a patch is a debt, and the point of sending it upstream is
    to stop paying it.
-3. **Move the window into the contract proper**
+2. **Move the window into the contract proper**
    ([#2](https://github.com/gkhnelbstn/lightweight-data-platform/issues/2)) if
    [datacontract-cli#1593](https://github.com/datacontract/datacontract-cli/issues/1593)
    lands — per-rule scoping would retire `TABLE_SCOPED_TYPES` and the second
    unwindowed pass with it.
-4. **Offer the Turkish identifiers to Presidio**
-   ([#5](https://github.com/gkhnelbstn/lightweight-data-platform/issues/5)),
-   once they have run against real data long enough to be worth someone else's
-   maintenance.
-5. **Backfill the SQL Server history** before 2026-08-16, which is still
+3. **Land the Turkish identifiers in Presidio.** TCKN shipped upstream on its
+   own; VKN is an open PR
+   ([presidio#2250](https://github.com/data-privacy-stack/presidio/pull/2250)).
+   Delete ours once either ships in a release, tracked in
+   [#5](https://github.com/gkhnelbstn/lightweight-data-platform/issues/5).
+4. **Backfill the SQL Server history** before 2026-08-16, which is still
    recorded as errored from the period when that source did not exist.
-6. **Publish the score as an ODD metric**
+5. **Publish the score as an ODD metric**
    ([#3](https://github.com/gkhnelbstn/lightweight-data-platform/issues/3))
    once its metrics API accepts a second write to the same family
    ([odd-platform#1882](https://github.com/opendatadiscovery/odd-platform/issues/1882)).
 
 Every one of these is an open issue, and each says what "done" means and what
-to delete when it is.
+to delete when it is. Column-level lineage and bi-directional replication's
+conflict policy used to be on this list; both are now decisions rather than
+open questions -- see "Status and limitations" above.
 
 ## License
 
