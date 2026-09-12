@@ -101,6 +101,25 @@ create table if not exists contract_scores (
 );
 
 alter table contract_scores add column if not exists checks_errored int not null default 0;
+
+-- What api/main.py's _save() and save_sync_rule() changed, and when. No `who`:
+-- there is no identity provider (ADR 0010) -- every caller of the guarded
+-- routes shares one bearer token, and the un-guarded structured-rule and
+-- syncTo routes have no caller identity at all. `caller_label` is free text a
+-- caller may supply and is never verified; it is not a `user` column.
+create table if not exists contract_audit (
+  id bigint generated always as identity primary key,
+  contract_id text not null,
+  change_type text not null,
+  action text not null,
+  description text not null,
+  value jsonb not null,
+  caller_label text,
+  run_at timestamptz not null default now()
+);
+
+create index if not exists contract_audit_contract
+  on contract_audit (contract_id, run_at desc);
 """
 
 
@@ -156,6 +175,24 @@ def write_results(conn, run_at: date, contract_id: str, rows: list[dict],
              r.get("duration_ms", 0), window,
              r.get("name", ""), r.get("check_type", ""), r.get("field"),
              r.get("reason"), r.get("sql")))
+
+
+def write_audit(conn, contract_id: str, change_type: str, action: str,
+                description: str, value: dict,
+                caller_label: str | None = None) -> None:
+    """One row per rule write. See api/main.py's _save() and save_sync_rule().
+
+    `change_type` is 'quality_rule' or 'sync_rule'; `action` is 'created' or
+    'replaced' -- the caller already knows which, from whether a rule with
+    this description or `syncTo` server existed before the write.
+    """
+    import json
+    conn.execute(
+        """insert into contract_audit (contract_id, change_type, action,
+               description, value, caller_label)
+           values (%s,%s,%s,%s,%s,%s)""",
+        (contract_id, change_type, action, description, json.dumps(value),
+         caller_label))
 
 
 def write_score(conn, run_at: date, contract_id: str, score: float,

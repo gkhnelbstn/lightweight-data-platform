@@ -202,6 +202,17 @@ def contract_detail(contract_id: str) -> dict:
             "file": path.name}
 
 
+@app.get("/api/contracts/{contract_id}/audit")
+def contract_audit(contract_id: str) -> list[dict]:
+    """What changed about this contract's rules, and when -- not who; see
+    issue #12 and core/store.py's contract_audit table."""
+    return q("""select change_type, action, description, value,
+                       caller_label, run_at
+                from contract_audit
+                where contract_id = %s
+                order by run_at desc""", (contract_id,))
+
+
 @app.get("/api/checks/{check_id}/history")
 def check_history(check_id: str) -> list[dict]:
     return q("""select run_at, status, failed_rows, total_rows, fail_ratio
@@ -361,6 +372,9 @@ class SyncRuleDraft(BaseModel):
     filter: str | None = None
     columns: list[str] | None = None
     identity: list[str] | None = None
+    # Free text, never verified -- there is no identity provider (ADR 0010).
+    # See issue #12: this is "what changed", not "who changed it".
+    caller_label: str | None = None
 
 
 @app.post("/api/sync/rules", dependencies=[Depends(authorised)])
@@ -383,11 +397,14 @@ def save_sync_rule(draft: SyncRuleDraft) -> dict:
     if bad:
         raise HTTPException(400, "; ".join(bad))
 
+    existed = sync.sync_rule(doc) is not None
     props = doc.setdefault("customProperties", [])
     props[:] = [p for p in props if p.get("property") != "syncTo"]
     props.append({"property": "syncTo", "value": rule})
     path.write_text(yaml.dump(doc, Dumper=ContractDumper, sort_keys=False,
                               allow_unicode=True, width=100), encoding="utf-8")
+    _audit(draft.contract_id, "sync_rule", "replaced" if existed else "created",
+          rule["server"], rule, draft.caller_label)
 
     try:
         plan = sync.plan(doc)
@@ -397,12 +414,27 @@ def save_sync_rule(draft: SyncRuleDraft) -> dict:
             "plan": plan}
 
 
+def _audit(contract_id: str, change_type: str, action: str, description: str,
+          value: dict, caller_label: str | None) -> None:
+    """Not best-effort: the file is already written by the time this runs, so
+    swallowing a failure here would let the file and the trail of it silently
+    drift apart -- exactly what issue #12 exists to not do. A DQ store outage
+    surfaces as a 500 on an otherwise-successful save rather than a quiet gap.
+    """
+    with store.connect() as dq:
+        store.init(dq)
+        store.write_audit(dq, contract_id, change_type, action,
+                          description, value, caller_label)
+
+
 class RuleDraft(BaseModel):
     contract_id: str
     description: str
     query: str
     dimension: str = "conformity"
     must_be: int = 0
+    # Free text, never verified -- see SyncRuleDraft.caller_label and issue #12.
+    caller_label: str | None = None
 
 
 def _run_datacontract(path: Path, server: str = "erp") -> dict:
@@ -430,6 +462,7 @@ class StructuredRule(BaseModel):
     column: str
     params: dict = {}
     dimension: str | None = None
+    caller_label: str | None = None
 
 
 @app.get("/api/rules/catalogue")
@@ -461,7 +494,8 @@ def _as_draft(rule: StructuredRule) -> RuleDraft:
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return RuleDraft(contract_id=rule.contract_id, description=description,
-                     query=sql, dimension=rule.dimension or dimension, must_be=0)
+                     query=sql, dimension=rule.dimension or dimension, must_be=0,
+                     caller_label=rule.caller_label)
 
 
 @app.post("/api/rules/structured")
@@ -530,12 +564,17 @@ def _save(draft: RuleDraft) -> dict:
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     model = doc["schema"][0]
     rules = model.setdefault("quality", [])
+    existed = any(r.get("description") == draft.description for r in rules)
     rules[:] = [r for r in rules if r.get("description") != draft.description]
     rules.append({"type": "sql", "description": draft.description,
                   "query": draft.query, "mustBe": draft.must_be,
                   "dimension": draft.dimension})
     path.write_text(yaml.dump(doc, Dumper=ContractDumper, sort_keys=False,
                               allow_unicode=True, width=100), encoding="utf-8")
+    _audit(draft.contract_id, "quality_rule", "replaced" if existed else "created",
+          draft.description,
+          {"query": draft.query, "must_be": draft.must_be,
+           "dimension": draft.dimension}, draft.caller_label)
 
     doc["_path"] = str(path)
     return {"saved": draft.description, "file": path.name,
