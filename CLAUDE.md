@@ -17,8 +17,9 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 171 tests, no database needed
+pytest -q                                                  # 185 tests; the 6 in test_medallion_scd2 skip without a database
 python seed/seed.py                                        # rebuild the demo ERP data
+python seed/seed.py --mutate                               # re-grade 20 customers in place
 python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
 python core/runner.py --odd-url http://odd-platform:8080   # ...and send it to ODD
@@ -136,6 +137,16 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 * `fn_cdc_get_all_changes(..., 'all')` returns operations 1, 2 and 4 — no
   before image. Ask for `'all update old'` or an update that changes an
   identity column silently duplicates the row.
+* `dim.customer` is the one warehouse table `demo/medallion.py` does **not**
+  rebuild -- it is SCD Type 2, so a change closes the current version and opens
+  a new one. Its oldest version opens at `0001-01-01`, not at the source row's
+  arrival date: an ERP moves `loaded_at` when it updates a row, so a re-graded
+  customer would look newer than the orders they placed and 132 of them lost
+  their country. `-infinity` is the natural sentinel and psycopg refuses to
+  return it.
+* Warehouse drops need `cascade`. The runner leaves an `asof_*` view on every
+  table it checks, and a second `medallion.py` run fails on the dependency --
+  the views are rebuilt by the next run anyway.
 * The `identity` widening in a `syncTo` rule is a *logical replication*
   requirement. The CDC reader has whole rows and does not need it; a mutable
   column in the identity breaks it there.

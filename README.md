@@ -2,7 +2,7 @@
 
 Contract-driven data quality on top of **OpenDataDiscovery**. The catalog,
 search, glossary, alerting and schema discovery are ODD's. The contracts, the
-daily run, the score and the trend are here. Ten contracts, 228 checks a day,
+daily run, the score and the trend are here. Eleven contracts, 257 checks a day,
 45 days of history, PostgreSQL.
 
 **New here?** [`docs/architecture.md`](docs/architecture.md) is how it works,
@@ -179,9 +179,13 @@ charted in Superset:
 ```
 erp.sales_orders          (Postgres, under contract)
   -> Staged Orders        stg.orders     drops cancelled and customerless rows
-    -> Orders Fact        fct.orders     joined to the customer dimension
+    -> Orders Fact        fct.orders     joined to the dimension as of the order date
       -> Daily Revenue    mart.revenue_daily
         -> "Gunluk Ciro (mart)"          a Superset chart
+
+erp.customers             (Postgres, under contract)
+  -> Customer Dimension   dim.customer   Type 2: one row per version
+    -> Orders Fact        fct.orders
 ```
 
 That chain is read straight out of ODD, and it is the answer to the question:
@@ -324,8 +328,8 @@ docker compose exec app python core/runner.py --backfill-days 44 \
     --odd-url http://odd-platform:8080
 ```
 
-* contract UI — http://localhost:8077
-* ODD — http://localhost:8080
+* ODD — http://localhost:8080 — the contract panel is on its Data Quality page
+* http://localhost:8077 — the API that panel calls, and a page saying so
 
 That is the Postgres half. The second source, the replication and the chain
 that ends at a dashboard are in the second file:

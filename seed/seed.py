@@ -7,9 +7,16 @@ is computed rather than faked. Incidents are scripted:
   day 30  status mapping fixed
   day 35  a CDC replay duplicates order ids
   day 38  duplicates cleaned, rounding bug fixed
+
+`--mutate` re-grades a few customers in place instead of re-seeding. The ERP
+keeps one row per customer and overwrites it, which is the case the warehouse's
+Type 2 dimension exists for: run it between two `demo/medallion.py` runs and
+the second run turns each change into a second version rather than losing the
+old one.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import random
 from datetime import date, timedelta
@@ -59,6 +66,26 @@ def _vkn(seed: int) -> str:
         total += tmp if tmp == 9 else (tmp * pow(2, 9 - i)) % 9
     d.append((10 - total % 10) % 10)
     return "".join(map(str, d))
+
+
+def mutate(n: int = 20) -> None:
+    """Re-grade `n` customers the way an ERP does it: in place, no history.
+
+    `loaded_at` moves with the change, so the daily window sees the row again
+    -- an update is invisible to a watermark that is never touched.
+    """
+    with psycopg.connect(DSN, autocommit=True) as cx:
+        rows = cx.execute(
+            """update customers set segment = case segment
+                        when 'SMB' then 'MID'
+                        when 'MID' then 'ENT'
+                        else 'SMB' end,
+                      loaded_at = current_date
+                where customer_id in (
+                      select customer_id from customers
+                       order by customer_id limit %s)
+            returning customer_id""", (n,)).fetchall()
+    print(f"re-graded {len(rows)} customers as of {date.today()}")
 
 
 def main() -> None:
@@ -121,4 +148,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--mutate", type=int, nargs="?", const=20, metavar="N",
+                    help="re-grade N customers in place instead of re-seeding")
+    args = ap.parse_args()
+    mutate(args.mutate) if args.mutate else main()

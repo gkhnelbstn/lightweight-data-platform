@@ -1,5 +1,11 @@
 # The modelled fact table. Two upstreams, which is exactly the case a single
 # `inputs` list exists for.
+#
+# The join to the dimension is as-of: an order keeps the country and segment
+# the customer had on the day it was placed, not the ones they have now. That
+# is only possible because `dwh.dim_customer` is Type 2, and it is why the
+# uniqueness rule below is worth more than it looks -- two dimension versions
+# whose intervals overlap duplicate the order here.
 apiVersion: v3.0.2
 kind: DataContract
 id: dwh.fct_orders
@@ -17,14 +23,16 @@ customProperties:
   - property: derivedFrom
     value:
       - dwh.stg_orders
-      # No contract of its own, so it is named by ODDRN -- the escape hatch.
-      - //postgresql/host/db/databases/dwh/schemas/dim/tables/customer
+      - dwh.dim_customer
   - property: derivedBy
     value: >
       select o.order_id, o.customer_id, c.country, c.segment, o.order_date,
              o.currency, o.net_amount
       from stg.orders o
-      left join dim.customer c on c.customer_id = o.customer_id
+      left join dim.customer c
+        on c.customer_id = o.customer_id
+       and o.order_date >= c.valid_from
+       and (c.valid_to is null or o.order_date < c.valid_to)
 
 servers:
   - server: erp
@@ -96,7 +104,7 @@ schema:
         dimension: uniqueness
 
       - type: sql
-        description: every order must have resolved to a customer
+        description: every order must have resolved to a customer version covering its date
         query: select count(*) from orders where country is null
         mustBe: 0
         dimension: completeness

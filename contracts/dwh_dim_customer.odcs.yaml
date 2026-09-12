@@ -1,0 +1,147 @@
+# The customer dimension, Type 2.
+#
+# The ERP holds one row per customer and overwrites it, so the day sales
+# re-grades a customer the old segment stops existing at the source. This table
+# is where it survives: a change closes the current version and opens a new one,
+# and `fct.orders` joins as of the order date. That is what keeps a closed
+# month's revenue from moving between segments after the fact.
+#
+# The intervals are the contract, not a comment -- an overlap or a closed row
+# still flagged current is a defect the same way a null customer_id is.
+apiVersion: v3.0.2
+kind: DataContract
+id: dwh.dim_customer
+name: Customer Dimension
+version: 1.0.0
+status: active
+domain: warehouse
+tenant: data-platform
+description:
+  purpose: >
+    Every version of a customer the warehouse has seen, each valid over a
+    half-open interval, so an order can be attributed to the attributes it was
+    placed under rather than to today's.
+
+customProperties:
+  - property: derivedFrom
+    value: [erp.customers]
+  - property: derivedBy
+    value: >
+      update dim.customer d set valid_to = s.loaded_at, is_current = false
+      from raw.customers s
+      where d.customer_id = s.customer_id and d.is_current
+        and s.loaded_at > d.valid_from
+        and (d.name, d.country, d.segment) is distinct from
+            (s.name, s.country, coalesce(s.segment, 'UNKNOWN'));
+      insert into dim.customer (customer_id, name, country, segment,
+                                valid_from, loaded_at)
+      select s.customer_id, s.name, s.country,
+             coalesce(s.segment, 'UNKNOWN'), s.loaded_at, s.loaded_at
+      from raw.customers s
+      left join dim.customer d
+        on d.customer_id = s.customer_id and d.is_current
+      where d.customer_key is null
+  # A version opens by insert and closes by update, and an update leaves
+  # `loaded_at` where it was -- a watermark alone would check the new row and
+  # never the one it replaced.
+  - property: windowPredicate
+    value: "{col} = {day} or valid_to = {day}"
+
+servers:
+  - server: erp
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: dim
+  - server: erp_daily
+    type: postgres
+    host: db
+    port: 5432
+    database: dwh
+    schema: asof_dim
+
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: d
+
+schema:
+  - name: customer
+    physicalName: customer
+    logicalType: object
+    physicalType: table
+    description: One row per version of a customer, valid over [valid_from, valid_to).
+    properties:
+      - name: customer_key
+        logicalType: integer
+        physicalType: bigint
+        description: "Surrogate key, one per version. The natural key repeats across versions, so it cannot be the grain here."
+        required: true
+        unique: true
+        primaryKey: true
+      - name: customer_id
+        logicalType: integer
+        physicalType: bigint
+        description: "The ERP's customer number, carried through unchanged. Repeats: one row per version of this customer."
+        required: true
+      - name: name
+        logicalType: string
+        physicalType: text
+        description: "Customer name as the ERP held it while this version was current."
+      - name: country
+        logicalType: string
+        physicalType: text
+        description: "Customer's country while this version was current."
+      - name: segment
+        logicalType: string
+        physicalType: text
+        description: "Commercial segment while this version was current. Never null -- an unsegmented customer is landed as UNKNOWN, because a null would compare equal to nothing and reopen a version every run."
+        required: true
+      - name: valid_from
+        logicalType: date
+        physicalType: date
+        description: "The day this version became the truth, taken from the source row's arrival date. Inclusive. The oldest version of a customer opens at 0001-01-01 instead: an ERP moves the arrival date when it updates a row, so a re-graded customer would otherwise look newer than the orders they placed."
+        required: true
+      - name: valid_to
+        logicalType: date
+        physicalType: date
+        description: "The day the next version replaced it. Exclusive, and null while this version is the current one."
+      - name: is_current
+        logicalType: boolean
+        physicalType: boolean
+        description: "True for the one open version of a customer. Redundant with `valid_to is null` on purpose: the merge and every reader join on it, and the rules below keep the two from disagreeing."
+        required: true
+      - name: loaded_at
+        logicalType: date
+        physicalType: date
+        description: "The date the source row that opened this version arrived. The daily window is built on it, the same way as everywhere else."
+        required: true
+
+    quality:
+      - type: sql
+        description: a closed version must not still be flagged current
+        query: select count(*) from customer where valid_to is not null and is_current
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: an open version must be flagged current
+        query: select count(*) from customer where valid_to is null and not is_current
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: a version must be valid for at least one day
+        query: select count(*) from customer where valid_to is not null and valid_to <= valid_from
+        mustBe: 0
+        dimension: consistency
+
+      - type: sql
+        description: a customer must not have two current versions
+        query: >
+          select count(*) from (select customer_id from customer
+                                 where is_current group by customer_id
+                                having count(*) > 1) d
+        mustBe: 0
+        dimension: uniqueness
