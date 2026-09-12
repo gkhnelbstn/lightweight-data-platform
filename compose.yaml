@@ -132,11 +132,20 @@ services:
       - ./integrations:/app/integrations
       - ./web:/app/web
       - ./seed:/app/seed
+      # So `docker compose exec app pytest -q tests` is the same command the
+      # host runs -- see issue #7. Not baked in by the Dockerfile's COPY for
+      # the same reason core/ and api/ are not: editing a test should not need
+      # a rebuild either.
+      - ./tests:/app/tests
     environment:
       ERP_DSN: postgresql://postgres:postgres@db:5432/erp
       DQ_DSN: postgresql://postgres:postgres@db:5432/dq
       ODD_PG_HOST: db
       DQ_HOST: dq.local
+      # test_medallion_scd2.py's fixture defaults to localhost, which is `db`
+      # itself from inside this network -- see issue #7.
+      DWH_HOST: db
+      DWH_PORT: "5432"
       # The address ODD's links point at. Followed from a person's browser,
       # not from inside this network, so it is not `http://app:8077`.
       DQ_UI_URL: ${DQ_UI_URL:-http://localhost:8077}

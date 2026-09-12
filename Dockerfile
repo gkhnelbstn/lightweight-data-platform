@@ -17,6 +17,11 @@ RUN pip install --no-cache-dir -e ".[odd,sqlserver]"
 # only the demo loader needs this; the checks do not
 RUN pip install --no-cache-dir pymongo
 
+# The suite needs no database (tests/test_medallion_scd2.py skips without one),
+# so there is no reason it should need a host install either. tests/ itself is
+# bind-mounted in compose.yaml the way core/ and api/ are -- see issue #7.
+RUN pip install --no-cache-dir pytest
+
 # Column classification. Presidio pulls a language model on first use and
 # defaults to en_core_web_lg (425 MB); the small one is 15 MB and finds the
 # same columns, because a column of IBANs is not free text. Fetched at build
