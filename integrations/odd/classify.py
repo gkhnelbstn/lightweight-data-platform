@@ -15,10 +15,12 @@ earns very little here. With `en_core_web_sm` (15 MB) and the entity list
 restricted, the same columns are found and a false `MEDICAL_LICENSE` on an IBAN
 goes away.
 
-**Turkish identifiers are ours.** Presidio has no TCKN or VKN recognizer, and
-both are checksum-validated, so they are `PatternRecognizer`s with a validator
-rather than a regex that would match any eleven digits. Worth offering upstream
-once they have run against real data for a while.
+**Turkish identifiers are ours, for now.** Both are checksum-validated, so they
+are `PatternRecognizer`s with a validator rather than a regex that would match
+any eleven digits. TCKN exists upstream independently of us
+(`TrNationalIdRecognizer`, microsoft/presidio#1995); VKN was offered
+(`TrTaxIdRecognizer`, microsoft/presidio#2250). See ADR 0007 for what happens
+when either ships in a release -- ours gets deleted, not kept alongside.
 
     python integrations/odd/classify.py --url http://odd-platform:8080
 """
