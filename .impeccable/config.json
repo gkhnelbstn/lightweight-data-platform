@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "web/index.html"
+        ],
+        "createdAt": "2026-09-12T19:29:59.591Z",
+        "reason": "code chip differentiated by monospace font + background pill, not size alone -- legitimate hierarchy cue besides font-size; the actual near-duplicate (ul 13.5px vs p 14px) was merged to 14px"
+      }
+    ]
+  }
+}
