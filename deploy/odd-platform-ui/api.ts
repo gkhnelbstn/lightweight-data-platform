@@ -81,6 +81,16 @@ export interface ContractDetail {
     reason: string | null;
   }[];
   file: string;
+  servers: { server: string; type: string }[];
+}
+
+export interface AuditEntry {
+  change_type: string;
+  action: string;
+  description: string;
+  value: Record<string, unknown>;
+  caller_label: string | null;
+  run_at: string;
 }
 
 export interface Sample {
@@ -163,19 +173,40 @@ export const getContract = (id: string) =>
 export const getSample = (checkId: string) =>
   json<Sample>(`/api/checks/${encodeURIComponent(checkId)}/sample`);
 
-/** Authoring writes SQL that runs against the source, so it needs the token. */
-function authoring(draft: RuleDraft, token: string): RequestInit {
+/** Authoring writes SQL (raw rules) or a predicate (sync rules) that runs
+ * against the source, so both need the token. */
+function authoring(body: RuleDraft | SyncRuleDraft, token: string): RequestInit {
   return {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify(draft),
+    body: JSON.stringify(body),
   };
 }
 
 export const getSyncRules = () => json<SyncRule[]>('/api/sync');
+
+export interface SyncRuleDraft {
+  contract_id: string;
+  server: string;
+  filter?: string;
+  columns?: string[];
+  identity?: string[];
+  caller_label?: string;
+}
+
+/** filter is a predicate someone typed -- the same risk class as raw SQL, so
+ * this route needs the token the same way /api/rules does. */
+export const saveSyncRule = (draft: SyncRuleDraft, token: string) =>
+  json<{ saved: string; rule: SyncRule['rule']; file: string; plan?: unknown }>(
+    '/api/sync/rules',
+    authoring(draft, token)
+  );
+
+export const getContractAudit = (id: string) =>
+  json<AuditEntry[]>(`/api/contracts/${encodeURIComponent(id)}/audit`);
 
 export const getRuleTypes = () =>
   json<{ rules: RuleType[]; dimensions: string[] }>('/api/rules/catalogue');

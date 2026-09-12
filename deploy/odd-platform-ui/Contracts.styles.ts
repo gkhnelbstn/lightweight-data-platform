@@ -22,6 +22,26 @@ export const HeaderRow = styled(Grid)(
   `
 );
 
+/** A HeaderRow cell that sorts instead of just labelling. font-size matches
+ * MUI's caption variant so it sits flush with the Typography cells beside it;
+ * everything else is a button reset. */
+export const SortableHeader = styled.button`
+  all: unset;
+  cursor: pointer;
+  color: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+`;
+
 export const Row = styled(Grid)<{ $selected?: boolean }>(
   ({ theme, $selected }) => css`
     cursor: pointer;

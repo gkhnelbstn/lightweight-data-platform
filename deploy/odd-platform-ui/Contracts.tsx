@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Typography } from '@mui/material';
 import { Button, Input } from 'components/shared/elements';
 import type {
+  AuditEntry,
   ContractDetail,
   Overview,
   PreviewResult,
@@ -10,9 +11,11 @@ import type {
   Sample,
   StructuredRule,
   SyncRule,
+  SyncRuleDraft,
 } from './api';
 import {
   getContract,
+  getContractAudit,
   getOverview,
   getRuleTypes,
   getSample,
@@ -21,6 +24,7 @@ import {
   previewStructured,
   saveRule,
   saveStructured,
+  saveSyncRule,
 } from './api';
 
 /** A preview, whichever route produced it. */
@@ -44,6 +48,8 @@ import * as S from './Contracts.styles';
 const fmt = (v: unknown) =>
   v === null || v === undefined ? '—' : Number(v).toFixed(3);
 
+type SortKey = 'title' | 'score' | 'tests';
+
 export const Contracts: React.FC = () => {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +57,9 @@ export const Contracts: React.FC = () => {
   const [detail, setDetail] = useState<ContractDetail | null>(null);
   const [samples, setSamples] = useState<Record<string, Sample | string>>({});
   const [ruleTypes, setRuleTypes] = useState<RuleType[]>([]);
+  const [filterText, setFilterText] = useState('');
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getOverview()
@@ -68,6 +77,52 @@ export const Contracts: React.FC = () => {
     setDetail(null);
     if (id) getContract(id).then(setDetail).catch(() => setDetail(null));
   }, []);
+
+  // Client-side: eleven contracts today, and the backend keeps none of ODD's
+  // own tsvector search machinery for our own YAML files. Revisit if the
+  // count ever grows past what scanning in the browser can do instantly.
+  const visibleContracts = useMemo(() => {
+    const needle = filterText.trim().toLowerCase();
+    let rows = !needle
+      ? overview?.contracts ?? []
+      : (overview?.contracts ?? []).filter(
+          c =>
+            c.title.toLowerCase().includes(needle) ||
+            c.id.toLowerCase().includes(needle) ||
+            c.source_table?.toLowerCase().includes(needle)
+        );
+    if (sort) {
+      rows = [...rows].sort((a, b) => {
+        const va =
+          sort.key === 'title'
+            ? a.title
+            : sort.key === 'score'
+              ? (Number(a.score) ?? -1)
+              : (a.checks_total ?? -1);
+        const vb =
+          sort.key === 'title'
+            ? b.title
+            : sort.key === 'score'
+              ? (Number(b.score) ?? -1)
+              : (b.checks_total ?? -1);
+        const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        return sort.dir === 'asc' ? cmp : -cmp;
+      });
+    }
+    return rows;
+  }, [overview?.contracts, filterText, sort]);
+
+  const toggleSort = useCallback((key: SortKey) => {
+    setSort(prev =>
+      prev?.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }
+    );
+  }, []);
+
+  // A click opens the panel far below a long list; without this, "select a
+  // contract" and "see what you selected" can be two screens apart.
+  useEffect(() => {
+    if (selected && detail) panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [selected, detail]);
 
   const showRows = useCallback(async (checkId: string) => {
     if (samples[checkId]) {
@@ -109,21 +164,41 @@ export const Contracts: React.FC = () => {
       <Typography variant='h4'>Contract quality over time</Typography>
       <Trend points={overview.trend} />
 
-      <Typography variant='h4'>Contracts</Typography>
+      <S.Actions>
+        <Typography variant='h4'>Contracts</Typography>
+        <Input
+          variant='main-m'
+          placeholder='Filter by name, id or source table'
+          value={filterText}
+          onChange={e => setFilterText(e.target.value)}
+        />
+      </S.Actions>
       <Typography variant='subtitle2' color='texts.secondary'>
         The tests above are derived from these. Select one to see its rules, add
         another, or open the rows a check failed on.
+        {filterText && ` Showing ${visibleContracts.length} of ${overview.contracts.length}.`}
       </Typography>
 
       <div>
         <S.HeaderRow>
-          <Typography variant='caption'>Contract</Typography>
+          <S.SortableHeader onClick={() => toggleSort('title')}>
+            Contract{sort?.key === 'title' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+          </S.SortableHeader>
           <Typography variant='caption'>Source</Typography>
-          <Typography variant='caption'>Score</Typography>
+          <S.SortableHeader onClick={() => toggleSort('score')}>
+            Score{sort?.key === 'score' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+          </S.SortableHeader>
           <Typography variant='caption'>SLA</Typography>
-          <Typography variant='caption'>Tests</Typography>
+          <S.SortableHeader onClick={() => toggleSort('tests')}>
+            Tests{sort?.key === 'tests' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+          </S.SortableHeader>
         </S.HeaderRow>
-        {overview.contracts.map(c => (
+        {visibleContracts.length === 0 && (
+          <Typography variant='body2' color='texts.secondary'>
+            No contract matches &quot;{filterText}&quot;.
+          </Typography>
+        )}
+        {visibleContracts.map(c => (
           <S.Row
             key={c.id}
             $selected={selected === c.id}
@@ -170,12 +245,19 @@ export const Contracts: React.FC = () => {
       </div>
 
       {selected && detail && (
-        <ContractPanel
-          detail={detail}
-          dimensions={overview.dimensions}
-          ruleTypes={ruleTypes}
-          onSaved={reload}
-        />
+        <div ref={panelRef}>
+          {/* key remounts the panel on contract change -- RuleBuilder,
+              SyncRuleForm and friends seed a <select> from `detail` in
+              useState's initialiser, which only runs once per mount and
+              would otherwise carry the previous contract's picks over. */}
+          <ContractPanel
+            key={detail.contract.id}
+            detail={detail}
+            dimensions={overview.dimensions}
+            ruleTypes={ruleTypes}
+            onSaved={reload}
+          />
+        </div>
       )}
 
       {overview.open_failures.length > 0 && (
@@ -403,6 +485,14 @@ const ContractPanel: React.FC<PanelProps> = ({
   onSaved,
 }) => {
   const [raw, setRaw] = useState(false);
+  // AuditTrail only refetches on its own when `detail.contract.id` changes;
+  // a save from any form here changes what it should show without changing
+  // that id, so `key` is how it is told to ask again.
+  const [auditKey, setAuditKey] = useState(0);
+  const saved = useCallback(() => {
+    onSaved();
+    setAuditKey(k => k + 1);
+  }, [onSaved]);
 
   return (
     <S.Panel>
@@ -444,16 +534,159 @@ const ContractPanel: React.FC<PanelProps> = ({
       </Typography>
 
       {raw ? (
-        <RawSqlRule detail={detail} dimensions={dimensions} onSaved={onSaved} />
+        <RawSqlRule detail={detail} dimensions={dimensions} onSaved={saved} />
       ) : (
         <RuleBuilder
           detail={detail}
           dimensions={dimensions}
           ruleTypes={ruleTypes}
-          onSaved={onSaved}
+          onSaved={saved}
         />
       )}
+
+      <SyncRuleForm detail={detail} onSaved={saved} />
+      <AuditTrail key={auditKey} contractId={detail.contract.id} />
     </S.Panel>
+  );
+};
+
+/**
+ * Author this contract's own replication rule. The "Replication" table
+ * further down the page only ever lists a contract once it already has one
+ * -- this is the other half, see issue #10: there was previously no way to
+ * add or change a syncTo rule without hand-editing the contract's YAML.
+ */
+const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => void }> = ({
+  detail,
+  onSaved,
+}) => {
+  // The source and the daily-window schema are already excluded server-side
+  // -- see GET /api/contracts/{id} -- neither is a sensible replication
+  // target even though nothing here would catch it as unsound.
+  const targets = detail.servers;
+  const [server, setServer] = useState(targets[0]?.server ?? '');
+  const [filter, setFilter] = useState('');
+  const [columns, setColumns] = useState('');
+  const [identity, setIdentity] = useState('');
+  const [token, setToken] = useState(() => window.localStorage.getItem('dq_token') ?? '');
+  const [result, setResult] = useState<string | { rule: SyncRule['rule'] } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (targets.length === 0) return null;
+
+  const save = async () => {
+    setBusy(true);
+    window.localStorage.setItem('dq_token', token);
+    const draft: SyncRuleDraft = {
+      contract_id: detail.contract.id,
+      server,
+      filter: filter || undefined,
+      columns: columns ? columns.split(',').map(c => c.trim()).filter(Boolean) : undefined,
+      identity: identity ? identity.split(',').map(c => c.trim()).filter(Boolean) : undefined,
+    };
+    try {
+      const saved = await saveSyncRule(draft, token);
+      setResult({ rule: saved.rule });
+      onSaved();
+    } catch (e) {
+      setResult((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Typography variant='h4'>Replication rule for this contract</Typography>
+      <Typography variant='subtitle2' color='texts.secondary'>
+        Written as this contract&apos;s own <code>syncTo</code> custom property, then
+        checked against ADR 0008&apos;s four preconditions before it is saved --
+        rejected with the specific reason if it would not actually replicate.
+      </Typography>
+      <S.Actions>
+        <label>
+          <Typography variant='caption' color='texts.secondary'>
+            Target server
+          </Typography>
+          <select value={server} onChange={e => setServer(e.target.value)}>
+            {targets.map(t => (
+              <option key={t.server} value={t.server}>
+                {t.server} ({t.type})
+              </option>
+            ))}
+          </select>
+        </label>
+        <Input
+          variant='main-m'
+          label="Row filter — optional, e.g. country = 'TR'"
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+        />
+      </S.Actions>
+      <S.Actions>
+        <Input
+          variant='main-m'
+          label='Columns — optional, comma separated; empty replicates all'
+          value={columns}
+          onChange={e => setColumns(e.target.value)}
+        />
+        <Input
+          variant='main-m'
+          label='Widen identity — optional, only if the filter needs it'
+          value={identity}
+          onChange={e => setIdentity(e.target.value)}
+        />
+      </S.Actions>
+      <Input
+        variant='main-m'
+        type='password'
+        label='API token — the service prints it at startup'
+        value={token}
+        onChange={e => setToken(e.target.value)}
+      />
+      <Button buttonType='main-m' text='Save' isLoading={busy} onClick={save} />
+      {result &&
+        (typeof result === 'string' ? (
+          <Typography variant='body2' color='error.main'>
+            {result}
+          </Typography>
+        ) : (
+          <Typography variant='body2' color='success.main'>
+            Saved. {result.rule.filter ?? 'Replicates everything'} to {result.rule.server}.
+          </Typography>
+        ))}
+    </>
+  );
+};
+
+/**
+ * What changed about this contract's rules, and when -- never who. See
+ * issue #12: there is no identity provider (ADR 0010), so this reads
+ * contract_audit rather than pretending to know a person made the change.
+ */
+const AuditTrail: React.FC<{ contractId: string }> = ({ contractId }) => {
+  const [entries, setEntries] = useState<AuditEntry[] | null>(null);
+
+  useEffect(() => {
+    setEntries(null);
+    getContractAudit(contractId)
+      .then(setEntries)
+      .catch(() => setEntries([]));
+  }, [contractId]);
+
+  if (!entries || entries.length === 0) return null;
+
+  return (
+    <>
+      <Typography variant='h4'>Recent changes</Typography>
+      {entries.slice(0, 10).map((e, i) => (
+        // eslint-disable-next-line react/no-array-index-key
+        <Typography key={i} variant='caption' color='texts.secondary' component='div'>
+          {e.run_at} · {e.action} {e.change_type.replace('_', ' ')} &quot;{e.description}
+          &quot;{e.caller_label ? ` — ${e.caller_label}` : ''}
+        </Typography>
+      ))}
+    </>
   );
 };
 

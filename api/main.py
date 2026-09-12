@@ -199,7 +199,18 @@ def contract_detail(contract_id: str) -> dict:
             "properties": model.get("properties") or [],
             "rules": model.get("quality") or [],
             "checks": checks, "history": history,
-            "file": path.name}
+            "file": path.name,
+            # Names and engines only, no credentials -- the servers block never
+            # carries any. Lets the UI offer a syncTo target as a choice rather
+            # than a blind text field. "erp" is the source and DAILY_SERVER is
+            # the window schema -- same database as the source under another
+            # name -- so neither is a replication target; #10's author_rule
+            # would validate a pick of either into something confusing rather
+            # than reject it outright, since nothing about the window schema
+            # actually violates the four preconditions it checks.
+            "servers": [{"server": s.get("server"), "type": s.get("type")}
+                       for s in doc.get("servers") or []
+                       if s.get("server") not in ("erp", DAILY_SERVER)]}
 
 
 @app.get("/api/contracts/{contract_id}/audit")
