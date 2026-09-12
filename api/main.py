@@ -352,6 +352,51 @@ def sync_rules() -> list[dict]:
     return out
 
 
+class SyncRuleDraft(BaseModel):
+    """A proposed `syncTo` rule. `filter` is a SQL predicate a person typed --
+    the same risk class as the raw-SQL quality route, not the structured one --
+    so this is behind the token; `columns` and `identity` are just names."""
+    contract_id: str
+    server: str
+    filter: str | None = None
+    columns: list[str] | None = None
+    identity: list[str] | None = None
+
+
+@app.post("/api/sync/rules", dependencies=[Depends(authorised)])
+def save_sync_rule(draft: SyncRuleDraft) -> dict:
+    """Author a replication rule the way a quality rule is authored: reject
+    before writing, with the specific reason, rather than leave `syncTo`
+    reachable only by hand-editing the contract's YAML. See issue #10.
+
+    There is nothing to execute here the way a quality rule's SQL is run to
+    confirm it compiles -- a `syncTo` rule only ever becomes objects, never a
+    result -- so what gates the write is core/sync.py's own four
+    preconditions, against the rule as proposed rather than one already saved.
+    """
+    from core import sync
+
+    path = _contract_file(draft.contract_id)
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    rule, bad = sync.author_rule(doc, draft.server, draft.filter,
+                                 columns=draft.columns, identity=draft.identity)
+    if bad:
+        raise HTTPException(400, "; ".join(bad))
+
+    props = doc.setdefault("customProperties", [])
+    props[:] = [p for p in props if p.get("property") != "syncTo"]
+    props.append({"property": "syncTo", "value": rule})
+    path.write_text(yaml.dump(doc, Dumper=ContractDumper, sort_keys=False,
+                              allow_unicode=True, width=100), encoding="utf-8")
+
+    try:
+        plan = sync.plan(doc)
+    except Exception as e:
+        plan = {"note": f"saved; could not render a plan: {e}"}
+    return {"saved": draft.contract_id, "rule": rule, "file": path.name,
+            "plan": plan}
+
+
 class RuleDraft(BaseModel):
     contract_id: str
     description: str

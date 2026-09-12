@@ -183,3 +183,86 @@ def test_sql_server_types_are_translated():
     stmt = target_table_statement(model, "public", {}, "sqlserver").as_string()
     assert "integer" in stmt and "numeric" in stmt
     assert " int," not in stmt and "decimal" not in stmt
+
+
+# --- authoring a rule that does not exist on disk yet -----------------------
+# The write path issue #10 asks for: the same four preconditions, run against
+# a proposed rule rather than one already saved. `unsound_identity` needs a
+# reachable store, which the accepted cases stub out -- the point of these
+# tests is author_rule wiring problems() and unsound_identity() together and
+# refusing to build a rule that names a server the contract does not have,
+# not re-proving what test_sync.py already covers for each of those two.
+
+def _contract(engine="postgres", **kw):
+    # Not "erp.customers": that id is a real contract, and unsound_identity
+    # queries check_results by contract id -- a hermetic test cannot share it,
+    # or it would see whatever the store happens to hold whenever one is
+    # actually reachable.
+    base = {"id": "test.customers", "schema": [_model()],
+           "servers": [{"server": "erp", "type": engine},
+                       {"server": "replica", "type": "postgres"}]}
+    base.update(kw)
+    return base
+
+
+def test_authoring_a_rule_for_a_server_the_contract_does_not_have_is_refused():
+    from core.sync import author_rule
+    rule, bad = author_rule(_contract(), "nowhere")
+    assert rule == {}
+    assert "nowhere" in bad[0] and "servers[]" in bad[0]
+
+
+def test_authoring_reuses_problems_for_a_key_the_contract_lacks(monkeypatch):
+    from core import sync
+    monkeypatch.setattr(sync, "unsound_identity", lambda *a: [])
+    keyless = _contract()
+    keyless["schema"][0] = _model(properties=[{"name": "a"}, {"name": "b"}])
+    rule, bad = sync.author_rule(keyless, "replica")
+    assert any("primaryKey" in p for p in bad)
+
+
+def test_authoring_reuses_problems_for_a_filter_outside_the_identity(monkeypatch):
+    from core import sync
+    monkeypatch.setattr(sync, "unsound_identity", lambda *a: [])
+    rule, bad = sync.author_rule(_contract(), "replica", row_filter="country = 'TR'")
+    assert any("replica identity" in p for p in bad)
+
+
+def test_authoring_reuses_problems_for_a_column_list_missing_the_identity(monkeypatch):
+    from core import sync
+    monkeypatch.setattr(sync, "unsound_identity", lambda *a: [])
+    rule, bad = sync.author_rule(_contract(), "replica", columns=["name"])
+    assert any("column list omits" in p for p in bad)
+
+
+def test_authoring_asks_whether_the_identity_has_actually_held(monkeypatch):
+    """A rule with no other problem is still refused if the identity has been
+    seen failing -- author_rule has to reach unsound_identity too, not stop at
+    problems(). Stubbed rather than pointed at a real store: whether *that*
+    check itself is right is test_sync.py's existing coverage, not this one's."""
+    from core import sync
+    monkeypatch.setattr(sync, "unsound_identity",
+                        lambda *a: ["customer_id: the uniqueness check is failing"])
+    rule, bad = sync.author_rule(_contract(), "replica")
+    assert any("uniqueness check is failing" in p for p in bad)
+
+
+def test_a_sound_postgres_rule_is_accepted(monkeypatch):
+    from core import sync
+    monkeypatch.setattr(sync, "unsound_identity", lambda *a: [])
+    rule, bad = sync.author_rule(_contract("postgres"), "replica",
+                                 columns=["customer_id", "name", "country"])
+    assert bad == []
+    assert rule == {"server": "replica",
+                    "columns": ["customer_id", "name", "country"]}
+
+
+def test_a_sound_sqlserver_rule_is_accepted(monkeypatch):
+    """Rules 2 and 3 are logical replication's; a filter column outside the
+    identity is not a problem for a CDC source -- see ADR 0008."""
+    from core import sync
+    monkeypatch.setattr(sync, "unsound_identity", lambda *a: [])
+    rule, bad = sync.author_rule(_contract("sqlserver"), "replica",
+                                 row_filter="country = 'TR'")
+    assert bad == []
+    assert rule == {"server": "replica", "filter": "country = 'TR'"}

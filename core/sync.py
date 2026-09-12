@@ -172,6 +172,34 @@ def unsound_identity(contract: dict, rule: dict) -> list[str]:
             if status == "fail" and field in identity]
 
 
+def author_rule(contract: dict, server: str, row_filter: str | None = None,
+                columns: list[str] | None = None,
+                identity: list[str] | None = None) -> tuple[dict, list[str]]:
+    """A proposed `syncTo` rule, checked the way one already on disk is.
+
+    `/api/sync` runs `problems()` and `unsound_identity()` against the rule a
+    contract already carries; this is the same two checks against one that
+    does not exist yet, which is what makes a write endpoint safe to add
+    without a second, weaker copy of ADR 0008's four preconditions -- see
+    issue #10. An empty problem list means the rule is sound; it is the
+    caller's job to persist it.
+    """
+    if not any(s.get("server") == server for s in contract.get("servers", [])):
+        return {}, [f"{server!r} is not a servers[] entry on this contract"]
+    rule = {"server": server}
+    if row_filter:
+        rule["filter"] = row_filter
+    if columns:
+        rule["columns"] = columns
+    if identity:
+        rule["identity"] = identity
+    engine = next((s for s in contract.get("servers", [])
+                   if s.get("server") == "erp"), {}).get("type", "")
+    bad = (problems(contract["schema"][0], rule, engine)
+           + unsound_identity(contract, rule))
+    return rule, bad
+
+
 # The contract states a physical type per property, in the *source's* dialect.
 # Replicating SQL Server into Postgres therefore needs a translation, and only
 # for the types the contracts actually use -- guessing at the rest would be a
