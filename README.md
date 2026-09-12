@@ -580,6 +580,23 @@ Early. A working vertical slice, not a product.
   Both are there now, the same way `core/` and `api/` are bind-mounted rather
   than only baked in: `docker compose exec app pytest -q tests`:
   [#7](https://github.com/gkhnelbstn/lightweight-data-platform/issues/7).
+* **`check_results` and `contract_scores` had no index a real query used.**
+  Both primary keys lead with `run_at`; every hot-path query filters
+  `contract_id`, `check_id` or `run_window` instead, so none of it was a
+  usable prefix -- measured with `EXPLAIN ANALYZE` against the shipped demo
+  data, every one of them a sequential scan across every `check_results`
+  partition. Four indexes now match the shapes actually queried; a
+  partitioned index reaches every future monthly partition
+  `ensure_partition()` creates without anything else changing.
+* **The Contracts panel had no search, no sort, and two backend additions
+  with nothing to drive them.** Eleven contracts and no way to find one
+  except scrolling, next to a platform whose own catalog is full-text search
+  end to end -- confirmed, not assumed: `odd-platform`'s schema carries a
+  `tsvector`-backed `search_vector` and a per-kind vector on nearly every
+  table. Client-side filtering and column-header sort now cover the panel's
+  own list; `POST /api/sync/rules` (#10) and `GET /api/contracts/{id}/audit`
+  (#12) each get the form and the display they were missing, in
+  `ContractPanel` next to the quality-rule form they sit beside.
 
 ### Reported upstream
 
