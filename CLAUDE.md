@@ -131,6 +131,13 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   published OpenAPI also disagrees with its own models — `metric_points` is a
   list, `timestamp` is epoch seconds — and the Overview card truncates values
   to integers. Do not try to publish the score there until that is fixed.
+* The panel's `dq_*` query keys are read once at module load, because ODD's
+  own Data Quality route rewrites the query string while it comes up and drops
+  keys it does not know. `shared.tsx` also wraps `history.pushState` and
+  `replaceState` once so the keys are merged back into whatever the page
+  writes afterwards -- without it a link opens correctly and the address bar
+  then stops matching the screen. It never touches their keys, and becomes a
+  no-op the day they stop dropping ours. See issue #24.
 * The contract panel lives inside ODD's Data Quality page and that is a fork
   of `odd-platform-ui`. Keep it the smallest fork that works: the SPA is one
   jar on the platform's classpath, so only the UI is rebuilt and the backend is
