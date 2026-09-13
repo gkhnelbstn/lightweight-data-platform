@@ -49,6 +49,20 @@ def read(cx, sql: str) -> tuple[list[str], list[tuple]]:
     return [d[0] for d in cur.description], cur.fetchall()
 
 
+def drop_any(dwh, qualified: str) -> None:
+    """Drop whatever is under this name -- table or view.
+
+    `drop table` on a view and `drop view` on a table are both errors rather
+    than no-ops, and a warehouse built before ADR 0017 has tables where this
+    script now wants views.
+    """
+    kind = dwh.execute("select relkind from pg_class where oid = to_regclass(%s)",
+                       (qualified,)).fetchone()
+    if kind:
+        dwh.execute(f"drop {'view' if kind[0] == 'v' else 'table'} "
+                    f"if exists {qualified} cascade")
+
+
 def land(dwh, schema: str, table: str, columns: list[str], types: list[str],
          rows: list[tuple]) -> int:
     """Land a result set as a table. `raw` keeps whatever the source gave."""
@@ -196,9 +210,17 @@ def build() -> None:
             ["bigint", "text", "text", "text", "date"], customers)
 
         # --- stg: cleaned. The one place a rule about the source pays off --
+        #
+        # A view, not a copy. Staging is a projection of `raw` and holds
+        # nothing `raw` does not: a table here is the same rows twice, stale
+        # between two runs of this script, and one more thing to drop in the
+        # right order. `fct` and `dim` stay physical -- one is an as-of range
+        # join nobody wants to re-run per query, the other is Type 2 history,
+        # which is by definition rows the source no longer has. ADR 0017.
+        #
+        drop_any(dwh, "stg.orders")
         dwh.execute("""
-            drop table if exists stg.orders cascade;
-            create table stg.orders as
+            create view stg.orders as
             select order_id, customer_id, order_date, status, currency,
                    net_amount, loaded_at
             from raw.orders
@@ -220,9 +242,14 @@ def build() -> None:
              and (c.valid_to is null or o.order_date < c.valid_to)""")
 
         # --- mart: what a dashboard reads ---------------------------------
+        #
+        # Also a view: an aggregate of one table in the same database, 532
+        # rows over 2,523. Materialise it when a dashboard says to, which is a
+        # `create materialized view` and a `refresh` here -- not a decision to
+        # take in advance of the measurement (ADR 0017).
+        drop_any(dwh, "mart.revenue_daily")
         dwh.execute("""
-            drop table if exists mart.revenue_daily cascade;
-            create table mart.revenue_daily as
+            create view mart.revenue_daily as
             select order_date, currency, country,
                    count(*) as orders, sum(net_amount) as revenue
             from fct.orders

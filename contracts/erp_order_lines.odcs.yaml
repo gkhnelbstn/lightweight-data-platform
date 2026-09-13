@@ -29,6 +29,28 @@ servers:
     database: erp
     schema: asof
 
+  - server: replica
+    type: postgres
+    host: db
+    port: 5432
+    database: erp_replica
+    schema: public
+
+customProperties:
+  # The other side of ADR 0017: the same rule shape as erp.customers, read
+  # through instead of copied. Lines are append-only and nothing outside the
+  # ERP writes them, so a second physical copy would buy staleness and a
+  # background worker for nothing. `mode: view` builds a postgres_fdw foreign
+  # table and a view over it, with this filter and column list applied there.
+  # No classified column, which is what makes the mode legal here: in view
+  # mode a column outside the list is ungranted rather than absent.
+  - property: syncTo
+    value:
+      server: replica
+      mode: view
+      filter: "qty > 0"
+      columns: [order_id, line_no, sku, qty, line_amount]
+
 slaProperties:
   - property: frequency
     value: 1
