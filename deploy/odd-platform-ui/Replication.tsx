@@ -157,7 +157,12 @@ const Arriving: React.FC<{ rule: SyncRule }> = ({ rule }) => {
 const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
   const status = rule.status ?? {};
   const isCdc = !!status.engine && status.engine !== 'logical replication';
-  const streaming = status.worker_running === true && status.slot_active === true;
+  // The service decides this: an apply worker can be up, the slot active and
+  // the lag zero while a table sits in the initial copy and replicates
+  // nothing (issue #35). Older payloads have no `streaming`, so fall back.
+  const copying = status.copying ?? [];
+  const streaming = status.streaming ??
+    (status.worker_running === true && status.slot_active === true);
   const last = rule.runs?.[0];
   return (
     <div>
@@ -171,8 +176,19 @@ const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
             : 'never read — is core/sync_mssql.py running?'}
         </Typography>
       ) : (
-        <Typography variant='body2' color={streaming ? 'success.main' : 'texts.secondary'}>
-          {streaming ? `streaming · ${status.behind ?? ''} behind` : 'not applied'}
+        <Typography
+          variant='body2'
+          color={
+            streaming ? 'success.main'
+              : copying.length ? 'error.main'
+              : 'texts.secondary'
+          }
+        >
+          {streaming
+            ? `streaming · ${status.behind ?? ''} behind`
+            : copying.length
+            ? `${copying.join(', ')} stuck in the initial copy`
+            : 'not applied'}
         </Typography>
       )}
       {last?.applied_through && (

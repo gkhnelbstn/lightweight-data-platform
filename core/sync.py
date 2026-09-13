@@ -265,6 +265,21 @@ def _identity_statements(model: dict, schema: str,
     return out
 
 
+def truncate_statement(model: dict, schema: str) -> sql.Composed:
+    """Empty the target before the subscription copies into it again.
+
+    `copy_data = true` is not idempotent: the replica identity index the
+    target needs is exactly what the second copy collides with, and the table
+    sync worker then dies on a duplicate key every few seconds for ever while
+    the apply worker stays up. See issue #35. Unconditional -- the copy
+    repopulates the table either way, and a branch on "is it empty" only
+    hides which case was taken.
+    """
+    return sql.SQL("truncate {}.{}").format(
+        sql.Identifier(schema),
+        sql.Identifier(model.get("physicalName") or model["name"]))
+
+
 def publication_statement(model: dict, schema: str, rule: dict,
                           name: str) -> sql.Composed:
     ident = sql.Identifier
@@ -327,6 +342,8 @@ def plan(contract: dict) -> dict | None:
                            source.get("type")))]
                       + [render(s) for s in
                        _identity_statements(model, target.get("schema", "public"), rule)]
+                      + [render(truncate_statement(
+                           model, target.get("schema", "public")))]
                       + [f"create subscription {name} connection '...' "
                          f"publication {name} with (create_slot = false, "
                          f"slot_name = '{name}{SLOT_SUFFIX}', copy_data = true)"],
@@ -404,6 +421,9 @@ def apply(contract: dict) -> dict:
                 sql.Identifier(name)))
         cx.execute(sql.SQL("drop subscription if exists {}").format(
             sql.Identifier(name)))
+        # After the drop, or the truncate contends with the table sync worker
+        # the subscription still has running.
+        cx.execute(truncate_statement(model, target.get("schema", "public")))
         cx.execute(sql.SQL(
             "create subscription {} connection {} publication {} "
             "with (create_slot = false, slot_name = {}, copy_data = true)").format(
@@ -439,9 +459,22 @@ def status(contract: dict) -> dict | None:
         row = cx.execute(
             "select pid is not null from pg_stat_subscription "
             "where subname = %s", (name,)).fetchone()
-    out["worker_running"] = bool(row and row[0])
-    # Both true and still behind is lag; slot active with no worker is the
-    # silent failure this whole command exists for.
+        out["worker_running"] = bool(row and row[0])
+        # The apply worker being up is not the same question as whether the
+        # table is streaming. A table stuck in the initial copy ('i' or 'd')
+        # has a live apply worker, an active slot and zero lag, and replicates
+        # nothing -- issue #35, where a re-apply put it there permanently.
+        # 'r' is ready and 's' is synchronised; anything else is not flowing.
+        out["copying"] = sorted(
+            r[0] for r in cx.execute(
+                """select srrelid::regclass::text from pg_subscription_rel r
+                   join pg_subscription s on s.oid = r.srsubid
+                   where s.subname = %s and r.srsubstate not in ('r', 's')""",
+                (name,)).fetchall())
+    out["streaming"] = out["worker_running"] and not out["copying"]
+    # Both true and still behind is lag; slot active with no worker, or a
+    # table that never left the copy, is the silent failure this command
+    # exists for.
     return out
 
 
