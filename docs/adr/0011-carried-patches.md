@@ -29,6 +29,29 @@ not carry.
 
 A UI fork, not a patch. It has its own record: ADR 0009.
 
+### `deploy/odd-platform-lineage-icon.mjs` — one icon per lineage node
+
+Every node in a lineage graph drew the *root's* data source icon: a SQL Server
+table feeding a Superset chart showed two SQL Server icons, and the same graph
+rooted on the chart showed two Superset ones. The API is right either way —
+`GET /api/dataentities/{id}/lineage/upstream` returns the correct `data_source`
+per node — so this is the renderer.
+
+`DatasourceLogo` draws an SVG-mode logo as `<filter id='logo'>` plus a
+`<rect filter='url(#logo)'>`, and a lineage graph puts every node in one SVG
+document. Duplicate ids resolve to the first in document order, so every rect
+took the first node's image. The fix is one id per image.
+
+Three anchored lines, in the same shape as the panel patch and failing the
+build the same way. It rides in the fork that already exists rather than being
+a second image, because the file it changes is compiled into the same SPA.
+Reported as
+[odd-platform#1898](https://github.com/opendatadiscovery/odd-platform/issues/1898).
+
+**Delete the script and the `RUN` line that calls it when #1898 is fixed
+upstream** — tracked in
+[#19](https://github.com/gkhnelbstn/lightweight-data-platform/issues/19).
+
 ### Worked around without a patch
 
 odd-collector's `mssql` adapter enumerates every `BASE TABLE` it can see and
@@ -59,6 +82,8 @@ being sysadmin, which it should never have been.
   broken `--filter`, and per-rule scoping in ODCS.
 * [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135)
   — the issue behind the PR above.
+* [odd-platform#1898](https://github.com/opendatadiscovery/odd-platform/issues/1898)
+  — reported *and* now patched here; see above.
 
 ## On upgrade
 
