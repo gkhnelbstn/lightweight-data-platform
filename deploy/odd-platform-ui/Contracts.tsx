@@ -6,7 +6,8 @@ import { getOverview, getRuleTypes } from './api';
 import { ChecksTab } from './ChecksTab';
 import { ContractsTab } from './ContractsTab';
 import { Replication } from './Replication';
-import { readParam, writeParams } from './shared';
+import { readParam, showDashboard, writeParams } from './shared';
+import * as S from './Contracts.styles';
 
 /**
  * Contract quality, inside this platform's own Data Quality page.
@@ -18,6 +19,14 @@ import { readParam, writeParams } from './shared';
  *   Contracts    the score each contract carries, and the schema behind it
  *   Replication  which of those tables is copied somewhere, and whether it is
  *                actually moving
+ *   Platform     this platform's own donuts, which this panel hides while it
+ *                is showing one of its own tabs
+ *
+ * That last tab is why the patch tags upstream's two sections with a class
+ * (deploy/odd-platform-dq-panel.mjs) instead of deleting them: the page used
+ * to say "281 tests, 271 passing" twice, in two visual languages, and the
+ * question anyone opens it with -- which check failed, against what -- was
+ * below both. Their summary is still a click away and still theirs.
  *
  * This platform reports quality and does not let anyone change it: there is no
  * "create test" anywhere in its UI, because a test arrives through ingestion
@@ -31,7 +40,7 @@ import { readParam, writeParams } from './shared';
  * lives on. See docs/adr/0009-fork-odd-platform-ui.md for why it is a fork.
  */
 
-const TABS = ['Checks', 'Contracts', 'Replication'];
+const TABS = ['Checks', 'Contracts', 'Replication', 'Platform overview'];
 
 export const Contracts: React.FC = () => {
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -65,6 +74,14 @@ export const Contracts: React.FC = () => {
     writeParams({ tab: TABS[next] ?? null });
   }, []);
 
+  // Upstream's own sections live outside this component, further down their
+  // page; this is the only thing that touches them. They come back when the
+  // contract service is unreachable too -- hiding this platform's own working
+  // dashboard behind our error message would make our outage look like theirs.
+  useEffect(() => {
+    showDashboard(tab === TABS.length - 1 || !overview || !!error);
+  }, [tab, overview, error]);
+
   if (error) {
     return (
       <Typography variant='body1' color='texts.secondary'>
@@ -81,7 +98,7 @@ export const Contracts: React.FC = () => {
   }
 
   return (
-    <>
+    <S.Shell>
       <Typography variant='h4'>Contract quality</Typography>
       <AppTabs
         type='primary'
@@ -95,7 +112,14 @@ export const Contracts: React.FC = () => {
         <ContractsTab overview={overview} ruleTypes={ruleTypes} onSaved={load} />
       )}
       {tab === 2 && <Replication />}
-    </>
+      {tab === 3 && (
+        <Typography variant='subtitle2' color='texts.secondary'>
+          This platform&apos;s own dashboard, below — table health, the test
+          results breakdown and the category table, counted from everything it
+          has ingested rather than from the contracts.
+        </Typography>
+      )}
+    </S.Shell>
   );
 };
 

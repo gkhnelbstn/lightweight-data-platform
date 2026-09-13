@@ -65,6 +65,27 @@ export const writeParams = (values: Record<string, string | null>) => {
   );
 };
 
+/** The class `deploy/odd-platform-dq-panel.mjs` puts on this platform's own
+ * two dashboard sections, so the panel can show and hide them. Kept in sync
+ * by hand with the same constant there -- two strings, one meaning, and the
+ * build fails on the patch side if the anchor ever moves. */
+const DASHBOARD = 'odd-dq-dashboard';
+
+/**
+ * Show or hide the platform's own Table Health / Test Results donuts.
+ *
+ * Done through the DOM rather than through props because the alternative is
+ * JSX surgery on upstream's return statement, and a patch that rewrites an
+ * expression breaks into a syntax error while a patch that adds a class
+ * attribute cannot. `display` is set inline because their section is a
+ * styled `div` with `display: flex`, which outranks the `hidden` attribute.
+ */
+export const showDashboard = (show: boolean) => {
+  document.querySelectorAll<HTMLElement>(`.${DASHBOARD}`).forEach(el => {
+    el.style.display = show ? '' : 'none';
+  });
+};
+
 /** The rows a check failed on. */
 export const Rows: React.FC<{ sample: Sample }> = ({ sample }) => (
   <div>

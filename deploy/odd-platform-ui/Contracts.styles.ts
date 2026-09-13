@@ -27,6 +27,29 @@ export const SortableHeader = styled.button`
   }
 `;
 
+/**
+ * The panel's own outer box, now that it is the first thing on the page
+ * rather than a strip under two donuts.
+ *
+ * Their page is a centred grid whose columns size to their content, so a
+ * plain div here would be as wide as the widest row inside it and the table
+ * would shrink to fit its shortest check name. A width is the whole fix; the
+ * upper bound keeps a line of prose readable and the lower one keeps it off
+ * the filter sidebar.
+ */
+export const Shell = styled.div(
+  ({ theme }) => css`
+    display: flex;
+    flex-direction: column;
+    gap: ${theme.spacing(2)};
+    width: min(1180px, calc(100vw - 340px));
+    min-width: 0;
+    padding: ${theme.spacing(3)};
+    border: 1px solid ${theme.palette.border.primary};
+    border-radius: ${theme.spacing(1)};
+  `
+);
+
 export const Panel = styled.div(
   ({ theme }) => css`
     display: flex;
