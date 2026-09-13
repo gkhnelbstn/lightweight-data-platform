@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 217 tests; the 6 in test_medallion_scd2 skip without a database
+pytest -q                                                  # 211 tests; the 6 in test_medallion_scd2 skip without a database
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -103,7 +103,12 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   that only writes to the server log — so a broken sync looks like a working
   one. `core/sync.py` checks all four preconditions up front; do not weaken
   that into a warning. `--status` is how you tell a dead worker from a quiet
-  one.
+  one -- and it reads `pg_subscription_rel` as well as the slot and the apply
+  worker, because the *table sync* worker is a third one: a table stuck in the
+  initial copy has an active slot, a live apply worker and zero lag while
+  nothing replicates. `copy_data = true` is not idempotent, so `--apply`
+  truncates the target first and `plan()` prints that truncate -- or `--check`
+  describes something `--apply` does not do. Issue #35.
 * The CDC reader is a poll, so something has to be running it: `sync-mssql`
   in `compose.demo.yaml`, which is the app image with a different command. A
   poll nobody started looks exactly like a poll with nothing to do -- every
