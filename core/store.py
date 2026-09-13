@@ -82,6 +82,41 @@ create table if not exists sync_watermarks (
   updated_at timestamptz not null default now()
 );
 
+
+-- What a replication pass actually moved. See issue #28.
+--
+-- A syncTo rule reporting `slot_active: true` or `last_synced: 3h ago` answers
+-- "is it configured" and not "is my data arriving", which is the only question
+-- anyone has. core/sync_mssql.py already counts the inserts, updates and
+-- deletes it applied and then threw them away with the return value; this is
+-- where they go instead.
+--
+-- Kept per run rather than summed, because the interesting shape is a run that
+-- moved nothing after a week of moving hundreds. Old rows are not pruned: a
+-- poll every 30 seconds is 2 880 rows a day, and the day that matters is the
+-- one somebody is reconstructing afterwards.
+create table if not exists sync_runs (
+  id bigint generated always as identity primary key,
+  source text not null,
+  contract_id text not null,
+  mode text not null,
+  rows_read integer not null default 0,
+  -- Upserted, not inserted-and-updated: an insert and an update both arrive
+  -- as `on conflict do update`, and CDC's own operation code is not carried
+  -- through the merge in plan_changes. Two columns claiming to separate them
+  -- would be a number nobody could reproduce.
+  upserted integer not null default 0,
+  deleted integer not null default 0,
+  -- The source time of the last change this pass applied, from
+  -- sys.fn_cdc_map_lsn_to_time. Not when we ran: a pass at 14:05 that applied
+  -- changes up to 14:02 is three minutes behind, and no clock on this side
+  -- knows that.
+  applied_through timestamptz,
+  run_at timestamptz not null default now()
+);
+
+create index if not exists sync_runs_source on sync_runs (source, run_at desc);
+
 -- Which ODD link belongs to which contract. ODD appends links rather than
 -- replacing them and offers no way to read an entity's links back, so the ids
 -- it hands out on creation are ours to remember or the nightly run leaves a
@@ -261,6 +296,22 @@ def write_status(conn, check_id: str, contract_id: str, state: str,
              set state = excluded.state, note = excluded.note,
                  noted_run_at = excluded.noted_run_at, run_at = now()""",
         (check_id, contract_id, state, note, noted_run_at))
+
+
+def write_sync_run(conn, source: str, contract_id: str, mode: str,
+                   counts: dict, applied_through=None) -> None:
+    """One row per replication pass. See issue #28 and core/sync_mssql.py.
+
+    `counts` is what apply_changes returned plus the row count, so a key it
+    does not carry is zero rather than an error -- a snapshot has no deletes
+    and never will.
+    """
+    conn.execute(
+        """insert into sync_runs (source, contract_id, mode, rows_read,
+               upserted, deleted, applied_through)
+           values (%s,%s,%s,%s,%s,%s,%s)""",
+        (source, contract_id, mode, counts.get("rows", 0),
+         counts.get("upsert", 0), counts.get("delete", 0), applied_through))
 
 
 def write_score(conn, run_at: date, contract_id: str, score: float,

@@ -453,6 +453,47 @@ def contract_versions(contract_id: str, key: str | None = None) -> dict:
                 "key": key, "versions": scd.versions(cx, spec, key)}
 
 
+def _arriving(contract: dict, rule: dict) -> dict:
+    """How many rows are actually on the other side. Issue #28.
+
+    `slot_active: true` and `last_synced: 3h ago` both answer "is it
+    configured". The replica is a database we can count, and "90 of 2000 rows,
+    filter country = 'TR'" is a claim someone can check -- which a green line
+    is not.
+
+    Best effort in both directions: a target that is down is a line on the
+    page, not a 500 on the whole page.
+    """
+    from core import sync
+
+    model = contract["schema"][0]
+    table = model.get("physicalName") or model["name"]
+    out: dict[str, Any] = {"table": table, "filter": rule.get("filter")}
+
+    try:
+        # The source is the data under test, so it is counted as the reader
+        # every other read here uses -- and it may be SQL Server, where this
+        # hands back a pyodbc connection. Same call, different driver.
+        with _source_conn(sync._server(contract, "erp")) as cx:
+            cur = cx.cursor()
+            cur.execute(f"select count(*) from {table}")
+            out["source"] = cur.fetchone()[0]
+    except Exception as exc:
+        out["source_error"] = f"{exc.__class__.__name__}: {exc}"
+
+    try:
+        # The replica is not the data under test and `dq_reader` has no grant
+        # on it -- the tables there are made by the replication user, which is
+        # who core/sync.py's own status() connects as.
+        target = sync._server(contract, rule["server"])
+        with psycopg.connect(sync._dsn(target, *sync._credentials())) as cx:
+            out["target"] = cx.execute(
+                f"select count(*) from {table}").fetchone()[0]
+    except Exception as exc:
+        out["target_error"] = f"{exc.__class__.__name__}: {exc}"
+    return out
+
+
 @app.get("/api/sync")
 def sync_rules() -> list[dict]:
     """The replication rules, whether they are sound, and whether they run.
@@ -488,6 +529,12 @@ def sync_rules() -> list[dict]:
                                  **(sync_mssql.status(contract) or {})}
         except Exception as e:
             row["status"] = {"unreachable": str(e)}
+        row["arriving"] = _arriving(contract, rule)
+        row["runs"] = q("""select mode, rows_read, upserted, deleted,
+                                  applied_through, run_at
+                           from sync_runs where contract_id = %s
+                           order by run_at desc limit 10""",
+                        (contract["id"],))
         out.append(row)
     return out
 

@@ -156,6 +156,21 @@ export interface Sample {
   note?: string;
 }
 
+/** What one replication pass moved. `upserted` rather than inserted and
+ * updated: CDC delivers both as `on conflict do update` and the operation
+ * code does not survive the merge -- see core/store.py's sync_runs. */
+export interface SyncRun {
+  mode: string;
+  rows_read: number;
+  upserted: number;
+  deleted: number;
+  /** Source time of the last change this pass applied. The lag that matters
+   * for CDC: a pass at 14:05 that applied changes up to 14:02 is 3 minutes
+   * behind, and no clock on this side knows that. */
+  applied_through: string | null;
+  run_at: string;
+}
+
 export interface SyncRule {
   contract_id: string;
   title: string;
@@ -163,6 +178,17 @@ export interface SyncRule {
   identity: string[];
   rule: { server: string; filter?: string; columns?: string[]; identity?: string[] };
   problems: string[];
+  /** Rows on each side. A green line is not a claim anyone can check; "90 of
+   * 400 rows" is. */
+  arriving?: {
+    table: string;
+    filter?: string | null;
+    source?: number;
+    target?: number;
+    source_error?: string;
+    target_error?: string;
+  };
+  runs?: SyncRun[];
   status?: {
     engine?: string;
     slot_active?: boolean;
