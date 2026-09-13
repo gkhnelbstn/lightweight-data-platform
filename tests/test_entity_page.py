@@ -20,18 +20,33 @@ def _links(contract, monkeypatch=None):
 
 
 def test_every_contract_gets_a_way_back_to_its_page():
+    """Both questions, and they are different ones: the checks of this table,
+    and the contract behind them. Issue #23."""
     from integrations.odd.entity_page import desired_links
     links = desired_links({"id": "erp.sales_orders"})
-    assert len(links) == 1
-    assert links[0]["url"].endswith("#contract=erp.sales_orders")
+    assert len(links) == 2
+    assert links[0]["url"].endswith(
+        "/data-quality?dq_checks_contract=erp.sales_orders")
+    assert links[1]["url"].endswith("/data-quality?dq_contract=erp.sales_orders")
+
+
+def test_the_links_go_to_the_panel_and_not_to_the_retired_ui():
+    """ADR 0009 moved the panel into ODD, and #26 turned what was left on the
+    API's port into a redirect to its OpenAPI docs. A link pointing there
+    would land a person on a route list."""
+    from integrations.odd.entity_page import desired_links
+    for link in desired_links({"id": "erp.customers"}):
+        assert "/data-quality?" in link["url"]
+        assert "#contract=" not in link["url"]
 
 
 def test_a_replicated_contract_also_links_its_sync_rule():
     from integrations.odd.entity_page import desired_links
     contract = {"id": "erp.customers", "customProperties": [
         {"property": "syncTo", "value": {"server": "replica"}}]}
-    assert [link["url"].rsplit("/", 1)[-1] for link in desired_links(contract)] == \
-        ["#contract=erp.customers", "#sync"]
+    assert [link["url"].split("?")[-1] for link in desired_links(contract)] == [
+        "dq_checks_contract=erp.customers",
+        "dq_contract=erp.customers", "dq_tab=Replication"]
 
 
 def test_the_link_is_where_a_browser_reaches_us():
@@ -50,5 +65,5 @@ def test_the_shipped_contracts_produce_the_links_they_should():
     from core.sync import sync_rule
     for path in sorted(CONTRACTS.glob("*.odcs.yaml")):
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-        expected = 2 if sync_rule(doc) else 1
+        expected = 3 if sync_rule(doc) else 2
         assert len(desired_links(doc)) == expected, path.name

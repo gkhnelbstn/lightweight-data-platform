@@ -34,7 +34,10 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
   const [selected, setSelected] = useState<string | null>(() => readParam('check'));
   const [needle, setNeedle] = useState('');
   const [status, setStatus] = useState('failing');
-  const [contract, setContract] = useState('');
+  // `dq_checks_contract` is what a catalogue entity links to: the checks of
+  // one table, in this tab, rather than the contract's own page. A separate
+  // key from `dq_contract`, which selects the Contracts tab (issue #23).
+  const [contract, setContract] = useState(() => readParam('checks_contract') ?? '');
   const [reloads, setReloads] = useState(0);
 
   useEffect(() => {
@@ -72,6 +75,11 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
       );
     });
   }, [rows, needle, status, contract, source]);
+
+  const pick = (id: string) => {
+    setContract(id);
+    writeParams({ checks_contract: id || null });
+  };
 
   const select = (id: string) => {
     const next = selected === id ? null : id;
@@ -119,7 +127,7 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
           id='check-contract'
           label='Contract'
           value={contract}
-          onChange={e => setContract(e.target.value as string)}
+          onChange={e => pick(e.target.value as string)}
         >
           <MenuItem value=''>All contracts</MenuItem>
           {contracts.map(c => (
