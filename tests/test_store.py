@@ -152,3 +152,33 @@ def test_contract_detail_query_uses_the_index_not_a_seq_scan(dq):
             where contract_id = 'erp.customers' and run_window = 'incremental'
             order by check_id, run_at desc""").fetchall())
     assert "Seq Scan" not in plan
+
+
+def test_status_is_one_row_per_check_and_the_last_word_wins(dq):
+    """check_status: acknowledging twice replaces, it does not append.
+
+    A history of notes about the same red check is a thread nobody asked
+    for -- see issue #29 and store.write_status's docstring. What matters is
+    what is known *now*; `run_at` moves every time it is said again.
+    """
+    from core import store
+
+    store.write_status(dq, "c.orders__unique", "c.orders", "acknowledged",
+                       "the join loses an order, staging is being fixed")
+    store.write_status(dq, "c.orders__unique", "c.orders", "accepted",
+                       "five a day, living with it")
+
+    rows = dq.execute(
+        "select state, note from check_status where check_id = %s",
+        ("c.orders__unique",)).fetchall()
+    assert rows == [("accepted", "five a day, living with it")]
+
+
+def test_status_refuses_a_state_nobody_defined(dq):
+    """The three states are a closed set, enforced by the database rather
+    than only by the endpoint: a check someone marked 'wontfix' would render
+    as nothing at all in the UI's filter."""
+    from core import store
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        store.write_status(dq, "c.orders__unique", "c.orders", "wontfix")

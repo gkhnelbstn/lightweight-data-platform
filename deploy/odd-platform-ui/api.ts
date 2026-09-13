@@ -70,6 +70,11 @@ export interface CheckRow {
   reason: string | null;
   sql: string | null;
   stale: boolean;
+  /** What someone said about this check. 'open' when nobody has. */
+  state: 'open' | 'acknowledged' | 'accepted';
+  note: string | null;
+  noted_run_at: string | null;
+  noted_at: string | null;
 }
 
 export interface CheckRun {
@@ -216,6 +221,21 @@ export const getContract = (id: string) =>
   json<ContractDetail>(`/api/contracts/${encodeURIComponent(id)}`);
 
 export const getChecks = () => json<CheckRow[]>('/api/checks');
+
+/** Acknowledging writes a note, not a statement, so it carries no token --
+ * the guarded routes are guarded because they run SQL someone typed. */
+export const setCheckStatus = (
+  checkId: string,
+  body: { state: CheckRow['state']; note: string; noted_run_at: string | null }
+) =>
+  json<{ check_id: string; state: string; note: string }>(
+    `/api/checks/${encodeURIComponent(checkId)}/status`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
 
 export const getCheckHistory = (checkId: string) =>
   json<CheckRun[]>(`/api/checks/${encodeURIComponent(checkId)}/history`);

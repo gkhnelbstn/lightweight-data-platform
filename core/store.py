@@ -144,6 +144,32 @@ create table if not exists contract_audit (
 
 create index if not exists contract_audit_contract
   on contract_audit (contract_id, run_at desc);
+
+-- What someone said about a failing check, so the next person does not
+-- rediscover it. See issue #29.
+--
+-- One row per check, not one per run: an acknowledgement is about the check,
+-- and a check that fails again tomorrow is the same problem someone already
+-- looked at. `noted_run_at` is the run that was on screen when it was written
+-- -- it does not gate anything, it is how the UI can say "acknowledged three
+-- days ago, still failing" rather than implying it was about today.
+--
+-- No `who`, for the same reason contract_audit has none: ADR 0010, there is
+-- no identity provider. An acknowledgement nobody signed is a sticky note,
+-- and a sticky note beats rediscovering the same red row every morning.
+--
+-- `accepted` does NOT remove the check from the score. Muting a row in a
+-- table and muting its contribution to a measurement are different decisions
+-- and only the first one belongs in a UI -- see CLAUDE.md invariant 5 for the
+-- one case where something legitimately stays out of the score.
+create table if not exists check_status (
+  check_id text primary key,
+  contract_id text not null,
+  state text not null check (state in ('open', 'acknowledged', 'accepted')),
+  note text not null default '',
+  noted_run_at date,
+  run_at timestamptz not null default now()
+);
 """
 
 
@@ -217,6 +243,24 @@ def write_audit(conn, contract_id: str, change_type: str, action: str,
            values (%s,%s,%s,%s,%s,%s)""",
         (contract_id, change_type, action, description, json.dumps(value),
          caller_label))
+
+
+def write_status(conn, check_id: str, contract_id: str, state: str,
+                 note: str = "", noted_run_at: date | None = None) -> None:
+    """Acknowledge, accept, or re-open a check. See issue #29.
+
+    Upsert rather than insert: re-acknowledging replaces what was said, and a
+    history of notes about the same check is a thread nobody asked for. What
+    happened is already recoverable -- `run_at` moves every time.
+    """
+    conn.execute(
+        """insert into check_status (check_id, contract_id, state, note,
+               noted_run_at, run_at)
+           values (%s,%s,%s,%s,%s,now())
+           on conflict (check_id) do update
+             set state = excluded.state, note = excluded.note,
+                 noted_run_at = excluded.noted_run_at, run_at = now()""",
+        (check_id, contract_id, state, note, noted_run_at))
 
 
 def write_score(conn, run_at: date, contract_id: str, score: float,

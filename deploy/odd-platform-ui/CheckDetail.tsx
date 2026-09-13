@@ -3,6 +3,7 @@ import { Typography } from '@mui/material';
 import { Button, LabeledInfoItem, TestRunStatusItem } from 'components/shared/elements';
 import type { CheckRow, CheckRun, ContractSummary, Sample } from './api';
 import { getCheckHistory, getSample } from './api';
+import { CheckStatusForm } from './CheckStatus';
 import { Rows, runStatus, when } from './shared';
 import * as S from './Contracts.styles';
 
@@ -32,9 +33,10 @@ const KINDS: Record<string, string> = {
 interface Props {
   check: CheckRow;
   contract?: ContractSummary;
+  onStatusSaved: () => void;
 }
 
-export const CheckDetail: React.FC<Props> = ({ check, contract }) => {
+export const CheckDetail: React.FC<Props> = ({ check, contract, onStatusSaved }) => {
   const [history, setHistory] = useState<CheckRun[] | null>(null);
   const [sample, setSample] = useState<Sample | string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -121,6 +123,8 @@ export const CheckDetail: React.FC<Props> = ({ check, contract }) => {
           <S.Sql>{check.sql}</S.Sql>
         </div>
       )}
+
+      <CheckStatusForm check={check} onSaved={onStatusSaved} />
 
       <History runs={history} />
 

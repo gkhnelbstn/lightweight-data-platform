@@ -35,12 +35,13 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
   const [needle, setNeedle] = useState('');
   const [status, setStatus] = useState('failing');
   const [contract, setContract] = useState('');
+  const [reloads, setReloads] = useState(0);
 
   useEffect(() => {
     getChecks()
       .then(setRows)
       .catch((e: Error) => setError(e.message));
-  }, []);
+  }, [reloads]);
 
   // The contract's title and source table are not in check_results; the
   // overview already carries both, so they are joined here rather than in a
@@ -53,8 +54,13 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
   const visible = useMemo(() => {
     const text = needle.trim().toLowerCase();
     return (rows ?? []).filter(r => {
-      if (status === 'failing' && r.status === 'pass') return false;
+      // Accepted is a failure the team decided to live with (issue #29), so
+      // it is out of the default list for the same reason a passing check is:
+      // neither is news. It stays in the score either way.
+      if (status === 'failing' && (r.status === 'pass' || r.state === 'accepted'))
+        return false;
       if (status === 'passing' && r.status !== 'pass') return false;
+      if (status === 'accepted' && r.state !== 'accepted') return false;
       if (contract && r.contract_id !== contract) return false;
       if (!text) return true;
       const table = source.get(r.contract_id)?.source_table ?? '';
@@ -104,8 +110,9 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
           value={status}
           onChange={e => setStatus(e.target.value as string)}
         >
-          <MenuItem value='failing'>Not passing</MenuItem>
+          <MenuItem value='failing'>Needs attention</MenuItem>
           <MenuItem value='passing'>Passing</MenuItem>
+          <MenuItem value='accepted'>Accepted failures</MenuItem>
           <MenuItem value=''>All</MenuItem>
         </AppSelect>
         <AppSelect
@@ -186,6 +193,8 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
                   <Typography variant='caption' color='texts.secondary'>
                     {source.get(c.contract_id)?.title ?? c.contract_id}
                     {c.stale && ' · removed from the contract'}
+                    {c.state !== 'open' && ` · ${c.state}`}
+                    {c.note ? `: ${c.note}` : ''}
                   </Typography>
                 </div>
               </Table.Cell>
@@ -216,7 +225,11 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
               </Table.Cell>
             </Table.RowContainer>
             {selected === c.check_id && (
-              <CheckDetail check={c} contract={source.get(c.contract_id)} />
+              <CheckDetail
+                check={c}
+                contract={source.get(c.contract_id)}
+                onStatusSaved={() => setReloads(n => n + 1)}
+              />
             )}
           </React.Fragment>
         ))}

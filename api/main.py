@@ -236,18 +236,57 @@ def checks() -> list[dict]:
 
     `contract_title` and `source_table` are not in check_results; the UI maps
     them from /api/overview, which it has already fetched.
+
+    `state` is what someone said about the check (issue #29) and defaults to
+    'open' for one nobody has touched -- a left join, because a check with no
+    row in check_status is the normal case, not a missing one.
     """
     return q("""
         select distinct on (r.check_id)
                r.check_id, r.contract_id, r.dimension, r.status, r.failed_rows,
                r.total_rows, r.fail_ratio, r.run_at, r.name, r.check_type,
-               r.field, r.reason, r.sql, r.run_at < last.run_at as stale
+               r.field, r.reason, r.sql, r.run_at < last.run_at as stale,
+               coalesce(s.state, 'open') as state, s.note,
+               s.noted_run_at, s.run_at as noted_at
         from check_results r
         join (select contract_id, max(run_at) as run_at from check_results
               where run_window = 'incremental' group by contract_id) last
           on last.contract_id = r.contract_id
+        left join check_status s on s.check_id = r.check_id
         where r.run_window = 'incremental'
         order by r.check_id, r.run_at desc""")
+
+
+class CheckStatus(BaseModel):
+    """What someone says about a failing check.
+
+    No token: this writes a note, not a statement. The guarded routes are
+    guarded because they run SQL someone typed against the source -- see
+    /api/rules -- and there is nothing to run here.
+    """
+    state: str
+    note: str = ""
+    noted_run_at: date | None = None
+
+
+@app.post("/api/checks/{check_id}/status")
+def set_check_status(check_id: str, status: CheckStatus) -> dict:
+    """Acknowledge a check, accept it, or put it back to open. Issue #29.
+
+    An accepted check still counts in the score. The UI hides it by default
+    and that is the whole of what accepting does -- a measurement someone can
+    silence is not a measurement.
+    """
+    if status.state not in ("open", "acknowledged", "accepted"):
+        raise HTTPException(422, f"unknown state {status.state!r}")
+    rows = q("""select contract_id from check_results
+                where check_id = %s limit 1""", (check_id,))
+    if not rows:
+        raise HTTPException(404, f"no check with id {check_id}")
+    with store.connect() as cx:
+        store.write_status(cx, check_id, rows[0]["contract_id"],
+                           status.state, status.note, status.noted_run_at)
+    return {"check_id": check_id, "state": status.state, "note": status.note}
 
 
 @app.get("/api/checks/{check_id}/history")
