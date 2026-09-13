@@ -1,9 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Typography } from '@mui/material';
-import { Button, Input } from 'components/shared/elements';
+import { MenuItem, Typography } from '@mui/material';
+import {
+  AppSelect,
+  AppTabs,
+  Button,
+  EmptyContentPlaceholder,
+  Input,
+  LabeledInfoItem,
+  Table,
+  TestRunStatusItem,
+} from 'components/shared/elements';
+import { DataEntityRunStatus } from 'generated-sources';
 import type {
   AuditEntry,
   ContractDetail,
+  ContractProperty,
   Overview,
   PreviewResult,
   RuleDraft,
@@ -42,11 +53,23 @@ import * as S from './Contracts.styles';
  *
  * Everything here talks to the contract service; see ./api.ts. Saving a rule
  * writes it back into the contract file and re-runs it, so the numbers above
- * change on the next refresh.
+ * change on the next refresh. Built from `components/shared/elements` --
+ * this platform's own design system -- rather than bare HTML controls, so
+ * this panel looks like it belongs on the page it lives on.
  */
 
 const fmt = (v: unknown) =>
   v === null || v === undefined ? '—' : Number(v).toFixed(3);
+
+/** Our three check outcomes onto the four this platform already has icons,
+ * colors and a legend for. 'error' (could not run) reads as BROKEN, not
+ * FAILED -- CLAUDE.md invariant 5: a check that could not run is not one
+ * that failed. */
+const runStatus = (status: string): DataEntityRunStatus => {
+  if (status === 'pass') return DataEntityRunStatus.SUCCESS;
+  if (status === 'error') return DataEntityRunStatus.BROKEN;
+  return DataEntityRunStatus.FAILED;
+};
 
 type SortKey = 'title' | 'score' | 'tests';
 
@@ -167,10 +190,11 @@ export const Contracts: React.FC = () => {
       <S.Actions>
         <Typography variant='h4'>Contracts</Typography>
         <Input
-          variant='main-m'
+          variant='search-lg'
           placeholder='Filter by name, id or source table'
           value={filterText}
           onChange={e => setFilterText(e.target.value)}
+          handleCleanUp={() => setFilterText('')}
         />
       </S.Actions>
       <Typography variant='subtitle2' color='texts.secondary'>
@@ -180,32 +204,41 @@ export const Contracts: React.FC = () => {
       </Typography>
 
       <div>
-        <S.HeaderRow>
-          <S.SortableHeader onClick={() => toggleSort('title')}>
-            Contract{sort?.key === 'title' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
-          </S.SortableHeader>
-          <Typography variant='caption'>Source</Typography>
-          <S.SortableHeader onClick={() => toggleSort('score')}>
-            Score{sort?.key === 'score' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
-          </S.SortableHeader>
-          <Typography variant='caption'>SLA</Typography>
-          <S.SortableHeader onClick={() => toggleSort('tests')}>
-            Tests{sort?.key === 'tests' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
-          </S.SortableHeader>
-        </S.HeaderRow>
+        <Table.HeaderContainer>
+          <Table.Cell $flex={2.2}>
+            <S.SortableHeader onClick={() => toggleSort('title')}>
+              Contract{sort?.key === 'title' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+            </S.SortableHeader>
+          </Table.Cell>
+          <Table.Cell $flex={1.6}>
+            <Typography variant='caption'>Source</Typography>
+          </Table.Cell>
+          <Table.Cell $flex={0.8} $justifyContent='flex-end'>
+            <S.SortableHeader onClick={() => toggleSort('score')}>
+              Score{sort?.key === 'score' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+            </S.SortableHeader>
+          </Table.Cell>
+          <Table.Cell $flex={0.8} $justifyContent='flex-end'>
+            <Typography variant='caption'>SLA</Typography>
+          </Table.Cell>
+          <Table.Cell $flex={1.8}>
+            <S.SortableHeader onClick={() => toggleSort('tests')}>
+              Tests{sort?.key === 'tests' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+            </S.SortableHeader>
+          </Table.Cell>
+        </Table.HeaderContainer>
         {visibleContracts.length === 0 && (
-          <Typography variant='body2' color='texts.secondary'>
+          <Typography variant='body2' color='texts.secondary' sx={{ py: 2 }}>
             No contract matches &quot;{filterText}&quot;.
           </Typography>
         )}
         {visibleContracts.map(c => (
-          <S.Row
+          <Table.RowContainer
             key={c.id}
-            $selected={selected === c.id}
-            onClick={() => select(c.id)}
             role='button'
             tabIndex={0}
             aria-expanded={selected === c.id}
+            onClick={() => select(c.id)}
             onKeyDown={e => {
               // A row is a toggle, not a link -- Space and Enter both open it,
               // the way a real <button> would; Space's default (page scroll)
@@ -215,39 +248,76 @@ export const Contracts: React.FC = () => {
                 select(c.id);
               }
             }}
+            sx={{
+              cursor: 'pointer',
+              backgroundColor: theme =>
+                selected === c.id ? theme.palette.backgrounds.secondary : 'transparent',
+              '&:focus-visible': { outline: '2px solid currentColor', outlineOffset: '-2px' },
+            }}
           >
-            <div>
-              <Typography variant='body1'>{c.title}</Typography>
-              <Typography variant='caption' color='texts.secondary'>
-                {c.id}
+            <Table.Cell $flex={2.2}>
+              <div>
+                <Typography variant='body1'>{c.title}</Typography>
+                <Typography variant='caption' color='texts.secondary'>
+                  {c.id}
+                </Typography>
+              </div>
+            </Table.Cell>
+            <Table.Cell $flex={1.6}>
+              <Typography variant='body2'>
+                {c.source_table} ({c.server_type})
               </Typography>
-            </div>
-            <Typography variant='body2'>
-              {c.source_table} ({c.server_type})
-            </Typography>
-            <Typography
-              variant='h4'
-              color={c.sla_met === false ? 'error.main' : 'success.main'}
-            >
-              {fmt(c.score)}
-            </Typography>
-            <Typography variant='body2' color='texts.secondary'>
-              ≥ {fmt(c.sla_min)}
-            </Typography>
-            <Typography variant='body2'>
-              {c.checks_total == null
-                ? '—'
-                : `${c.checks_total - (c.checks_failed ?? 0) - (c.checks_errored ?? 0)}/${c.checks_total} passed`}
-              {c.checks_errored ? ` · ${c.checks_errored} could not run` : ''}
-            </Typography>
-          </S.Row>
+            </Table.Cell>
+            <Table.Cell $flex={0.8} $justifyContent='flex-end'>
+              <Typography
+                variant='h4'
+                color={c.sla_met === false ? 'error.main' : 'success.main'}
+              >
+                {fmt(c.score)}
+              </Typography>
+            </Table.Cell>
+            <Table.Cell $flex={0.8} $justifyContent='flex-end'>
+              <Typography variant='body2' color='texts.secondary'>
+                ≥ {fmt(c.sla_min)}
+              </Typography>
+            </Table.Cell>
+            <Table.Cell $flex={1.8}>
+              {c.checks_total == null ? (
+                <Typography variant='body2' color='texts.secondary'>
+                  —
+                </Typography>
+              ) : (
+                <S.Actions>
+                  <TestRunStatusItem
+                    size='small'
+                    typeName={DataEntityRunStatus.SUCCESS}
+                    count={c.checks_total - (c.checks_failed ?? 0) - (c.checks_errored ?? 0)}
+                  />
+                  {!!c.checks_failed && (
+                    <TestRunStatusItem
+                      size='small'
+                      typeName={DataEntityRunStatus.FAILED}
+                      count={c.checks_failed}
+                    />
+                  )}
+                  {!!c.checks_errored && (
+                    <TestRunStatusItem
+                      size='small'
+                      typeName={DataEntityRunStatus.BROKEN}
+                      count={c.checks_errored}
+                    />
+                  )}
+                </S.Actions>
+              )}
+            </Table.Cell>
+          </Table.RowContainer>
         ))}
       </div>
 
       {selected && detail && (
         <div ref={panelRef}>
           {/* key remounts the panel on contract change -- RuleBuilder,
-              SyncRuleForm and friends seed a <select> from `detail` in
+              SyncRuleForm and friends seed a control from `detail` in
               useState's initialiser, which only runs once per mount and
               would otherwise carry the previous contract's picks over. */}
           <ContractPanel
@@ -268,6 +338,7 @@ export const Contracts: React.FC = () => {
             return (
               <div key={f.check_id}>
                 <S.Actions>
+                  <TestRunStatusItem size='small' typeName={DataEntityRunStatus.FAILED} count={1} />
                   <Typography variant='body1'>
                     {f.name ?? f.check_id}
                   </Typography>
@@ -400,8 +471,10 @@ const Trend: React.FC<{ points: { run_at: string; score: string | number }[] }> 
  * The replication rules, and whether they are actually running.
  *
  * A dead apply worker and a quiet one look identical from the outside, which
- * is the whole reason this reports `slot_active` and `worker_running` rather
- * than just the rule.
+ * is the whole reason this reports `slot_active` and `worker_running` for
+ * Postgres, and `last_synced` (core/sync_mssql.py's own watermark) for CDC --
+ * a rule sitting there with nothing behind it should not look the same as one
+ * actually moving rows.
  */
 const SyncRules: React.FC = () => {
   const [rows, setRows] = useState<SyncRule[] | null>(null);
@@ -420,50 +493,79 @@ const SyncRules: React.FC = () => {
         database&apos;s own. Nothing of ours sits in the stream.
       </Typography>
       <div>
-        <S.HeaderRow>
-          <Typography variant='caption'>Contract</Typography>
-          <Typography variant='caption'>Target</Typography>
-          <Typography variant='caption'>Rule</Typography>
-          <Typography variant='caption'>Identity</Typography>
-          <Typography variant='caption'>State</Typography>
-        </S.HeaderRow>
+        <Table.HeaderContainer>
+          <Table.Cell $flex={1.6}>
+            <Typography variant='caption'>Contract</Typography>
+          </Table.Cell>
+          <Table.Cell $flex={1}>
+            <Typography variant='caption'>Target</Typography>
+          </Table.Cell>
+          <Table.Cell $flex={2}>
+            <Typography variant='caption'>Rule</Typography>
+          </Table.Cell>
+          <Table.Cell $flex={1}>
+            <Typography variant='caption'>Identity</Typography>
+          </Table.Cell>
+          <Table.Cell $flex={1.6}>
+            <Typography variant='caption'>State</Typography>
+          </Table.Cell>
+        </Table.HeaderContainer>
         {rows.map(r => {
           const status = r.status ?? {};
+          const isCdc = !!status.engine && status.engine !== 'logical replication';
           const streaming = status.worker_running === true && status.slot_active === true;
           return (
-            <S.Grid key={r.contract_id}>
-              <div>
-                <Typography variant='body1'>{r.title}</Typography>
-                <Typography variant='caption' color='texts.secondary'>
-                  {r.contract_id}
-                </Typography>
-              </div>
-              <Typography variant='body2'>{r.rule.server}</Typography>
-              <div>
-                <Typography variant='body2'>{r.rule.filter ?? 'everything'}</Typography>
-                <Typography variant='caption' color='texts.secondary'>
-                  {(r.rule.columns ?? ['all columns']).join(', ')}
-                </Typography>
-              </div>
-              <Typography variant='body2'>{(r.identity ?? []).join(', ')}</Typography>
-              <div>
-                <Typography
-                  variant='body2'
-                  color={streaming ? 'success.main' : 'texts.secondary'}
-                >
-                  {status.engine && status.engine !== 'logical replication'
-                    ? `${status.engine} CDC`
-                    : streaming
-                      ? `streaming · ${status.behind ?? ''} behind`
-                      : 'not applied'}
-                </Typography>
-                {(r.problems ?? []).map(p => (
-                  <Typography key={p} variant='caption' color='error.main'>
-                    {p}
+            <Table.RowContainer key={r.contract_id}>
+              <Table.Cell $flex={1.6}>
+                <div>
+                  <Typography variant='body1'>{r.title}</Typography>
+                  <Typography variant='caption' color='texts.secondary'>
+                    {r.contract_id}
                   </Typography>
-                ))}
-              </div>
-            </S.Grid>
+                </div>
+              </Table.Cell>
+              <Table.Cell $flex={1}>
+                <Typography variant='body2'>{r.rule.server}</Typography>
+              </Table.Cell>
+              <Table.Cell $flex={2}>
+                <div>
+                  <Typography variant='body2'>{r.rule.filter ?? 'everything'}</Typography>
+                  <Typography variant='caption' color='texts.secondary'>
+                    {(r.rule.columns ?? ['all columns']).join(', ')}
+                  </Typography>
+                </div>
+              </Table.Cell>
+              <Table.Cell $flex={1}>
+                <Typography variant='body2'>{(r.identity ?? []).join(', ')}</Typography>
+              </Table.Cell>
+              <Table.Cell $flex={1.6}>
+                <div>
+                  {isCdc ? (
+                    <Typography
+                      variant='body2'
+                      color={status.last_synced ? 'success.main' : 'texts.secondary'}
+                    >
+                      {status.engine} CDC ·{' '}
+                      {status.last_synced
+                        ? `synced ${new Date(status.last_synced).toLocaleString()}`
+                        : 'never synced'}
+                    </Typography>
+                  ) : (
+                    <Typography
+                      variant='body2'
+                      color={streaming ? 'success.main' : 'texts.secondary'}
+                    >
+                      {streaming ? `streaming · ${status.behind ?? ''} behind` : 'not applied'}
+                    </Typography>
+                  )}
+                  {(r.problems ?? []).map(p => (
+                    <Typography key={p} variant='caption' color='error.main' component='div'>
+                      {p}
+                    </Typography>
+                  ))}
+                </div>
+              </Table.Cell>
+            </Table.RowContainer>
           );
         })}
       </div>
@@ -478,13 +580,100 @@ interface PanelProps {
   onSaved: () => void;
 }
 
+/** name, type, the identity/uniqueness markers a version-carrying dimension
+ * like Type 2 SCD depends on, its classification, and the contract's own
+ * description of it -- schema.yaml already writes these in full for the
+ * columns that matter (dwh_dim_customer.odcs.yaml explains valid_from,
+ * valid_to and is_current at length); this is the first place any of it
+ * was shown rather than only read from the file. */
+const Definitions: React.FC<{ properties: ContractProperty[] }> = ({ properties }) => {
+  if (properties.length === 0) return null;
+  const flags = (p: ContractProperty) =>
+    [p.primaryKey && 'primary key', p.unique && 'unique', p.required && 'required']
+      .filter(Boolean)
+      .join(' · ');
+
+  return (
+    <div>
+      <Typography variant='h4'>Definitions</Typography>
+      {properties.map(p => (
+        <S.PropertyRow key={p.name}>
+          <LabeledInfoItem label={p.name} labelWidth={3}>
+            {p.logicalType ?? p.physicalType ?? '—'}
+            {flags(p) && ` · ${flags(p)}`}
+            {p.classification && ` · classified: ${p.classification}`}
+          </LabeledInfoItem>
+          {p.description && (
+            <Typography variant='caption' color='texts.secondary'>
+              {p.description}
+            </Typography>
+          )}
+        </S.PropertyRow>
+      ))}
+    </div>
+  );
+};
+
+/** history for one check, against the runs that are actually its own --
+ * fetched by /api/contracts/{id} and, before this, never rendered anywhere. */
+const CheckHistory: React.FC<{ checkId: string; history: ContractDetail['history'] }> = ({
+  checkId,
+  history,
+}) => {
+  const runs = history.filter(h => h.check_id === checkId);
+  if (runs.length < 2) return null;
+  const passed = runs.filter(r => r.status === 'pass').length;
+  return (
+    <Typography variant='caption' color='texts.secondary'>
+      {passed}/{runs.length} runs passed
+    </Typography>
+  );
+};
+
+/** Every check this contract has -- schema-derived and custom rules alike --
+ * with its current status and how often it has passed. `detail.rules` above
+ * shows only the SQL of the custom ones; this is the full picture, which had
+ * nowhere to be seen before even though the API already returned it. */
+const Checks: React.FC<{ checks: ContractDetail['checks']; history: ContractDetail['history'] }> = ({
+  checks,
+  history,
+}) => (
+  <div>
+    <Typography variant='h4'>Checks</Typography>
+    <EmptyContentPlaceholder
+      isContentEmpty={checks.length === 0}
+      fullPage={false}
+      text='No checks recorded for this contract yet.'
+    />
+    {checks.map(c => (
+      <S.PropertyRow key={c.check_id}>
+        <S.Actions>
+          <TestRunStatusItem size='small' typeName={runStatus(c.status)} count={1} />
+          <Typography variant='body2'>{c.name ?? c.check_id}</Typography>
+          {c.field && (
+            <Typography variant='caption' color='texts.secondary'>
+              {c.field}
+            </Typography>
+          )}
+        </S.Actions>
+        {c.reason && (
+          <Typography variant='caption' color='texts.secondary'>
+            {c.reason}
+          </Typography>
+        )}
+        <CheckHistory checkId={c.check_id} history={history} />
+      </S.PropertyRow>
+    ))}
+  </div>
+);
+
 const ContractPanel: React.FC<PanelProps> = ({
   detail,
   dimensions,
   ruleTypes,
   onSaved,
 }) => {
-  const [raw, setRaw] = useState(false);
+  const [tab, setTab] = useState(0);
   // AuditTrail only refetches on its own when `detail.contract.id` changes;
   // a save from any form here changes what it should show without changing
   // that id, so `key` is how it is told to ask again.
@@ -499,6 +688,9 @@ const ContractPanel: React.FC<PanelProps> = ({
       <Typography variant='h4'>
         {detail.contract.title} — {detail.file}
       </Typography>
+
+      <Definitions properties={detail.properties} />
+      <Checks checks={detail.checks} history={detail.history} />
 
       {detail.rules.length > 0 && (
         <div>
@@ -520,20 +712,22 @@ const ContractPanel: React.FC<PanelProps> = ({
         </div>
       )}
 
-      <S.Actions>
-        <Typography variant='h4'>Add a rule</Typography>
-        <Button
-          buttonType='tertiary-sm'
-          text={raw ? 'Use the form' : 'Write SQL instead'}
-          onClick={() => setRaw(v => !v)}
-        />
-      </S.Actions>
+      <Typography variant='h4'>Add a rule</Typography>
       <Typography variant='subtitle2' color='texts.secondary'>
         Saved as an ODCS quality entry in {detail.file}, then re-run. The
         contract stays the source of truth; this is an editor for it.
       </Typography>
+      {/* A tab, not a small link -- the SQL escape hatch existed before and
+          was easy to miss because "Write SQL instead" was the only clue it
+          was there. */}
+      <AppTabs
+        type='secondary'
+        selectedTab={tab}
+        handleTabChange={setTab}
+        items={[{ name: 'Form' }, { name: 'Write SQL' }]}
+      />
 
-      {raw ? (
+      {tab === 1 ? (
         <RawSqlRule detail={detail} dimensions={dimensions} onSaved={saved} />
       ) : (
         <RuleBuilder
@@ -604,18 +798,18 @@ const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => void }> = 
         rejected with the specific reason if it would not actually replicate.
       </Typography>
       <S.Actions>
-        <label>
-          <Typography variant='caption' color='texts.secondary'>
-            Target server
-          </Typography>
-          <select value={server} onChange={e => setServer(e.target.value)}>
-            {targets.map(t => (
-              <option key={t.server} value={t.server}>
-                {t.server} ({t.type})
-              </option>
-            ))}
-          </select>
-        </label>
+        <AppSelect
+          id='sync-target'
+          label='Target server'
+          value={server}
+          onChange={e => setServer(e.target.value as string)}
+        >
+          {targets.map(t => (
+            <MenuItem key={t.server} value={t.server}>
+              {t.server} ({t.type})
+            </MenuItem>
+          ))}
+        </AppSelect>
         <Input
           variant='main-m'
           label="Row filter — optional, e.g. country = 'TR'"
@@ -760,50 +954,42 @@ const RuleBuilder: React.FC<PanelProps> = ({
   return (
     <>
       <S.Actions>
-        <label>
-          <Typography variant='caption' color='texts.secondary'>
-            Column
-          </Typography>
-          <select value={column} onChange={e => setColumn(e.target.value)}>
-            {columns.map(c => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <Typography variant='caption' color='texts.secondary'>
-            Rule
-          </Typography>
-          <select
-            value={kind}
-            onChange={e => {
-              setKind(e.target.value);
-              setParams({});
-              setPreview(null);
-            }}
-          >
-            {ruleTypes.map(r => (
-              <option key={r.kind} value={r.kind}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <Typography variant='caption' color='texts.secondary'>
-            Dimension — weights the score
-          </Typography>
-          <select value={dimension} onChange={e => setDimension(e.target.value)}>
-            <option value=''>default ({selected?.dimension ?? '—'})</option>
-            {dimensions.map(d => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-        </label>
+        <AppSelect id='rule-column' label='Column' value={column} onChange={e => setColumn(e.target.value as string)}>
+          {columns.map(c => (
+            <MenuItem key={c} value={c}>
+              {c}
+            </MenuItem>
+          ))}
+        </AppSelect>
+        <AppSelect
+          id='rule-kind'
+          label='Rule'
+          value={kind}
+          onChange={e => {
+            setKind(e.target.value as string);
+            setParams({});
+            setPreview(null);
+          }}
+        >
+          {ruleTypes.map(r => (
+            <MenuItem key={r.kind} value={r.kind}>
+              {r.label}
+            </MenuItem>
+          ))}
+        </AppSelect>
+        <AppSelect
+          id='rule-dimension'
+          label='Dimension — weights the score'
+          value={dimension}
+          onChange={e => setDimension(e.target.value as string)}
+        >
+          <MenuItem value=''>default ({selected?.dimension ?? '—'})</MenuItem>
+          {dimensions.map(d => (
+            <MenuItem key={d} value={d}>
+              {d}
+            </MenuItem>
+          ))}
+        </AppSelect>
       </S.Actions>
 
       {(selected?.parameters ?? []).map(p => (
@@ -886,21 +1072,20 @@ const RawSqlRule: React.FC<Omit<PanelProps, 'ruleTypes'>> = ({
         value={draft.description}
         onChange={e => setDraft({ ...draft, description: e.target.value })}
       />
-      <label>
-        <Typography variant='caption' color='texts.secondary'>
-          Dimension — weights the score
-        </Typography>
-        <select
+      <S.Actions>
+        <AppSelect
+          id='raw-dimension'
+          label='Dimension — weights the score'
           value={draft.dimension}
-          onChange={e => setDraft({ ...draft, dimension: e.target.value })}
+          onChange={e => setDraft({ ...draft, dimension: e.target.value as string })}
         >
           {dimensions.map(d => (
-            <option key={d} value={d}>
+            <MenuItem key={d} value={d}>
               {d}
-            </option>
+            </MenuItem>
           ))}
-        </select>
-      </label>
+        </AppSelect>
+      </S.Actions>
       <div>
         <Typography variant='caption' color='texts.secondary'>
           SQL — must return one number, the count of bad rows
