@@ -39,6 +39,34 @@ services:
       timeout: 5s
       retries: 30
 
+  # The CDC reader, which until now was a command in CLAUDE.md that somebody
+  # had to remember. Issue #25.
+  #
+  # Postgres does not have this problem: its half is the database's own
+  # subscription and it runs whether anyone is watching. SQL Server's half is
+  # a poll, and a poll nobody started looks exactly like a poll with nothing
+  # to do -- `last_synced` simply goes stale while every rule still reports
+  # itself configured.
+  #
+  # It lives here rather than in compose.yaml because it reads `mssql`, which
+  # lives here. `extends` rather than a second copy of the app service: the
+  # environment is long, it is the same environment, and two of anything is
+  # two to maintain. `ports: []` drops the API port the app publishes -- this
+  # is the same image running a different command, not a second API -- and
+  # `!reset` rather than `[]`, because an empty list *merges* with what was
+  # extended and leaves the port there, which fails the whole service with
+  # "Bind for 0.0.0.0:8077 failed: port is already allocated".
+  sync-mssql:
+    extends:
+      file: compose.yaml
+      service: app
+    depends_on:
+      db: { condition: service_healthy }
+      mssql: { condition: service_healthy }
+    command: ["python", "core/sync_mssql.py", "--interval", "30"]
+    ports: !reset []
+    profiles: ["demo"]
+
   mongo:
     image: mongo:7
     environment:

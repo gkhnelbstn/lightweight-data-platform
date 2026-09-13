@@ -98,6 +98,13 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   one. `core/sync.py` checks all four preconditions up front; do not weaken
   that into a warning. `--status` is how you tell a dead worker from a quiet
   one.
+* The CDC reader is a poll, so something has to be running it: `sync-mssql`
+  in `compose.demo.yaml`, which is the app image with a different command. A
+  poll nobody started looks exactly like a poll with nothing to do -- every
+  rule still reports itself configured while `last_synced` goes stale. It
+  `extends` the app service rather than copying its environment, and resets
+  the inherited port with `!reset` -- an empty list merges and the service
+  then fails to bind 8077.
 * SQL Server CDC is a *SQL Server Agent* feature. `sp_cdc_enable_table`
   succeeds with the Agent stopped and then nothing ever lands in the change
   table; `MSSQL_AGENT_ENABLED` in compose.yaml is why the demo works.
