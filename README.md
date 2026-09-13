@@ -463,6 +463,7 @@ does not enter into it.
 | `core/scoring.py` | dimension-weighted score |
 | `core/store.py` | DDL, monthly partitions, writes |
 | `core/rules.py` | the rule vocabulary, and the SQL it compiles to per dialect |
+| `core/rule_plugins.py` | rule kinds a package outside this repo registers |
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
 | `core/profile.py` | nulls and distincts per declared column, in the day's window |
 | `core/versions.py` | what a contract says about its own history, and reading it |
