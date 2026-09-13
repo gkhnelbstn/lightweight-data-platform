@@ -210,6 +210,10 @@ export interface SyncRule {
     slot_active?: boolean;
     worker_running?: boolean;
     behind?: string | null;
+    /** Tables that never left the initial copy. A live apply worker, an
+     * active slot and zero lag say nothing about these -- see issue #35. */
+    copying?: string[];
+    streaming?: boolean;
     last_synced?: string | null;
     unreachable?: string;
   };

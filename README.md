@@ -29,7 +29,7 @@ still missing after ODD and datacontract-cli have done their part"**.
 |---|---|---|
 | catalog, search, glossary, ownership, RBAC | **ODD Platform** (Apache-2.0, active) | Postgres full-text, no Elasticsearch. Their last 25 commits are all search |
 | schema discovery | **odd-collector** | 64 MB, one config file |
-| column profiling | **odd-collector-profiler** | string lengths, means, inferred types |
+| column profiling | **odd-collector-profiler** | string lengths, means, inferred types. The two numbers that belong beside a *check* -- nulls and distincts, in the day's window -- are taken in the pass the runner already makes; the sort-bound half stays theirs |
 | alert lifecycle | **ODD Platform** | opens on failure, closes itself on the next pass. Measured: 3 open, 10 auto-resolved over a 45-day backfill |
 | contract format | **ODCS** (Bitol / Linux Foundation) | adopted — `contracts/*.odcs.yaml` |
 | deriving and running the checks | **datacontract-cli** (MIT) | adopted — 27 checks on Postgres, 24 on SQL Server, executed in the source database |
@@ -43,14 +43,24 @@ no maintained Helm chart, so deployment is compose.
 
 ### What is actually still missing
 
-These five are why this repository exists. Nothing above does them. Together
-they are about 470 lines: `core/runner.py`, `core/store.py`,
-`core/scoring.py`, `core/sample.py`, `integrations/odd/`.
+These seven are why this repository exists. Nothing above does them. Together
+they are about 2,500 lines: `core/runner.py`, `core/store.py`,
+`core/scoring.py`, `core/sample.py`, `core/profile.py`, `core/versions.py`,
+`core/engines/`, `integrations/odd/`.
 
 1. **Results as a time series.** `datacontract test` runs and forgets: no
    as-of date, no storage, no trend. Here every run is stored under its date in
    a monthly-partitioned table, so quality has a history that can be charted
    and an SLA that can be breached.
+
+   Two numbers per declared column go in beside them -- nulls and distincts,
+   taken in the same pass over the same window (`core/profile.py`), so the
+   Schema tab reads `tax_id · 44 rows · 4 null (9.1%) · 40 distinct` and says
+   when that fraction rose. Neither number is a check: nothing in
+   `column_profile` passes, fails, or reaches the score. Quantiles and
+   histograms are deliberately absent -- they want a sort over the whole
+   table, which is a second daily scan of every table and therefore
+   infrastructure.
 2. **A weighted score.** ODD divides passing tests by total tests and calls it
    a score; a missing key and a cosmetic rule cost the same, and one bad row
    weighs as much as four thousand.
@@ -120,6 +130,19 @@ they are about 470 lines: `core/runner.py`, `core/store.py`,
    and the rows under it disagree — and columns the contract marks
    `classification:` are masked, which is what `integrations/odd/classify.py`
    writes back once it has found them.
+
+7. **An acknowledged failure.** A red check somebody has looked at and a red
+   check nobody has seen are different facts, and neither tool records the
+   difference: `datacontract test` has one status per run, and ODD's alerts
+   close themselves on the next passing run rather than when a person answers
+   for one. `check_status` holds three states and a note -- open is the
+   absence of one, *acknowledged* is somebody has seen it, *accepted* is a
+   failure being lived with, which the list hides by default. It is keyed to
+   the check and not to the run, because a check that fails again tomorrow is
+   the same problem somebody already looked at. An accepted check still counts
+   in the score -- muting a row and muting a measurement are different
+   decisions -- and there is no *who*: ADR 0010, no identity provider, so a
+   signature would be a lie.
 
 Plus the one interface neither has: **an analyst can author a rule.** ODD's UI
 annotates what was ingested — there is no "create test" anywhere in it, because
@@ -265,7 +288,16 @@ bound by neither.
 
 `--status` exists for the same reason: it reports whether the apply worker is
 actually running and how far behind the slot is, rather than letting a dead
-worker look like a quiet one.
+worker look like a quiet one. That was not enough on its own. A live apply
+worker, an active slot and zero lag say nothing about whether a *table* is
+streaming: the initial copy runs in a second worker, and one that dies -- on
+the very replica-identity index the target is required to have, because
+`copy_data` had been asked to copy into a table that already held the rows --
+restarts every five seconds for ever while all three of those stay green. So
+`--status` reads `pg_subscription_rel` too, and a table that never left the
+copy reads as not streaming rather than as healthy; `--apply` empties the
+target before the copy, which is also printed by `--check`, or the two
+describe different things. Issue #35.
 
 The target table is built from the contract as well. Nothing else creates it
 -- logical replication replicates into a table that must already exist, and
@@ -394,6 +426,9 @@ does not enter into it.
 | `core/store.py` | DDL, monthly partitions, writes |
 | `core/rules.py` | the rule vocabulary, and the SQL it compiles to per dialect |
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
+| `core/profile.py` | nulls and distincts per declared column, in the day's window |
+| `core/versions.py` | what a contract says about its own history, and reading it |
+| `core/engines/` | one module per source engine: the window, the sampler, the counts |
 | `core/sync.py` | derive a Postgres publication/subscription from the contract |
 | `core/sync_mssql.py` | apply SQL Server's CDC change table to a Postgres target |
 | `deploy/mssql-cdc.sql` | turn on SQL Server CDC for the demo tables |
@@ -597,6 +632,39 @@ Early. A working vertical slice, not a product.
   own list; `POST /api/sync/rules` (#10) and `GET /api/contracts/{id}/audit`
   (#12) each get the form and the display they were missing, in
   `ContractPanel` next to the quality-rule form they sit beside.
+
+* **The panel was one long scroll, and half of what the API returned was
+  rendered nowhere.** Checks have their own screen now -- every check on the
+  platform in one filterable table, opening on *Not passing*, with the kind of
+  check, the table it looks at, its SQL or its assertion in words, its run
+  history and the rows it failed on. The contract's own sections became tabs
+  rather than five screens of column, and `GET /api/checks` marks a check
+  *stale* when its contract has run since without it, because results outlive
+  the rules that produced them:
+  [#21](https://github.com/gkhnelbstn/lightweight-data-platform/pull/21).
+* **A failing check could not be acknowledged.** Four `order_id` uniqueness
+  checks were red three days running and there was nowhere to say "known, the
+  join is the cause". `check_status` and `POST /api/checks/{id}/status` are
+  the smallest thing that stops the next person rediscovering them:
+  [#29](https://github.com/gkhnelbstn/lightweight-data-platform/issues/29).
+* **The warehouse dimension had history and nothing read it.**
+  `core/versions.py` reads what the contract declares -- the interval columns
+  plus a `versionedBy` business key -- rather than inferring it from column
+  names, which gets `dim.customer` right and the next table wrong. The panel's
+  History tab shows the versions of a key side by side.
+* **Replication reported that it was configured, not that anything arrived.**
+  `/api/sync` now carries the row counts on both sides, the CDC reader's last
+  ten passes and when it last read, so a poll nobody started stops looking
+  like a poll with nothing to do -- and `sync-mssql` is a service in
+  `compose.demo.yaml` rather than a command somebody has to remember.
+* **A re-apply stopped replication for good and `--status` called it
+  healthy.** The table sync worker died on a duplicate key every five seconds
+  while the slot stayed active and the apply worker stayed up:
+  [#35](https://github.com/gkhnelbstn/lightweight-data-platform/issues/35).
+* **The same `if source is sqlserver` sat in three files.** The window, the
+  sampler and the ODDRN generator each branched on the engine name;
+  `core/engines/` is one module per engine and the branch is a lookup:
+  [#34](https://github.com/gkhnelbstn/lightweight-data-platform/issues/34).
 
 ### Reported upstream
 

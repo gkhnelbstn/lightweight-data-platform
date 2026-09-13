@@ -266,3 +266,13 @@ def test_a_sound_sqlserver_rule_is_accepted(monkeypatch):
                                  row_filter="country = 'TR'")
     assert bad == []
     assert rule == {"server": "replica", "filter": "country = 'TR'"}
+
+
+def test_the_target_is_emptied_before_the_copy_runs_again():
+    """`copy_data = true` is not idempotent. The replica identity index the
+    target is required to have is exactly what a second copy collides with,
+    and the table sync worker then dies on a duplicate key every few seconds
+    while the apply worker stays up and the slot stays active -- issue #35."""
+    from core.sync import truncate_statement
+    assert truncate_statement(_model(), "public").as_string() == \
+        'truncate "public"."customers"'
