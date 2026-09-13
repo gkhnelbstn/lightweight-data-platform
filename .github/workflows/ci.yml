@@ -191,3 +191,15 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # ADR 0009's tsc gate: the contract panel type-checks against upstream's
+      # own components (Table, AppSelect, TestRunStatusItem...), and until now
+      # that only ran in release.yml, on a tag -- after merge. A PR that moves
+      # one of the two patch anchors or misuses a component should fail here.
+      - name: odd-platform (contract panel)
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy
+          file: deploy/Dockerfile.odd-platform
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
