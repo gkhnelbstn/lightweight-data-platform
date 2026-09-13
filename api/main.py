@@ -195,8 +195,22 @@ def contract_detail(contract_id: str) -> dict:
         where contract_id = %s and run_window = 'incremental'
         order by run_at""", (contract_id,))
 
+    # Beside the checks, never among them -- see core/profile.py. `lead`,
+    # not `lag`: the rows are ordered newest first, so the row *after* the
+    # newest is yesterday's.
+    profile = q("""
+        select distinct on (table_name, column_name)
+               table_name, column_name, rows, nulls, distinct_count, run_at,
+               lead(nulls) over w as prev_nulls,
+               lead(rows) over w as prev_rows
+        from column_profile
+        where contract_id = %s and run_window = 'incremental'
+        window w as (partition by table_name, column_name order by run_at desc)
+        order by table_name, column_name, run_at desc""", (contract_id,))
+
     return {"contract": _summary(doc),
             "properties": model.get("properties") or [],
+            "profile": profile,
             "rules": model.get("quality") or [],
             "checks": checks, "history": history,
             "file": path.name,

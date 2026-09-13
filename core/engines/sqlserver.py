@@ -84,3 +84,23 @@ def build_window(contract: dict, as_of: date, source: dict, src_schema: str,
             made += 1
         win.commit()
     return made
+
+
+def profile_columns(server: dict, schema: str, table: str,
+                    columns: list[str]) -> dict[str, dict]:
+    """As postgres.profile_columns, in T-SQL. Bracket quoting rather than
+    psycopg's composer, the same way build_window above does it -- the column
+    names come from the contract, not from anything a caller typed."""
+    if not columns:
+        return {}
+    parts = ["count(*)"]
+    for c in columns:
+        parts.append(f"count([{c}])")
+        parts.append(f"count(distinct [{c}])")
+    stmt = f"select {', '.join(parts)} from [{schema}].[{table}]"
+    with connect(server) as cx:
+        row = cx.cursor().execute(stmt).fetchone()
+    rows = row[0]
+    return {c: {"rows": rows, "nulls": rows - row[1 + i * 2],
+                "distinct": row[2 + i * 2]}
+            for i, c in enumerate(columns)}

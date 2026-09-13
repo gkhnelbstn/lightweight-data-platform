@@ -93,3 +93,34 @@ def build_window(contract: dict, as_of: date, source: dict, src_schema: str,
             cx.execute(stmt)
             made += 1
     return made
+
+
+def profile_columns(server: dict, schema: str, table: str,
+                    columns: list[str]) -> dict[str, dict]:
+    """Null count and distinct count per column, in one scan.
+
+    One `select` with two aggregates per column rather than a query per
+    column: the table is read once either way, and the runner is already
+    reading it. See core/profile.py for why this is the only shape of
+    profiling here.
+    """
+    if not columns:
+        return {}
+    parts = [sql.SQL("count(*)")]
+    for c in columns:
+        parts.append(sql.SQL("count({0})").format(sql.Identifier(c)))
+        parts.append(sql.SQL("count(distinct {0})").format(sql.Identifier(c)))
+    stmt = sql.SQL("select {} from {}.{}").format(
+        sql.SQL(", ").join(parts), sql.Identifier(schema), sql.Identifier(table))
+    with psycopg.connect(dsn(server)) as cx:
+        row = cx.execute(stmt).fetchone()
+    return _shape(row, columns)
+
+
+def _shape(row, columns: list[str]) -> dict[str, dict]:
+    rows = row[0]
+    out = {}
+    for i, c in enumerate(columns):
+        present, distinct = row[1 + i * 2], row[2 + i * 2]
+        out[c] = {"rows": rows, "nulls": rows - present, "distinct": distinct}
+    return out

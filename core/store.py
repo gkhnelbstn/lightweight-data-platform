@@ -117,6 +117,30 @@ create table if not exists sync_runs (
 
 create index if not exists sync_runs_source on sync_runs (source, run_at desc);
 
+
+-- Two numbers per column per day: how many were null, how many were distinct.
+-- See core/profile.py and issue #30.
+--
+-- Not a check. Nothing here passes or fails, nothing reaches core/scoring.py,
+-- and no row of this ever becomes a check_result -- deriving checks is
+-- datacontract-cli's job (invariant 2). This is the same measurement
+-- `field_required` makes, continuous rather than pass/fail, which is what
+-- shows a column degrading three days before it breaks one.
+--
+-- Replaced per day like check_results, and for the same reason: a run that
+-- happens twice must leave one profile, not two.
+create table if not exists column_profile (
+  run_at date not null,
+  run_window text not null,
+  contract_id text not null,
+  table_name text not null,
+  column_name text not null,
+  rows integer not null,
+  nulls integer not null,
+  distinct_count integer not null,
+  primary key (run_at, run_window, contract_id, table_name, column_name)
+);
+
 -- Which ODD link belongs to which contract. ODD appends links rather than
 -- replacing them and offers no way to read an entity's links back, so the ids
 -- it hands out on creation are ours to remember or the nightly run leaves a
@@ -312,6 +336,21 @@ def write_sync_run(conn, source: str, contract_id: str, mode: str,
            values (%s,%s,%s,%s,%s,%s,%s)""",
         (source, contract_id, mode, counts.get("rows", 0),
          counts.get("upsert", 0), counts.get("delete", 0), applied_through))
+
+
+def write_profile(conn, run_at: date, contract_id: str, rows: list[dict],
+                  window: str = "incremental") -> None:
+    """One day's column profile. Replaces rather than appends -- see the DDL."""
+    conn.execute(
+        """delete from column_profile where run_at = %s and run_window = %s
+             and contract_id = %s""", (run_at, window, contract_id))
+    with conn.cursor() as cur:
+        cur.executemany(
+            """insert into column_profile (run_at, run_window, contract_id,
+                   table_name, column_name, rows, nulls, distinct_count)
+               values (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            [(run_at, window, contract_id, r["table"], r["column"],
+              r["rows"], r["nulls"], r["distinct"]) for r in rows])
 
 
 def write_score(conn, run_at: date, contract_id: str, score: float,

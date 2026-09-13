@@ -89,6 +89,12 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   *database* on SQL Server, because a rule written `dbo.sales_orders` cannot
   see a second schema. `CREATE DATABASE` also refuses to run inside pyodbc's
   implicit transaction — set `autocommit` first.
+* The column profile (`core/profile.py`) is a measurement beside the checks,
+  never among them: nothing in `column_profile` passes, fails, or reaches
+  `core/scoring.py`. It is two numbers -- nulls and distincts -- taken in the
+  same pass over the window the runner already built. Quantiles and histograms
+  are deliberately absent: they need a sort over the whole table, which is a
+  second daily scan of every table and therefore infrastructure (invariant 6).
 * `datacontract test` gives `row_count` only for the checks it derives. A
   custom SQL rule has no denominator, so `core/runner.py` counts the table
   once per run; without it `fail_ratio` is always 0 and the volume half of the

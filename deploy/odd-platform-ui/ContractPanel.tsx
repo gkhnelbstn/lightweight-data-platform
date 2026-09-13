@@ -7,7 +7,13 @@ import {
   Table,
   TestRunStatusItem,
 } from 'components/shared/elements';
-import type { AuditEntry, ContractDetail, ContractProperty, RuleType } from './api';
+import type {
+  AuditEntry,
+  ColumnProfile,
+  ContractDetail,
+  ContractProperty,
+  RuleType,
+} from './api';
 import { getContractAudit } from './api';
 import { RawSqlRule, RuleBuilder, SyncRuleForm } from './RuleForms';
 import { runStatus, when } from './shared';
@@ -66,7 +72,9 @@ export const ContractPanel: React.FC<Props> = ({
         items={TABS.map(name => ({ name }))}
       />
 
-      {tab === 0 && <Definitions properties={detail.properties} />}
+      {tab === 0 && (
+        <Definitions properties={detail.properties} profile={detail.profile} />
+      )}
       {tab === 1 && <ContractChecks detail={detail} />}
       {tab === 2 && (
         <AddRule
@@ -88,7 +96,11 @@ export const ContractPanel: React.FC<Props> = ({
  * columns that matter (dwh_dim_customer.odcs.yaml explains valid_from,
  * valid_to and is_current at length); this is the first place any of it
  * was shown rather than only read from the file. */
-const Definitions: React.FC<{ properties: ContractProperty[] }> = ({ properties }) => {
+const Definitions: React.FC<{
+  properties: ContractProperty[];
+  profile?: ColumnProfile[];
+}> = ({ properties, profile }) => {
+  const measured = new Map((profile ?? []).map(p => [p.column_name, p]));
   const flags = (p: ContractProperty) =>
     [p.primaryKey && 'primary key', p.unique && 'unique', p.required && 'required']
       .filter(Boolean)
@@ -113,9 +125,46 @@ const Definitions: React.FC<{ properties: ContractProperty[] }> = ({ properties 
               {p.description}
             </Typography>
           )}
+          <Profile row={measured.get(p.name)} />
         </S.PropertyRow>
       ))}
     </div>
+  );
+};
+
+/**
+ * What the last run actually found in this column. Issue #30.
+ *
+ * The same measurement `field_required` makes, continuous rather than
+ * pass/fail: a column at 9% null passes every check it has and is three days
+ * from breaking one, and that is the only thing on this page that would say
+ * so. Of the day's window, not the whole table -- see core/profile.py.
+ */
+const Profile: React.FC<{ row?: ColumnProfile }> = ({ row }) => {
+  if (!row || row.rows === 0) return null;
+  const pct = (n: number, of: number) => `${((n / of) * 100).toFixed(1)}%`;
+  // A fraction, not a count: yesterday's window is a different size, so "4
+  // nulls, was 2" says nothing and "9.1%, was 4.5%" says the thing.
+  const before =
+    row.prev_nulls !== null && row.prev_rows ? row.prev_nulls / row.prev_rows : null;
+  const now = row.nulls / row.rows;
+  const rising = before !== null && now > before;
+
+  return (
+    <Typography variant='caption' color='texts.secondary' component='div'>
+      {row.rows} rows ·{' '}
+      <Typography
+        variant='caption'
+        component='span'
+        color={row.nulls > 0 ? 'warning.main' : 'texts.secondary'}
+      >
+        {row.nulls} null ({pct(row.nulls, row.rows)})
+      </Typography>
+      {rising && before !== null && ` ↑ from ${(before * 100).toFixed(1)}%`}
+      {' · '}
+      {row.distinct_count} distinct
+      {row.distinct_count === row.rows && ' — every row'}
+    </Typography>
   );
 };
 

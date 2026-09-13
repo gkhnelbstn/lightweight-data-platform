@@ -44,7 +44,7 @@ from pathlib import Path
 
 import yaml
 
-from core import engines, store
+from core import engines, profile, store
 from core.scoring import score
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -342,7 +342,12 @@ def run(as_of: date, contracts: list[dict] | None = None,
             # window would make meaningless.
             results = merge_table_scoped(results, run_contract(c, as_of,
                                                                windowed=False))
-        counts = table_rows(c, DAILY_SERVER if windowed else "erp")
+        server_key = DAILY_SERVER if windowed else "erp"
+        counts = table_rows(c, server_key)
+        # Beside the checks, not among them: see core/profile.py. Best effort,
+        # like the counts above -- a missing profile must not fail a run that
+        # measured the contract fine.
+        profile.collect(c, as_of, server_key, window)
         rows = persist(results, c, as_of, window, counts)
         s = score(rows)
         if odd_url:

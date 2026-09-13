@@ -111,9 +111,25 @@ export interface ContractProperty {
   classification?: string | null;
 }
 
+/** Two numbers per column per day. Not a check -- nothing here passes or
+ * fails and none of it reaches the score; see core/profile.py. `prev_*` is
+ * yesterday's run, which is what makes a rising null fraction visible before
+ * it breaks the `field_required` check on the same column. */
+export interface ColumnProfile {
+  table_name: string;
+  column_name: string;
+  rows: number;
+  nulls: number;
+  distinct_count: number;
+  run_at: string;
+  prev_nulls: number | null;
+  prev_rows: number | null;
+}
+
 export interface ContractDetail {
   contract: ContractSummary;
   properties: ContractProperty[];
+  profile: ColumnProfile[];
   rules: QualityRule[];
   checks: {
     check_id: string;
