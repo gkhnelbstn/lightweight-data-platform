@@ -157,6 +157,9 @@ const Arriving: React.FC<{ rule: SyncRule }> = ({ rule }) => {
 const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
   const status = rule.status ?? {};
   const isCdc = !!status.engine && status.engine !== 'logical replication';
+  // A view target has no worker and no lag: it is the source, read through a
+  // foreign table. Reachable or not is the whole of its state (ADR 0017).
+  const isView = status.mode === 'view';
   // The service decides this: an apply worker can be up, the slot active and
   // the lag zero while a table sits in the initial copy and replicates
   // nothing (issue #35). Older payloads have no `streaming`, so fall back.
@@ -166,7 +169,16 @@ const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
   const last = rule.runs?.[0];
   return (
     <div>
-      {isCdc ? (
+      {isView ? (
+        <Typography
+          variant='body2'
+          color={status.reachable ? 'success.main' : 'error.main'}
+        >
+          {status.reachable
+            ? 'reading through — no copy'
+            : `source unreachable — ${status.error ?? 'the view cannot be read'}`}
+        </Typography>
+      ) : isCdc ? (
         <Typography
           variant='body2'
           color={status.last_synced ? 'success.main' : 'texts.secondary'}

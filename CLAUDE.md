@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 211 tests; the 6 in test_medallion_scd2 skip without a database
+pytest -q                                                  # 217 tests; the 6 in test_medallion_scd2 skip without a database
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -179,6 +179,20 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 * Warehouse drops need `cascade`. The runner leaves an `asof_*` view on every
   table it checks, and a second `medallion.py` run fails on the dependency --
   the views are rebuilt by the next run anyway.
+* A `syncTo` rule is a copy unless it says `mode: view`, which is
+  `postgres_fdw` instead: no worker, no lag, and the target is only as
+  available as the source. Three things that mode changes and ADR 0017
+  records: the privacy boundary is a column-level grant on `sync_fdw` rather
+  than the column's absence (so a classified column may not be listed at all,
+  and `apply` verifies the grant with `has_column_privilege`), a SQL Server
+  source is refused because `tds_fdw` is not in the image, and `--status` is
+  `select 1 from the view` because there is no worker to ask about.
+* `stg.orders` and `mart.revenue_daily` are **views**, not tables --
+  `demo/medallion.py` builds them with `create view`. `raw` (a read that
+  crossed a network), `fct.orders` (an as-of range join) and `dim.customer`
+  (Type 2 history) stay physical. `drop_any` exists because `drop table` on a
+  view and `drop view` on a table are both errors, and a warehouse built
+  before ADR 0017 has tables where the script now wants views.
 * The `identity` widening in a `syncTo` rule is a *logical replication*
   requirement. The CDC reader has whole rows and does not need it; a mutable
   column in the identity breaks it there.
