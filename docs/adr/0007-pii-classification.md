@@ -51,14 +51,15 @@ would match any eleven digits.
   demo. `tests/test_contracts.py` pins the two checksums, so a broken validator
   fails the suite, but a changed *recogniser* would only show as columns going
   untagged.
-* **TCKN is upstream, independently of us.** `TrNationalIdRecognizer` /
-  `TR_NATIONAL_ID` merged in microsoft/presidio#1995 — same NVI checksum,
-  disabled by default like ours. Not yet used here: `>=2.2` is what
-  `presidio-analyzer>=2.2` in `pyproject.toml` pins, and this needs pinning
-  forward to whichever release contains #1995 first, which has not been
-  checked.
-* **VKN offered upstream.** `TrTaxIdRecognizer` / `TR_TAX_ID`, same shape,
-  contributed as microsoft/presidio#2250 — tracked in
+* **TCKN moved upstream.** `TrNationalIdRecognizer` / `TR_NATIONAL_ID` merged
+  in microsoft/presidio#1995 — same NVI checksum, and it ships in
+  presidio-analyzer 2.2.364 (confirmed by installing it; the version that
+  first carried it was not bisected further than that). `pyproject.toml` pins
+  `presidio-analyzer>=2.2.364` and `classify.py` registers
+  `TrNationalIdRecognizer` directly. Our own `Tckn` class and `tckn_is_valid`
+  are gone; the tests call `TrNationalIdRecognizer().validate_result` instead.
+* **VKN offered upstream, not yet shipped.** `TrTaxIdRecognizer` / `TR_TAX_ID`,
+  same shape, contributed as microsoft/presidio#2250 — tracked in
   [issue #5](https://github.com/gkhnelbstn/lightweight-data-platform/issues/5).
   Note the project moved: `microsoft/presidio` now redirects to
   `data-privacy-stack/presidio`; the PR lives there. The fork this needed
@@ -66,10 +67,9 @@ would match any eleven digits.
   here builds or runs it, unlike a category-4 carried patch in
   [0015](0015-the-boundary-what-is-ours.md#4-patches-we-carry-for-someone-else) —
   and is safe to delete once the PR merges or is closed.
-* **When either lands in a release:** bump `presidio-analyzer` past it, delete
-  the matching `Tckn`/`Vkn` class and its test in `classify.py` /
-  `tests/test_classify.py`, and register the upstream recognizer instead.
-  Do both at once only if both have shipped; otherwise drop whichever has.
+* **When VKN lands in a release:** bump `presidio-analyzer` past it, delete
+  the `Vkn` class and `vkn_is_valid`, and register `TrTaxIdRecognizer` the same
+  way `TrNationalIdRecognizer` is registered now. Close issue #5 at that point.
 * Considered, once VKN turned out to need contributing rather than already
   existing: swapping Presidio for a Turkish-specific PII library instead of
   carrying two recognizers until upstream catches up. Rejected -- a TR-only

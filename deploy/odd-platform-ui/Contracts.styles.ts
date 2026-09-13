@@ -1,28 +1,13 @@
 import styled, { css } from 'styled-components';
 
-export const Grid = styled.div(
-  ({ theme }) => css`
-    display: grid;
-    grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
-    border-bottom: 1px solid ${theme.palette.border.primary};
+// The contract list, the Replication table and the open-failures rows are
+// laid out with this platform's own Table.HeaderContainer / RowContainer /
+// Cell (components/shared/elements) rather than a bespoke grid, so this file
+// only carries what those do not: the sortable header button, and layout for
+// the panels that sit beside those tables.
 
-    &:last-of-type {
-      border-bottom: none;
-    }
-  `
-);
-
-export const HeaderRow = styled(Grid)(
-  ({ theme }) => css`
-    color: ${theme.palette.texts.secondary};
-    border-bottom: 1px solid ${theme.palette.border.primary};
-  `
-);
-
-/** A HeaderRow cell that sorts instead of just labelling. font-size matches
+/** A Table.HeaderContainer cell that sorts instead of just labelling.
+ * font-size matches
  * MUI's caption variant so it sits flush with the Typography cells beside it;
  * everything else is a button reset. */
 export const SortableHeader = styled.button`
@@ -41,26 +26,6 @@ export const SortableHeader = styled.button`
     outline-offset: 2px;
   }
 `;
-
-export const Row = styled(Grid)<{ $selected?: boolean }>(
-  ({ theme, $selected }) => css`
-    cursor: pointer;
-    background: ${$selected ? theme.palette.backgrounds.secondary : 'transparent'};
-
-    &:hover {
-      background: ${theme.palette.backgrounds.primary};
-    }
-
-    /* role="button" on a div gets none of the UA's default focus styling.
-       currentColor rather than a named token: nothing else here has needed
-       one, and this fork does not carry a copy of ODD's theme to check one
-       against -- see ADR 0009. */
-    &:focus-visible {
-      outline: 2px solid currentColor;
-      outline-offset: -2px;
-    }
-  `
-);
 
 export const Panel = styled.div(
   ({ theme }) => css`
@@ -130,5 +95,19 @@ export const Actions = styled.div(
     align-items: flex-end;
     gap: ${theme.spacing(1)};
     flex-wrap: wrap;
+  `
+);
+
+/** One property (Definitions) or one check (Checks): a compact row rather
+ * than a full Table.RowContainer -- there is no second column to align, just
+ * a label line and, sometimes, a line of prose under it. */
+export const PropertyRow = styled.div(
+  ({ theme }) => css`
+    padding: ${theme.spacing(0.75)} 0;
+    border-bottom: 1px solid ${theme.palette.border.primary};
+
+    &:last-of-type {
+      border-bottom: none;
+    }
   `
 );

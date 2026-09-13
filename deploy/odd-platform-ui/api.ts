@@ -67,9 +67,20 @@ export interface QualityRule {
   dimension?: string;
 }
 
+export interface ContractProperty {
+  name: string;
+  logicalType?: string;
+  physicalType?: string;
+  description?: string;
+  required?: boolean;
+  unique?: boolean;
+  primaryKey?: boolean;
+  classification?: string | null;
+}
+
 export interface ContractDetail {
   contract: ContractSummary;
-  properties: { name: string; classification?: string | null }[];
+  properties: ContractProperty[];
   rules: QualityRule[];
   checks: {
     check_id: string;
@@ -77,9 +88,14 @@ export interface ContractDetail {
     status: string;
     failed_rows: number;
     total_rows: number;
+    run_at: string;
     name: string | null;
+    check_type: string | null;
+    field: string | null;
     reason: string | null;
+    sql: string | null;
   }[];
+  history: { run_at: string; check_id: string; status: string; failed_rows: number }[];
   file: string;
   servers: { server: string; type: string }[];
 }
@@ -119,6 +135,7 @@ export interface SyncRule {
     slot_active?: boolean;
     worker_running?: boolean;
     behind?: string | null;
+    last_synced?: string | null;
     unreachable?: string;
   };
 }

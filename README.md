@@ -540,7 +540,7 @@ Early. A working vertical slice, not a product.
 * **A broken check looked like broken data.** A check that errors is stored as
   `status = 'error'`, not as a failure with `1/1` rows.
 * **No PII classification.** `integrations/odd/classify.py` samples each column
-  and tags it in ODD — `pii:TR_TCKN`, `pii:EMAIL_ADDRESS` — as first-class,
+  and tags it in ODD — `pii:TR_NATIONAL_ID`, `pii:EMAIL_ADDRESS` — as first-class,
   searchable tags. The recognisers are Microsoft's **Presidio** (MIT, ~10k
   stars) rather than patterns of our own; the Turkish identifiers were ours
   because Presidio had none, and they validate the checksum rather than
