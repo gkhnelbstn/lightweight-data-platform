@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
-from core import store
+from core import store, versions as scd
 from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
                          TABLE_SCOPED_TYPES, load_contracts, run)
 from core.scoring import DIMENSION_WEIGHT
@@ -403,6 +403,54 @@ def check_sample(check_id: str) -> dict:
 def _plain(v):
     """psycopg hands back dates and Decimals; the browser wants strings."""
     return v if v is None or isinstance(v, (int, float, str, bool)) else str(v)
+
+
+@app.get("/api/versions")
+def versioned_contracts() -> list[dict]:
+    """Contracts whose table keeps history, and how much of it. Issue #27.
+
+    A contract qualifies by declaring the three interval columns and naming
+    its business key -- see core/versions.py. Nothing is inferred, so a new
+    Type 2 table appears here by adding `versionedBy` to its contract and
+    changing no code.
+    """
+    out = []
+    for doc in load_contracts():
+        spec = scd.spec(doc)
+        if not spec or not spec["server"]:
+            continue
+        row = {k: v for k, v in spec.items() if k != "server"}
+        try:
+            with _source_conn(spec["server"]) as cx:
+                row.update(scd.summary(cx, spec))
+        except Exception as exc:  # a warehouse that is not up is not an error
+            row["unreachable"] = f"{exc.__class__.__name__}: {exc}"
+        out.append(row)
+    return out
+
+
+def _spec_or_404(contract_id: str) -> dict:
+    doc = yaml.safe_load(_contract_file(contract_id).read_text(encoding="utf-8"))
+    spec = scd.spec(doc)
+    if not spec or not spec["server"]:
+        raise HTTPException(
+            404, f"{contract_id} does not declare versions -- a contract needs "
+                 "valid_from, valid_to, is_current and a versionedBy property")
+    return spec
+
+
+@app.get("/api/versions/{contract_id}")
+def contract_versions(contract_id: str, key: str | None = None) -> dict:
+    """Without `key`, the things that have more than one version. With one,
+    that thing's versions in order and what changed between them."""
+    spec = _spec_or_404(contract_id)
+    with _source_conn(spec["server"]) as cx:
+        if key is None:
+            return {"contract": {k: v for k, v in spec.items() if k != "server"},
+                    "summary": scd.summary(cx, spec),
+                    "changed": scd.changed_keys(cx, spec)}
+        return {"contract": {k: v for k, v in spec.items() if k != "server"},
+                "key": key, "versions": scd.versions(cx, spec, key)}
 
 
 @app.get("/api/sync")

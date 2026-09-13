@@ -45,6 +45,14 @@ customProperties:
       left join dim.customer d
         on d.customer_id = s.customer_id and d.is_current
       where d.customer_key is null
+  # Which column is the *business* key -- the one that repeats across versions.
+  # `primaryKey` is the surrogate `customer_key`, one per version, so it cannot
+  # answer "show me this customer's history". Declared rather than guessed: the
+  # contract is the only source of truth (invariant 1), and a UI that inferred
+  # the key from "the required integer that is not the primary key" would be
+  # right here and wrong on the next table. See issue #27.
+  - property: versionedBy
+    value: customer_id
   # A version opens by insert and closes by update, and an update leaves
   # `loaded_at` where it was -- a watermark alone would check the new row and
   # never the one it replaced.

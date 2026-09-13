@@ -173,6 +173,39 @@ export interface SyncRule {
   };
 }
 
+/** A contract whose table keeps history: the columns that make an interval,
+ * the business key that repeats across versions, and how much of it there is.
+ * See core/versions.py -- none of this is inferred, the contract declares it. */
+export interface VersionedContract {
+  contract_id: string;
+  title: string;
+  table: string;
+  key: string;
+  attributes: string[];
+  versions?: number;
+  keys?: number;
+  closed?: number;
+  earliest?: string | null;
+  latest_change?: string | null;
+  unreachable?: string;
+}
+
+export interface ChangedKey {
+  key: string | number;
+  versions: number;
+  last_changed: string | null;
+}
+
+/** One version. The attribute columns are dynamic -- they are whatever the
+ * contract declares -- so they arrive alongside the fixed interval fields. */
+export interface Version {
+  valid_from: string;
+  valid_to: string | null;
+  is_current: boolean;
+  changed: string[];
+  [column: string]: unknown;
+}
+
 export interface RuleType {
   kind: string;
   dimension: string;
@@ -255,6 +288,19 @@ function authoring(body: RuleDraft | SyncRuleDraft, token: string): RequestInit 
     body: JSON.stringify(body),
   };
 }
+
+export const getVersionedContracts = () =>
+  json<VersionedContract[]>('/api/versions');
+
+export const getChangedKeys = (contractId: string) =>
+  json<{ contract: VersionedContract; summary: VersionedContract; changed: ChangedKey[] }>(
+    `/api/versions/${encodeURIComponent(contractId)}`
+  );
+
+export const getVersions = (contractId: string, key: string) =>
+  json<{ contract: VersionedContract; key: string; versions: Version[] }>(
+    `/api/versions/${encodeURIComponent(contractId)}?key=${encodeURIComponent(key)}`
+  );
 
 export const getSyncRules = () => json<SyncRule[]>('/api/sync');
 

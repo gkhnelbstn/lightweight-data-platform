@@ -25,6 +25,7 @@ python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
 python core/runner.py --odd-url http://odd-platform:8080   # ...and send it to ODD
 python demo/medallion.py                                   # rebuild the demo warehouse
+python demo/medallion.py --with-history                    # ...and give dim.customer a second version to keep
 python integrations/odd/lineage.py --url http://odd-platform:8080   # declared lineage
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
 python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
@@ -145,6 +146,11 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 * `fn_cdc_get_all_changes(..., 'all')` returns operations 1, 2 and 4 — no
   before image. Ask for `'all update old'` or an update that changes an
   identity column silently duplicates the row.
+* A table keeps history because its contract says so, never because its
+  columns look like it: `valid_from`/`valid_to`/`is_current` plus a
+  `versionedBy` custom property naming the business key. The surrogate key is
+  the `primaryKey` and repeats nothing, so inferring the key from the schema
+  gets `dim.customer` right and the next table wrong. See `core/versions.py`.
 * `dim.customer` is the one warehouse table `demo/medallion.py` does **not**
   rebuild -- it is SCD Type 2, so a change closes the current version and opens
   a new one. Its oldest version opens at `0001-01-01`, not at the source row's

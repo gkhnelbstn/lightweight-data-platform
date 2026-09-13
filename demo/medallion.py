@@ -19,10 +19,22 @@ Idempotent: every step is `create table ... as` behind a drop, so a re-run
 rebuilds the warehouse from whatever the sources hold now. `dim.customer` is
 the exception -- it is Type 2, so it is merged into rather than rebuilt, and a
 re-run over unchanged sources adds no version.
+
+That last sentence is why `--with-history` exists. A freshly seeded demo has
+one version per customer and no history at all, so the most carefully written
+table here demonstrates nothing: the merge has never had a change to record.
+`--with-history` builds, re-grades a few customers the way an ERP does, and
+builds again -- which is the same two commands anyone would run by hand, in
+the one order that produces a second version. See issue #27.
+
+    docker compose exec app python demo/medallion.py --with-history
 """
 from __future__ import annotations
 
+import argparse
 import os
+import sys
+from pathlib import Path
 
 import psycopg
 
@@ -149,7 +161,7 @@ def merge_dim_customer(dwh) -> tuple[int, int]:
     return opened, closed
 
 
-def main() -> None:
+def build() -> None:
     # The warehouse is the demo's, so the demo makes it -- deploy/db-init.sql
     # is the product's two databases and runs once, on an empty volume.
     from core.bootstrap_db import ensure_database, grant_reader
@@ -225,6 +237,28 @@ def main() -> None:
     for name, n in counts.items():
         print(f"  {name:<{width}}  {n:>7} rows")
     print(f"  {'dim.customer':<{width}}  {opened:>7} versions opened, {closed} closed")
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--with-history", type=int, nargs="?", const=20, metavar="N",
+        help="build, re-grade N customers in the ERP, and build again, so "
+             "dim.customer has closed versions to show. Default 20.")
+    args = ap.parse_args(argv)
+
+    build()
+    if args.with_history is None:
+        return
+
+    # seed/ is a sibling package, not on the path when this runs as a script.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from seed.seed import mutate
+
+    print("")
+    print(f"-- re-grading {args.with_history} customers, then rebuilding --")
+    mutate(args.with_history)
+    build()
 
 
 if __name__ == "__main__":

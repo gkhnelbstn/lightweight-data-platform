@@ -5,6 +5,7 @@ import type { Overview, RuleType } from './api';
 import { getOverview, getRuleTypes } from './api';
 import { ChecksTab } from './ChecksTab';
 import { ContractsTab } from './ContractsTab';
+import { HistoryTab } from './HistoryTab';
 import { Replication } from './Replication';
 import { readParam, showDashboard, writeParams } from './shared';
 import * as S from './Contracts.styles';
@@ -17,6 +18,7 @@ import * as S from './Contracts.styles';
  *
  *   Checks       what is being tested, against which table, and what it found
  *   Contracts    the score each contract carries, and the schema behind it
+ *   History      what a Type 2 table kept that the source overwrote
  *   Replication  which of those tables is copied somewhere, and whether it is
  *                actually moving
  *   Platform     this platform's own donuts, which this panel hides while it
@@ -40,7 +42,7 @@ import * as S from './Contracts.styles';
  * lives on. See docs/adr/0009-fork-odd-platform-ui.md for why it is a fork.
  */
 
-const TABS = ['Checks', 'Contracts', 'Replication', 'Platform overview'];
+const TABS = ['Checks', 'Contracts', 'History', 'Replication', 'Platform overview'];
 
 export const Contracts: React.FC = () => {
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -51,6 +53,7 @@ export const Contracts: React.FC = () => {
   const [tab, setTab] = useState(() => {
     if (readParam('check')) return 0;
     if (readParam('contract')) return 1;
+    if (readParam('key')) return 2;
     return Math.max(0, TABS.indexOf(readParam('tab') ?? 'Checks'));
   });
 
@@ -111,8 +114,9 @@ export const Contracts: React.FC = () => {
       {tab === 1 && (
         <ContractsTab overview={overview} ruleTypes={ruleTypes} onSaved={load} />
       )}
-      {tab === 2 && <Replication />}
-      {tab === 3 && (
+      {tab === 2 && <HistoryTab />}
+      {tab === 3 && <Replication />}
+      {tab === 4 && (
         <Typography variant='subtitle2' color='texts.secondary'>
           This platform&apos;s own dashboard, below — table health, the test
           results breakdown and the category table, counted from everything it
