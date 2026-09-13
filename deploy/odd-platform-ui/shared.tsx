@@ -51,19 +51,72 @@ const OPENED_WITH = new URLSearchParams(window.location.search);
 
 export const readParam = (key: string) => OPENED_WITH.get(`dq_${key}`);
 
+/** What the panel currently has in the URL, seeded from the link it was opened
+ * with. Kept here as well as in the address bar because the address bar is not
+ * ours alone -- see `keepOurKeys` below. */
+const OURS = new Map<string, string>(
+  [...OPENED_WITH.entries()].filter(([key]) => key.startsWith('dq_'))
+);
+
+const render = (params: URLSearchParams) => {
+  const search = params.toString();
+  return `${window.location.pathname}${search ? `?${search}` : ''}`;
+};
+
+/**
+ * Put our keys back into any URL the page writes.
+ *
+ * Reading them at module load is enough to *open* on the right check, and it
+ * was all #21 needed. It is not enough afterwards: upstream's filter sidebar
+ * writes the query string again on every change, from its own state, and our
+ * keys are not in that state -- so the address bar stops matching the screen
+ * and a person copying it shares the wrong thing (issue #24).
+ *
+ * So `history.pushState` and `replaceState` are wrapped once, and every URL
+ * that goes through them gets the `dq_*` we currently hold merged back in.
+ * This is a smaller intrusion than it looks and a much smaller one than the
+ * alternatives: it never blocks or rewrites *their* keys, it does not care
+ * which router they use, and if upstream ever stops dropping unknown keys it
+ * becomes a no-op rather than a conflict. `useSearchParams` was the other
+ * option and ADR 0009 argues against it -- a router hook breaks silently
+ * where this breaks not at all.
+ */
+const keepOurKeys = () => {
+  const history = window.history as History & { __dqPatched?: boolean };
+  if (history.__dqPatched) return;
+  history.__dqPatched = true;
+  (['pushState', 'replaceState'] as const).forEach(name => {
+    const original = history[name].bind(history);
+    history[name] = ((state: unknown, title: string, url?: string | URL | null) => {
+      if (url == null || OURS.size === 0) return original(state, title, url as never);
+      const next = new URL(String(url), window.location.origin);
+      OURS.forEach((value, key) => {
+        if (!next.searchParams.has(key)) next.searchParams.set(key, value);
+      });
+      return original(state, title, `${next.pathname}${next.search}`);
+    }) as typeof history.pushState;
+  });
+};
+
 export const writeParams = (values: Record<string, string | null>) => {
   const params = new URLSearchParams(window.location.search);
   Object.entries(values).forEach(([key, value]) => {
-    if (value) params.set(`dq_${key}`, value);
-    else params.delete(`dq_${key}`);
+    if (value) {
+      params.set(`dq_${key}`, value);
+      OURS.set(`dq_${key}`, value);
+    } else {
+      params.delete(`dq_${key}`);
+      OURS.delete(`dq_${key}`);
+    }
   });
-  const search = params.toString();
-  window.history.replaceState(
-    null,
-    '',
-    `${window.location.pathname}${search ? `?${search}` : ''}`
-  );
+  keepOurKeys();
+  window.history.replaceState(null, '', render(params));
 };
+
+// Their route rewrites the query string while it comes up, before anything
+// here has had a reason to write one, so the wrap has to be in place from the
+// start rather than from the first `writeParams`.
+keepOurKeys();
 
 /** The class `deploy/odd-platform-dq-panel.mjs` puts on this platform's own
  * two dashboard sections, so the panel can show and hide them. Kept in sync
