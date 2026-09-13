@@ -15,6 +15,9 @@
 #   * two lines against upstream, applied by a script that fails loudly when
 #     the anchor moves (deploy/odd-platform-dq-panel.mjs). Everything else is
 #     ours, in deploy/odd-platform-ui/.
+#   * one carried bug fix, in the same shape: deploy/odd-platform-lineage-icon.mjs
+#     gives each lineage node its own icon (odd-platform#1898). It is a fix
+#     rather than a feature, so it leaves when upstream takes it.
 #
 # The cost is real and worth stating: this pins an ODD version, and every
 # upgrade means rebuilding and possibly re-reading their page. Retire it the
@@ -45,7 +48,12 @@ WORKDIR /src
 COPY --from=codegen /src /src
 COPY odd-platform-ui/ /src/odd-platform-ui/src/components/DataQuality/Contracts/
 COPY odd-platform-dq-panel.mjs /tmp/patch.mjs
-RUN node /tmp/patch.mjs /src
+# A second patch, and one we would rather not have: every lineage node draws
+# the root's data source icon because the SVG filter id is a constant. Fixed
+# in three lines and reported as odd-platform#1898 -- delete both this line
+# and the script when it merges (ADR 0011).
+COPY odd-platform-lineage-icon.mjs /tmp/lineage-icon.mjs
+RUN node /tmp/patch.mjs /src && node /tmp/lineage-icon.mjs /src
 WORKDIR /src/odd-platform-ui
 # pnpm is pinned rather than taken from corepack: the lockfile is version 9.0
 # and corepack hands out whatever is current, which rejects it under

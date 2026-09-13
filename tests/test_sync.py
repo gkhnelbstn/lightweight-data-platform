@@ -276,3 +276,72 @@ def test_the_target_is_emptied_before_the_copy_runs_again():
     from core.sync import truncate_statement
     assert truncate_statement(_model(), "public").as_string() == \
         'truncate "public"."customers"'
+
+
+# --- a target that is a view rather than a copy (ADR 0017) ------------------
+
+def _view_rule(**over):
+    return {"server": "replica", "mode": "view", "filter": "qty > 0",
+            "columns": ["order_id", "line_no", "sku"], **over}
+
+
+def test_copy_is_the_mode_a_rule_that_does_not_say_gets():
+    from core.sync import mode
+    assert mode({"server": "replica"}) == "copy"
+    assert mode(_view_rule()) == "view"
+
+
+def test_the_view_applies_the_filter_and_the_column_list():
+    """Same rule, same shape on the other side -- the difference is that the
+    rows are not there twice."""
+    from core.sync_view import target_statements
+    stmts = [s.as_string() for s in target_statements(
+        _model(), _view_rule(contract_id="erp.order_lines"),
+        {"host": "db", "port": 5432, "database": "erp", "schema": "public"},
+        "public")]
+    view = stmts[-1]
+    assert view.startswith('create view "public"."customers" as select')
+    assert '"order_id", "line_no", "sku"' in view
+    assert view.endswith("where qty > 0")
+    assert any("foreign data wrapper postgres_fdw" in s for s in stmts)
+
+
+def test_the_grant_is_the_privacy_boundary_and_names_only_the_listed_columns():
+    """In view mode a column outside the list is not absent from the target,
+    it is ungranted at the source -- so the grant is the boundary."""
+    from core.sync_view import source_statements
+    stmts = [s.as_string() for s in source_statements(
+        _model(), "public", _view_rule())]
+    assert any(s.startswith("revoke all on table") for s in stmts)
+    grant = next(s for s in stmts if s.startswith("grant select"))
+    assert '"order_id", "line_no", "sku"' in grant and "tax_id" not in grant
+
+
+def test_a_view_target_is_refused_for_a_sql_server_source():
+    """postgres_fdw is what the image has; tds_fdw would be a new image for
+    one table (invariant 6)."""
+    from core.sync_view import problems
+    out = problems(_model(), _view_rule(), {"schema": [_model()]}, "sqlserver")
+    assert any("tds_fdw" in p for p in out)
+
+
+def test_a_classified_column_may_not_be_in_a_view_rule():
+    import yaml as _yaml
+    from core.sync_view import problems
+    doc = _yaml.safe_load(
+        (CONTRACTS / "erp_customers.odcs.yaml").read_text(encoding="utf-8"))
+    model = doc["schema"][0]
+    out = problems(model, _view_rule(columns=["customer_id", "tax_id"]),
+                   doc, "postgres")
+    assert any("tax_id" in p and "classified" in p for p in out)
+
+
+def test_the_shipped_view_rule_would_actually_work():
+    doc = yaml.safe_load(
+        (CONTRACTS / "erp_order_lines.odcs.yaml").read_text(encoding="utf-8"))
+    rule = sync_rule(doc)
+    from core.sync import mode
+    from core.sync_view import problems
+    assert mode(rule) == "view"
+    assert problems(doc["schema"][0], rule, doc, "postgres") == []
+    assert {s["server"] for s in doc["servers"]} >= {rule["server"]}
