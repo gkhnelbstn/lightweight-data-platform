@@ -610,6 +610,7 @@ Early. A working vertical slice, not a product.
 | odd-collector's Superset adapter: int ids, and lineage only for postgresql/sqlite | [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135) |
 | metric ingestion is write-once per family: the second write is an NPE | [odd-platform#1882](https://github.com/opendatadiscovery/odd-platform/issues/1882) |
 | column-level lineage edges, alongside the existing dataset-level ones | [odd-platform#1895](https://github.com/opendatadiscovery/odd-platform/issues/1895) |
+| every lineage node draws the root's data source icon (one SVG, one filter id) | [odd-platform#1898](https://github.com/opendatadiscovery/odd-platform/issues/1898) — patched here, three anchored lines |
 
 ## Where this goes next
 
