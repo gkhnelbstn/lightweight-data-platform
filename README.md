@@ -393,6 +393,7 @@ does not enter into it.
 | `core/scoring.py` | dimension-weighted score |
 | `core/store.py` | DDL, monthly partitions, writes |
 | `core/rules.py` | the rule vocabulary, and the SQL it compiles to per dialect |
+| `core/rule_plugins.py` | rule kinds a package outside this repo registers |
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
 | `core/sync.py` | derive a Postgres publication/subscription from the contract |
 | `core/sync_mssql.py` | apply SQL Server's CDC change table to a Postgres target |

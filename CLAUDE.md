@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 210 tests; the 6 in test_medallion_scd2 skip without a database
+pytest -q                                                  # 217 tests; the 6 in test_medallion_scd2 skip without a database
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -183,6 +183,10 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 **A new rule someone can pick from the form:** one entry in `core/rules.py`
 (builder, dimension, description, menu label) plus its parameters. The UI reads
 the catalogue, so it needs no change. Add a case to `tests/test_rules.py`.
+A kind that belongs to somebody else's package registers itself through the
+`ldp.rules` entry point group instead — `core/rule_plugins.py`, ADR 0016. Only
+the predicate shape is published: a whole-statement kind (`unique`,
+`foreign_key`) is still a commit here.
 
 **A new check kind:** it is datacontract-cli's, not ours — open an issue
 there. What may need changing here is `core/scoring.py` (a dimension it does
