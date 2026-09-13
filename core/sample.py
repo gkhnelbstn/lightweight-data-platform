@@ -25,13 +25,15 @@ import os
 import sqlglot
 from sqlglot import exp
 
+from core import engines
+
 LIMIT = int(os.getenv("DQ_SAMPLE_LIMIT", "20"))
 MASK = "\u2022\u2022\u2022"
 
-# ODCS server type -> the dialect the check was compiled to and has to be read
-# back as. `implementation` is already in the source's dialect.
-DIALECT = {"postgres": "postgres", "postgresql": "postgres",
-           "sqlserver": "tsql", "mssql": "tsql", "mysql": "mysql"}
+# Which dialect a compiled check has to be read back as is the engine's to
+# say -- see core/engines/. `implementation` is already in the source's
+# dialect, and an engine this package does not implement falls through to its
+# own name, because sqlglot knows more of them than we do.
 
 # Checks datacontract compiles to an aggregate with nothing to keep.
 BY_TYPE = {"field_required": "{f} IS NULL", "field_not_null": "{f} IS NULL"}
@@ -40,7 +42,7 @@ BY_TYPE = {"field_required": "{f} IS NULL", "field_not_null": "{f} IS NULL"}
 def rows_query(check: dict, table: str, server_type: str,
                limit: int = LIMIT) -> str | None:
     """The SQL that returns the rows this check failed on, or None."""
-    dialect = DIALECT.get(server_type, server_type)
+    dialect = engines.dialect(server_type)
     predicate = BY_TYPE.get(check.get("check_type") or check.get("type"))
     if predicate and check.get("field"):
         text = (f"SELECT * FROM {table} WHERE "

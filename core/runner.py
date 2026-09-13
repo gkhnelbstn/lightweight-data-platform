@@ -42,11 +42,9 @@ import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
-import psycopg
 import yaml
-from psycopg import sql
 
-from core import store
+from core import engines, profile, store
 from core.scoring import score
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -115,17 +113,8 @@ def window_predicate(contract: dict, model: dict | None = None) -> str:
 
 
 def source_dsn(server: dict) -> str:
-    """Where this contract's tables actually live.
-
-    `ERP_DSN` is only right while every contract is in one database. A
-    warehouse contract points at `dwh`, and building its window against `erp`
-    would create the views in the wrong place -- and silently, because `create
-    schema if not exists` succeeds anywhere.
-    """
-    user = os.getenv("SYNC_USERNAME", "postgres")
-    password = os.getenv("SYNC_PASSWORD", "postgres")
-    return (f"host={server['host']} port={server.get('port', 5432)} "
-            f"dbname={server['database']} user={user} password={password}")
+    """Where this contract's tables actually live. See engines/postgres.py."""
+    return engines.postgres.dsn(server)
 
 
 def build_window(contract: dict, as_of: date, dsn: str = None,
@@ -146,109 +135,12 @@ def build_window(contract: dict, as_of: date, dsn: str = None,
     if daily is None:
         return 0
     source = _server(contract, "erp") or contract["servers"][0]
-    loaded_at = os.getenv("DQ_LOADED_AT_COLUMN", "loaded_at")
-    src_schema = source.get("schema", "public")
-    win_schema = daily.get("schema", WINDOW_SCHEMA)
-    if source.get("type") in ("sqlserver", "mssql"):
-        return _build_window_mssql(contract, as_of, source, src_schema,
-                                   win_schema, loaded_at, window)
-
-    made = 0
-    with psycopg.connect(dsn or source_dsn(source), autocommit=True) as cx:
-        cx.execute(f'create schema if not exists "{win_schema}"')
-        named = {physical for _, physical in _tables(contract)}
-        by_table = {(m.get("physicalName") or m["name"]): m
-                    for m in contract.get("schema", [])}
-        # Every table in the source schema is mirrored: the ones the contract
-        # names get the day's rows, the rest are passed through so joins work.
-        rows = cx.execute(
-            """select table_name from information_schema.tables
-               where table_schema = %s and table_type = 'BASE TABLE'""",
-            (src_schema,)).fetchall()
-        for (table,) in rows:
-            has_window = cx.execute(
-                """select 1 from information_schema.columns
-                   where table_schema = %s and table_name = %s
-                     and column_name = %s""",
-                (src_schema, table, loaded_at)).fetchone()
-            # A view definition cannot take a bind parameter, so the date is
-            # composed in as a literal -- psycopg quotes it, and `as_of` is a
-            # date object rather than anything a caller typed.
-            stmt = sql.SQL("create or replace view {win}.{tbl} as "
-                           "select * from {src}.{tbl}").format(
-                win=sql.Identifier(win_schema), src=sql.Identifier(src_schema),
-                tbl=sql.Identifier(table))
-            if has_window and table in named:
-                if window == "incremental":
-                    template = window_predicate(contract, by_table.get(table))
-                else:
-                    # the comparison the daily window exists to beat
-                    template = "{col} <= {day}"
-                stmt = stmt + sql.SQL(" where ") + sql.SQL(template).format(
-                    col=sql.Identifier(loaded_at), day=sql.Literal(as_of))
-            cx.execute(stmt)
-            made += 1
-    return made
-
-
-def _build_window_mssql(contract: dict, as_of: date, source: dict,
-                        src_schema: str, win_schema: str, loaded_at: str,
-                        window: str) -> int:
-    """The same schema of views, in T-SQL -- except it is a database.
-
-    Without a window a SQL Server contract is scored over its whole table every
-    day, which is the cumulative scoring this project exists to argue against,
-    quietly reintroduced by having implemented the window for one engine only.
-    Its score sat at 0.8957 for forty-five days without moving.
-
-    The Postgres window is a *schema* because `search_path` makes an
-    unqualified `sales_orders` resolve to the view. SQL Server has no
-    search_path -- an unqualified name resolves through the user's default
-    schema -- and the rules in a T-SQL contract are written `dbo.sales_orders`
-    anyway, so a second schema is invisible to them. A second *database* is
-    not: `erp_asof.dbo.sales_orders` is what `dbo.sales_orders` means once the
-    connection is pointed at it, and the contract needs no rewriting.
-    """
-    from core.sync_mssql import mssql_connect
-
-    window_db = contract_window_database(contract) or f"{source['database']}_asof"
-    with mssql_connect(source) as cx:
-        # CREATE DATABASE cannot run inside a transaction, and pyodbc opens one
-        # for you: "CREATE DATABASE statement not allowed within
-        # multi-statement transaction."
-        cx.autocommit = True
-        cx.cursor().execute(
-            f"if db_id('{window_db}') is null "
-            f"exec('create database [{window_db}]')")
-
-    made = 0
-    named = {physical for _, physical in _tables(contract)}
-    by_table = {(m.get("physicalName") or m["name"]): m
-                for m in contract.get("schema", [])}
-    with mssql_connect(source) as src,             mssql_connect({**source, "database": window_db}) as win:
-        tables = [r[0] for r in src.cursor().execute(
-            "select table_name from information_schema.tables "
-            "where table_schema = ? and table_type = 'BASE TABLE'",
-            src_schema).fetchall()]
-        cur = win.cursor()
-        for table in tables:
-            windowed = src.cursor().execute(
-                "select 1 from information_schema.columns where table_schema = ? "
-                "and table_name = ? and column_name = ?",
-                src_schema, table, loaded_at).fetchone()
-            stmt = (f"create or alter view [{win_schema}].[{table}] as select * "
-                    f"from [{source['database']}].[{src_schema}].[{table}]")
-            if windowed and table in named:
-                template = (window_predicate(contract, by_table.get(table))
-                            if window == "incremental" else "{col} <= {day}")
-                # `as_of` is a date object and the column name comes from
-                # information_schema, so neither is caller text.
-                stmt += " where " + template.format(
-                    col=f"[{loaded_at}]", day=f"'{as_of.isoformat()}'")
-            cur.execute(stmt)
-            made += 1
-        win.commit()
-    return made
+    return engines.engine(source).build_window(
+        contract, as_of, source,
+        source.get("schema", "public"),
+        daily.get("schema", WINDOW_SCHEMA),
+        os.getenv("DQ_LOADED_AT_COLUMN", "loaded_at"),
+        window, dsn)
 
 
 def contract_window_database(contract: dict) -> str | None:
@@ -276,17 +168,7 @@ def table_rows(contract: dict, server_key: str) -> dict[str, int]:
     tables = [physical for _, physical in _tables(contract)]
     out: dict[str, int] = {}
     try:
-        if server.get("type") in ("sqlserver", "mssql"):
-            from core.sync_mssql import mssql_connect
-            with mssql_connect(server) as cx:
-                for t in tables:
-                    out[t] = cx.cursor().execute(
-                        f"select count(*) from [{schema}].[{t}]").fetchval()
-        else:
-            with psycopg.connect(source_dsn(server)) as cx:
-                for t in tables:
-                    out[t] = cx.execute(sql.SQL("select count(*) from {}.{}").format(
-                        sql.Identifier(schema), sql.Identifier(t))).fetchone()[0]
+        out = engines.engine(server).count_rows(server, schema, tables)
     except Exception:
         # A count is a nicety; failing to get one must not fail the run.
         return {}
@@ -460,7 +342,12 @@ def run(as_of: date, contracts: list[dict] | None = None,
             # window would make meaningless.
             results = merge_table_scoped(results, run_contract(c, as_of,
                                                                windowed=False))
-        counts = table_rows(c, DAILY_SERVER if windowed else "erp")
+        server_key = DAILY_SERVER if windowed else "erp"
+        counts = table_rows(c, server_key)
+        # Beside the checks, not among them: see core/profile.py. Best effort,
+        # like the counts above -- a missing profile must not fail a run that
+        # measured the contract fine.
+        profile.collect(c, as_of, server_key, window)
         rows = persist(results, c, as_of, window, counts)
         s = score(rows)
         if odd_url:

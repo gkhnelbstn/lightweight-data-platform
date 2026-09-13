@@ -82,6 +82,65 @@ create table if not exists sync_watermarks (
   updated_at timestamptz not null default now()
 );
 
+
+-- What a replication pass actually moved. See issue #28.
+--
+-- A syncTo rule reporting `slot_active: true` or `last_synced: 3h ago` answers
+-- "is it configured" and not "is my data arriving", which is the only question
+-- anyone has. core/sync_mssql.py already counts the inserts, updates and
+-- deletes it applied and then threw them away with the return value; this is
+-- where they go instead.
+--
+-- Kept per run rather than summed, because the interesting shape is a run that
+-- moved nothing after a week of moving hundreds. Old rows are not pruned: a
+-- poll every 30 seconds is 2 880 rows a day, and the day that matters is the
+-- one somebody is reconstructing afterwards.
+create table if not exists sync_runs (
+  id bigint generated always as identity primary key,
+  source text not null,
+  contract_id text not null,
+  mode text not null,
+  rows_read integer not null default 0,
+  -- Upserted, not inserted-and-updated: an insert and an update both arrive
+  -- as `on conflict do update`, and CDC's own operation code is not carried
+  -- through the merge in plan_changes. Two columns claiming to separate them
+  -- would be a number nobody could reproduce.
+  upserted integer not null default 0,
+  deleted integer not null default 0,
+  -- The source time of the last change this pass applied, from
+  -- sys.fn_cdc_map_lsn_to_time. Not when we ran: a pass at 14:05 that applied
+  -- changes up to 14:02 is three minutes behind, and no clock on this side
+  -- knows that.
+  applied_through timestamptz,
+  run_at timestamptz not null default now()
+);
+
+create index if not exists sync_runs_source on sync_runs (source, run_at desc);
+
+
+-- Two numbers per column per day: how many were null, how many were distinct.
+-- See core/profile.py and issue #30.
+--
+-- Not a check. Nothing here passes or fails, nothing reaches core/scoring.py,
+-- and no row of this ever becomes a check_result -- deriving checks is
+-- datacontract-cli's job (invariant 2). This is the same measurement
+-- `field_required` makes, continuous rather than pass/fail, which is what
+-- shows a column degrading three days before it breaks one.
+--
+-- Replaced per day like check_results, and for the same reason: a run that
+-- happens twice must leave one profile, not two.
+create table if not exists column_profile (
+  run_at date not null,
+  run_window text not null,
+  contract_id text not null,
+  table_name text not null,
+  column_name text not null,
+  rows integer not null,
+  nulls integer not null,
+  distinct_count integer not null,
+  primary key (run_at, run_window, contract_id, table_name, column_name)
+);
+
 -- Which ODD link belongs to which contract. ODD appends links rather than
 -- replacing them and offers no way to read an entity's links back, so the ids
 -- it hands out on creation are ours to remember or the nightly run leaves a
@@ -144,6 +203,32 @@ create table if not exists contract_audit (
 
 create index if not exists contract_audit_contract
   on contract_audit (contract_id, run_at desc);
+
+-- What someone said about a failing check, so the next person does not
+-- rediscover it. See issue #29.
+--
+-- One row per check, not one per run: an acknowledgement is about the check,
+-- and a check that fails again tomorrow is the same problem someone already
+-- looked at. `noted_run_at` is the run that was on screen when it was written
+-- -- it does not gate anything, it is how the UI can say "acknowledged three
+-- days ago, still failing" rather than implying it was about today.
+--
+-- No `who`, for the same reason contract_audit has none: ADR 0010, there is
+-- no identity provider. An acknowledgement nobody signed is a sticky note,
+-- and a sticky note beats rediscovering the same red row every morning.
+--
+-- `accepted` does NOT remove the check from the score. Muting a row in a
+-- table and muting its contribution to a measurement are different decisions
+-- and only the first one belongs in a UI -- see CLAUDE.md invariant 5 for the
+-- one case where something legitimately stays out of the score.
+create table if not exists check_status (
+  check_id text primary key,
+  contract_id text not null,
+  state text not null check (state in ('open', 'acknowledged', 'accepted')),
+  note text not null default '',
+  noted_run_at date,
+  run_at timestamptz not null default now()
+);
 """
 
 
@@ -217,6 +302,55 @@ def write_audit(conn, contract_id: str, change_type: str, action: str,
            values (%s,%s,%s,%s,%s,%s)""",
         (contract_id, change_type, action, description, json.dumps(value),
          caller_label))
+
+
+def write_status(conn, check_id: str, contract_id: str, state: str,
+                 note: str = "", noted_run_at: date | None = None) -> None:
+    """Acknowledge, accept, or re-open a check. See issue #29.
+
+    Upsert rather than insert: re-acknowledging replaces what was said, and a
+    history of notes about the same check is a thread nobody asked for. What
+    happened is already recoverable -- `run_at` moves every time.
+    """
+    conn.execute(
+        """insert into check_status (check_id, contract_id, state, note,
+               noted_run_at, run_at)
+           values (%s,%s,%s,%s,%s,now())
+           on conflict (check_id) do update
+             set state = excluded.state, note = excluded.note,
+                 noted_run_at = excluded.noted_run_at, run_at = now()""",
+        (check_id, contract_id, state, note, noted_run_at))
+
+
+def write_sync_run(conn, source: str, contract_id: str, mode: str,
+                   counts: dict, applied_through=None) -> None:
+    """One row per replication pass. See issue #28 and core/sync_mssql.py.
+
+    `counts` is what apply_changes returned plus the row count, so a key it
+    does not carry is zero rather than an error -- a snapshot has no deletes
+    and never will.
+    """
+    conn.execute(
+        """insert into sync_runs (source, contract_id, mode, rows_read,
+               upserted, deleted, applied_through)
+           values (%s,%s,%s,%s,%s,%s,%s)""",
+        (source, contract_id, mode, counts.get("rows", 0),
+         counts.get("upsert", 0), counts.get("delete", 0), applied_through))
+
+
+def write_profile(conn, run_at: date, contract_id: str, rows: list[dict],
+                  window: str = "incremental") -> None:
+    """One day's column profile. Replaces rather than appends -- see the DDL."""
+    conn.execute(
+        """delete from column_profile where run_at = %s and run_window = %s
+             and contract_id = %s""", (run_at, window, contract_id))
+    with conn.cursor() as cur:
+        cur.executemany(
+            """insert into column_profile (run_at, run_window, contract_id,
+                   table_name, column_name, rows, nulls, distinct_count)
+               values (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            [(run_at, window, contract_id, r["table"], r["column"],
+              r["rows"], r["nulls"], r["distinct"]) for r in rows])
 
 
 def write_score(conn, run_at: date, contract_id: str, score: float,

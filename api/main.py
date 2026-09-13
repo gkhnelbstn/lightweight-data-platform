@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
-from core import store
+from core import store, versions as scd
 from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
                          TABLE_SCOPED_TYPES, load_contracts, run)
 from core.scoring import DIMENSION_WEIGHT
@@ -195,8 +195,22 @@ def contract_detail(contract_id: str) -> dict:
         where contract_id = %s and run_window = 'incremental'
         order by run_at""", (contract_id,))
 
+    # Beside the checks, never among them -- see core/profile.py. `lead`,
+    # not `lag`: the rows are ordered newest first, so the row *after* the
+    # newest is yesterday's.
+    profile = q("""
+        select distinct on (table_name, column_name)
+               table_name, column_name, rows, nulls, distinct_count, run_at,
+               lead(nulls) over w as prev_nulls,
+               lead(rows) over w as prev_rows
+        from column_profile
+        where contract_id = %s and run_window = 'incremental'
+        window w as (partition by table_name, column_name order by run_at desc)
+        order by table_name, column_name, run_at desc""", (contract_id,))
+
     return {"contract": _summary(doc),
             "properties": model.get("properties") or [],
+            "profile": profile,
             "rules": model.get("quality") or [],
             "checks": checks, "history": history,
             "file": path.name,
@@ -222,6 +236,71 @@ def contract_audit(contract_id: str) -> list[dict]:
                 from contract_audit
                 where contract_id = %s
                 order by run_at desc""", (contract_id,))
+
+
+@app.get("/api/checks")
+def checks() -> list[dict]:
+    """Every check's most recent incremental run, across all contracts.
+
+    Results outlive checks -- deleting a rule from a contract leaves its
+    history behind (see CLAUDE.md). A deleted check simply stops getting new
+    rows, so its latest run is older than its contract's latest run: that is
+    what `stale` means here. The rows stay in the list because they are real
+    history, but the UI can tell a live check from a ghost.
+
+    `contract_title` and `source_table` are not in check_results; the UI maps
+    them from /api/overview, which it has already fetched.
+
+    `state` is what someone said about the check (issue #29) and defaults to
+    'open' for one nobody has touched -- a left join, because a check with no
+    row in check_status is the normal case, not a missing one.
+    """
+    return q("""
+        select distinct on (r.check_id)
+               r.check_id, r.contract_id, r.dimension, r.status, r.failed_rows,
+               r.total_rows, r.fail_ratio, r.run_at, r.name, r.check_type,
+               r.field, r.reason, r.sql, r.run_at < last.run_at as stale,
+               coalesce(s.state, 'open') as state, s.note,
+               s.noted_run_at, s.run_at as noted_at
+        from check_results r
+        join (select contract_id, max(run_at) as run_at from check_results
+              where run_window = 'incremental' group by contract_id) last
+          on last.contract_id = r.contract_id
+        left join check_status s on s.check_id = r.check_id
+        where r.run_window = 'incremental'
+        order by r.check_id, r.run_at desc""")
+
+
+class CheckStatus(BaseModel):
+    """What someone says about a failing check.
+
+    No token: this writes a note, not a statement. The guarded routes are
+    guarded because they run SQL someone typed against the source -- see
+    /api/rules -- and there is nothing to run here.
+    """
+    state: str
+    note: str = ""
+    noted_run_at: date | None = None
+
+
+@app.post("/api/checks/{check_id}/status")
+def set_check_status(check_id: str, status: CheckStatus) -> dict:
+    """Acknowledge a check, accept it, or put it back to open. Issue #29.
+
+    An accepted check still counts in the score. The UI hides it by default
+    and that is the whole of what accepting does -- a measurement someone can
+    silence is not a measurement.
+    """
+    if status.state not in ("open", "acknowledged", "accepted"):
+        raise HTTPException(422, f"unknown state {status.state!r}")
+    rows = q("""select contract_id from check_results
+                where check_id = %s limit 1""", (check_id,))
+    if not rows:
+        raise HTTPException(404, f"no check with id {check_id}")
+    with store.connect() as cx:
+        store.write_status(cx, check_id, rows[0]["contract_id"],
+                           status.state, status.note, status.noted_run_at)
+    return {"check_id": check_id, "state": status.state, "note": status.note}
 
 
 @app.get("/api/checks/{check_id}/history")
@@ -340,6 +419,95 @@ def _plain(v):
     return v if v is None or isinstance(v, (int, float, str, bool)) else str(v)
 
 
+@app.get("/api/versions")
+def versioned_contracts() -> list[dict]:
+    """Contracts whose table keeps history, and how much of it. Issue #27.
+
+    A contract qualifies by declaring the three interval columns and naming
+    its business key -- see core/versions.py. Nothing is inferred, so a new
+    Type 2 table appears here by adding `versionedBy` to its contract and
+    changing no code.
+    """
+    out = []
+    for doc in load_contracts():
+        spec = scd.spec(doc)
+        if not spec or not spec["server"]:
+            continue
+        row = {k: v for k, v in spec.items() if k != "server"}
+        try:
+            with _source_conn(spec["server"]) as cx:
+                row.update(scd.summary(cx, spec))
+        except Exception as exc:  # a warehouse that is not up is not an error
+            row["unreachable"] = f"{exc.__class__.__name__}: {exc}"
+        out.append(row)
+    return out
+
+
+def _spec_or_404(contract_id: str) -> dict:
+    doc = yaml.safe_load(_contract_file(contract_id).read_text(encoding="utf-8"))
+    spec = scd.spec(doc)
+    if not spec or not spec["server"]:
+        raise HTTPException(
+            404, f"{contract_id} does not declare versions -- a contract needs "
+                 "valid_from, valid_to, is_current and a versionedBy property")
+    return spec
+
+
+@app.get("/api/versions/{contract_id}")
+def contract_versions(contract_id: str, key: str | None = None) -> dict:
+    """Without `key`, the things that have more than one version. With one,
+    that thing's versions in order and what changed between them."""
+    spec = _spec_or_404(contract_id)
+    with _source_conn(spec["server"]) as cx:
+        if key is None:
+            return {"contract": {k: v for k, v in spec.items() if k != "server"},
+                    "summary": scd.summary(cx, spec),
+                    "changed": scd.changed_keys(cx, spec)}
+        return {"contract": {k: v for k, v in spec.items() if k != "server"},
+                "key": key, "versions": scd.versions(cx, spec, key)}
+
+
+def _arriving(contract: dict, rule: dict) -> dict:
+    """How many rows are actually on the other side. Issue #28.
+
+    `slot_active: true` and `last_synced: 3h ago` both answer "is it
+    configured". The replica is a database we can count, and "90 of 2000 rows,
+    filter country = 'TR'" is a claim someone can check -- which a green line
+    is not.
+
+    Best effort in both directions: a target that is down is a line on the
+    page, not a 500 on the whole page.
+    """
+    from core import sync
+
+    model = contract["schema"][0]
+    table = model.get("physicalName") or model["name"]
+    out: dict[str, Any] = {"table": table, "filter": rule.get("filter")}
+
+    try:
+        # The source is the data under test, so it is counted as the reader
+        # every other read here uses -- and it may be SQL Server, where this
+        # hands back a pyodbc connection. Same call, different driver.
+        with _source_conn(sync._server(contract, "erp")) as cx:
+            cur = cx.cursor()
+            cur.execute(f"select count(*) from {table}")
+            out["source"] = cur.fetchone()[0]
+    except Exception as exc:
+        out["source_error"] = f"{exc.__class__.__name__}: {exc}"
+
+    try:
+        # The replica is not the data under test and `dq_reader` has no grant
+        # on it -- the tables there are made by the replication user, which is
+        # who core/sync.py's own status() connects as.
+        target = sync._server(contract, rule["server"])
+        with psycopg.connect(sync._dsn(target, *sync._credentials())) as cx:
+            out["target"] = cx.execute(
+                f"select count(*) from {table}").fetchone()[0]
+    except Exception as exc:
+        out["target_error"] = f"{exc.__class__.__name__}: {exc}"
+    return out
+
+
 @app.get("/api/sync")
 def sync_rules() -> list[dict]:
     """The replication rules, whether they are sound, and whether they run.
@@ -375,6 +543,12 @@ def sync_rules() -> list[dict]:
                                  **(sync_mssql.status(contract) or {})}
         except Exception as e:
             row["status"] = {"unreachable": str(e)}
+        row["arriving"] = _arriving(contract, rule)
+        row["runs"] = q("""select mode, rows_read, upserted, deleted,
+                                  applied_through, run_at
+                           from sync_runs where contract_id = %s
+                           order by run_at desc limit 10""",
+                        (contract["id"],))
         out.append(row)
     return out
 

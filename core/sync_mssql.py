@@ -85,6 +85,31 @@ def capture_start_lsn(mssql, instance: str) -> bytes | None:
     return bytes(row[0]) if row else None
 
 
+def lsn_time(source: dict, lsn: bytes):
+    """When, at the source, the last change this pass applied happened.
+
+    The useful lag for CDC. `behind: 0 bytes` is WAL distance and has no SQL
+    Server equivalent; what a reader wants is "applied through 14:02" against
+    a wall clock. `sys.fn_cdc_map_lsn_to_time` is how the source answers that,
+    and it returns null for an LSN the capture job has not written a time for
+    yet -- which is a real answer, not a failure. See issue #28.
+    """
+    try:
+        with mssql_connect(source) as ms:
+            at = ms.cursor().execute(
+                "select sys.fn_cdc_map_lsn_to_time(?)", lsn).fetchval()
+    except Exception:
+        # The pass already succeeded. Losing its timestamp is not a reason to
+        # fail it, and the row is still worth keeping without one.
+        return None
+    if at is None:
+        return None
+    from datetime import timezone
+    # The column is timestamptz and SQL Server hands back a naive datetime in
+    # the server's own zone; the demo runs UTC and saying so beats guessing.
+    return at.replace(tzinfo=timezone.utc)
+
+
 def read_watermark(cx, key: str) -> bytes | None:
     row = cx.execute("select lsn from sync_watermarks where source = %s",
                      (key,)).fetchone()
@@ -285,6 +310,7 @@ def sync_once(contract: dict) -> dict:
     if to_lsn is None:
         return {"contract": contract["id"], "note": "cdc capture has not run yet"}
 
+    applied_through = lsn_time(source, to_lsn)
     user, password = _credentials()
     with psycopg.connect(
             f"host={target['host']} port={target.get('port', 5432)} "
@@ -308,6 +334,12 @@ def sync_once(contract: dict) -> dict:
                                None if first else rule.get("filter"))
     with store.connect() as dq:
         write_watermark(dq, key, to_lsn)
+        # What this pass moved, kept rather than printed. A rule that reports
+        # `last_synced: 3h ago` answers "is it configured"; "3h ago, 412 rows"
+        # answers the question anyone actually has. See issue #28.
+        store.write_sync_run(dq, key, contract["id"],
+                             "snapshot" if first else "changes",
+                             {"rows": len(rows), **counts}, applied_through)
     return {"contract": contract["id"],
             "mode": "snapshot" if first else "changes",
             "rows": len(rows), **counts, "lsn": to_lsn.hex()}

@@ -52,6 +52,39 @@ export interface OpenFailure {
   reason: string | null;
 }
 
+/** One check's most recent run. `stale` means its contract has run since
+ * without it -- the rule was deleted and only its history remains; see
+ * CLAUDE.md, "Results outlive checks". */
+export interface CheckRow {
+  check_id: string;
+  contract_id: string;
+  dimension: string;
+  status: string;
+  failed_rows: number;
+  total_rows: number;
+  fail_ratio: string | number | null;
+  run_at: string;
+  name: string | null;
+  check_type: string | null;
+  field: string | null;
+  reason: string | null;
+  sql: string | null;
+  stale: boolean;
+  /** What someone said about this check. 'open' when nobody has. */
+  state: 'open' | 'acknowledged' | 'accepted';
+  note: string | null;
+  noted_run_at: string | null;
+  noted_at: string | null;
+}
+
+export interface CheckRun {
+  run_at: string;
+  status: string;
+  failed_rows: number;
+  total_rows: number;
+  fail_ratio: string | number | null;
+}
+
 export interface Overview {
   trend: { run_at: string; score: string | number }[];
   contracts: ContractSummary[];
@@ -78,9 +111,25 @@ export interface ContractProperty {
   classification?: string | null;
 }
 
+/** Two numbers per column per day. Not a check -- nothing here passes or
+ * fails and none of it reaches the score; see core/profile.py. `prev_*` is
+ * yesterday's run, which is what makes a rising null fraction visible before
+ * it breaks the `field_required` check on the same column. */
+export interface ColumnProfile {
+  table_name: string;
+  column_name: string;
+  rows: number;
+  nulls: number;
+  distinct_count: number;
+  run_at: string;
+  prev_nulls: number | null;
+  prev_rows: number | null;
+}
+
 export interface ContractDetail {
   contract: ContractSummary;
   properties: ContractProperty[];
+  profile: ColumnProfile[];
   rules: QualityRule[];
   checks: {
     check_id: string;
@@ -123,6 +172,21 @@ export interface Sample {
   note?: string;
 }
 
+/** What one replication pass moved. `upserted` rather than inserted and
+ * updated: CDC delivers both as `on conflict do update` and the operation
+ * code does not survive the merge -- see core/store.py's sync_runs. */
+export interface SyncRun {
+  mode: string;
+  rows_read: number;
+  upserted: number;
+  deleted: number;
+  /** Source time of the last change this pass applied. The lag that matters
+   * for CDC: a pass at 14:05 that applied changes up to 14:02 is 3 minutes
+   * behind, and no clock on this side knows that. */
+  applied_through: string | null;
+  run_at: string;
+}
+
 export interface SyncRule {
   contract_id: string;
   title: string;
@@ -130,6 +194,17 @@ export interface SyncRule {
   identity: string[];
   rule: { server: string; filter?: string; columns?: string[]; identity?: string[] };
   problems: string[];
+  /** Rows on each side. A green line is not a claim anyone can check; "90 of
+   * 400 rows" is. */
+  arriving?: {
+    table: string;
+    filter?: string | null;
+    source?: number;
+    target?: number;
+    source_error?: string;
+    target_error?: string;
+  };
+  runs?: SyncRun[];
   status?: {
     engine?: string;
     slot_active?: boolean;
@@ -138,6 +213,39 @@ export interface SyncRule {
     last_synced?: string | null;
     unreachable?: string;
   };
+}
+
+/** A contract whose table keeps history: the columns that make an interval,
+ * the business key that repeats across versions, and how much of it there is.
+ * See core/versions.py -- none of this is inferred, the contract declares it. */
+export interface VersionedContract {
+  contract_id: string;
+  title: string;
+  table: string;
+  key: string;
+  attributes: string[];
+  versions?: number;
+  keys?: number;
+  closed?: number;
+  earliest?: string | null;
+  latest_change?: string | null;
+  unreachable?: string;
+}
+
+export interface ChangedKey {
+  key: string | number;
+  versions: number;
+  last_changed: string | null;
+}
+
+/** One version. The attribute columns are dynamic -- they are whatever the
+ * contract declares -- so they arrive alongside the fixed interval fields. */
+export interface Version {
+  valid_from: string;
+  valid_to: string | null;
+  is_current: boolean;
+  changed: string[];
+  [column: string]: unknown;
 }
 
 export interface RuleType {
@@ -187,6 +295,26 @@ export const getOverview = () => json<Overview>('/api/overview');
 export const getContract = (id: string) =>
   json<ContractDetail>(`/api/contracts/${encodeURIComponent(id)}`);
 
+export const getChecks = () => json<CheckRow[]>('/api/checks');
+
+/** Acknowledging writes a note, not a statement, so it carries no token --
+ * the guarded routes are guarded because they run SQL someone typed. */
+export const setCheckStatus = (
+  checkId: string,
+  body: { state: CheckRow['state']; note: string; noted_run_at: string | null }
+) =>
+  json<{ check_id: string; state: string; note: string }>(
+    `/api/checks/${encodeURIComponent(checkId)}/status`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+
+export const getCheckHistory = (checkId: string) =>
+  json<CheckRun[]>(`/api/checks/${encodeURIComponent(checkId)}/history`);
+
 export const getSample = (checkId: string) =>
   json<Sample>(`/api/checks/${encodeURIComponent(checkId)}/sample`);
 
@@ -202,6 +330,19 @@ function authoring(body: RuleDraft | SyncRuleDraft, token: string): RequestInit 
     body: JSON.stringify(body),
   };
 }
+
+export const getVersionedContracts = () =>
+  json<VersionedContract[]>('/api/versions');
+
+export const getChangedKeys = (contractId: string) =>
+  json<{ contract: VersionedContract; summary: VersionedContract; changed: ChangedKey[] }>(
+    `/api/versions/${encodeURIComponent(contractId)}`
+  );
+
+export const getVersions = (contractId: string, key: string) =>
+  json<{ contract: VersionedContract; key: string; versions: Version[] }>(
+    `/api/versions/${encodeURIComponent(contractId)}?key=${encodeURIComponent(key)}`
+  );
 
 export const getSyncRules = () => json<SyncRule[]>('/api/sync');
 
