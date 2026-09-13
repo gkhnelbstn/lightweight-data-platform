@@ -367,7 +367,12 @@ def sync_rules() -> list[dict]:
         except Exception as e:
             row["problems"] = [str(e)]
         try:
-            row["status"] = sync.status(contract)
+            if engine in ("postgres", "postgresql"):
+                row["status"] = sync.status(contract)
+            else:
+                from core import sync_mssql
+                row["status"] = {**(sync.status(contract) or {}),
+                                 **(sync_mssql.status(contract) or {})}
         except Exception as e:
             row["status"] = {"unreachable": str(e)}
         out.append(row)

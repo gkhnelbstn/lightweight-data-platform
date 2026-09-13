@@ -81,6 +81,32 @@ def write_watermark(cx, key: str, lsn: bytes) -> None:
         (key, lsn))
 
 
+def status(contract: dict) -> dict | None:
+    """Has this contract's CDC reader actually run, and when.
+
+    A dead `sync_mssql.py --interval` loop and one that has simply never been
+    started look identical from the API otherwise -- both show a syncTo rule
+    with nothing to say whether anything is behind it. `updated_at` is the
+    same signal core/sync.py's `status()` gets from `pg_stat_subscription`
+    for logical replication, read from the one place a CDC poll ever writes.
+    """
+    from core.sync import _server
+
+    rule = sync_rule(contract)
+    if not rule:
+        return None
+    model = contract["schema"][0]
+    source = _server(contract, "erp")
+    table = model.get("physicalName") or model["name"]
+    instance = capture_instance(source.get("schema", "dbo"), table)
+    key = f"{contract['id']}:{instance}"
+    with store.connect() as dq:
+        row = dq.execute(
+            "select updated_at from sync_watermarks where source = %s",
+            (key,)).fetchone()
+    return {"contract": contract["id"], "last_synced": row[0].isoformat() if row else None}
+
+
 def snapshot(mssql, schema: str, table: str, columns: list[str],
              expression: str | None) -> list[tuple]:
     """The table as it stands, shaped like a stream of inserts.
