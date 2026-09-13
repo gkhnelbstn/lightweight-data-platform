@@ -188,6 +188,10 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 **A new rule someone can pick from the form:** one entry in `core/rules.py`
 (builder, dimension, description, menu label) plus its parameters. The UI reads
 the catalogue, so it needs no change. Add a case to `tests/test_rules.py`.
+A kind that belongs to somebody else's package registers itself through the
+`ldp.rules` entry point group instead — `core/rule_plugins.py`, ADR 0016. Only
+the predicate shape is published: a whole-statement kind (`unique`,
+`foreign_key`) is still a commit here.
 
 **A new check kind:** it is datacontract-cli's, not ours — open an issue
 there. What may need changing here is `core/scoring.py` (a dimension it does

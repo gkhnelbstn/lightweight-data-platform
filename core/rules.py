@@ -21,6 +21,7 @@ the score works.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 import sqlglot
@@ -169,15 +170,82 @@ PARAMETERS: dict[str, list[dict[str, str]]] = {
 }
 
 
+# Everything above is ours. What a package outside this repo may add is one
+# kind at a time, through `register`, and only the predicate shape -- see
+# ADR 0016.
+BUILTIN = frozenset(RULES)
+
+
+@dataclass(frozen=True)
+class RuleKind:
+    """One rule kind, as something outside this repo has to describe it.
+
+    `builder` is `(column, params) -> exp.Expression`: the predicate that is
+    true of a *broken* row. The two whole-statement shapes -- a duplicate needs
+    a GROUP BY, a foreign key a join -- stay built in, because publishing them
+    would publish the dialect handling and the `sqlglot` expression tree as an
+    interface this repo then cannot change. ADR 0016 says so out loud.
+    """
+    kind: str
+    builder: Any
+    dimension: str
+    description: str
+    label: str
+    parameters: list[dict[str, str]] = field(default_factory=list)
+
+
+def register(rule: RuleKind) -> None:
+    """Add a kind to the vocabulary. Raises rather than half-registering.
+
+    Everything here is checked at registration and not at authoring time: a
+    catalogue that has silently lost a kind, or that offers one which explodes
+    when somebody fills the form in, is worse than one that refuses to load.
+    """
+    from core.scoring import DIMENSION_WEIGHT
+    if rule.kind in RULES:
+        raise ValueError(f"rule {rule.kind!r} is already registered")
+    if rule.dimension not in DIMENSION_WEIGHT:
+        # An unknown dimension is not an error anywhere else -- it silently
+        # takes DEFAULT_WEIGHT -- so a rule whose weight nobody chose would
+        # quietly count as much as a broken join.
+        raise ValueError(
+            f"{rule.kind}: dimension {rule.dimension!r} is not one the score "
+            f"weights ({', '.join(sorted(DIMENSION_WEIGHT))})")
+    if not rule.label or "{" in rule.label:
+        raise ValueError(f"{rule.kind}: the menu label is read before the "
+                         "values are known, so it cannot be a template")
+    for parameter in rule.parameters:
+        if not {"name", "type", "label"} <= set(parameter):
+            raise ValueError(f"{rule.kind}: a parameter needs name, type, label")
+        if parameter["type"] not in ("text", "number", "list"):
+            raise ValueError(f"{rule.kind}: {parameter['type']!r} is not a "
+                             "form field the UI can draw")
+    try:
+        describe_with(rule.description, "a_column",
+                      {p["name"]: "" for p in rule.parameters})
+    except KeyError as exc:
+        raise ValueError(f"{rule.kind}: the description names {exc}, which is "
+                         "not a parameter it declares") from None
+    RULES[rule.kind] = (rule.builder, rule.dimension, rule.description, rule.label)
+    PARAMETERS[rule.kind] = list(rule.parameters)
+
+
+def describe_with(template: str, column: str, params: dict) -> str:
+    values = params.get("values") or []
+    return template.format(**{
+        **params, "column": column,
+        "values": ", ".join(str(v) for v in values),
+        # `foreign_key` calls its own parameter `column`, which is not the
+        # column being checked -- hence the second name rather than a rename
+        # that would break every contract already carrying one.
+        "column_ref": params.get("column", "")})
+
+
 def describe(kind: str, column: str, params: dict) -> str:
     """The rule in words. It becomes the test's name, so it is what a person
     reads on the dashboard when it fails."""
     _, _, template, _label = RULES[kind]
-    values = params.get("values") or []
-    return template.format(
-        column=column, values=", ".join(str(v) for v in values),
-        column_ref=params.get("column", ""), **{
-            k: params.get(k, "") for k in ("min", "max", "length", "pattern", "table")})
+    return describe_with(template, column, params)
 
 
 def build(kind: str, model: str, column: str, params: dict,
@@ -211,3 +279,10 @@ def catalogue() -> list[dict]:
     return [{"kind": kind, "dimension": dimension, "label": label,
              "parameters": PARAMETERS[kind]}
             for kind, (_, dimension, _template, label) in RULES.items()]
+
+
+# Last, so a plugin cannot be registered before the built-ins it may not
+# collide with, and so BUILTIN is frozen without it.
+from core.rule_plugins import load_plugins  # noqa: E402
+
+load_plugins(register)

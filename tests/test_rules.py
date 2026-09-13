@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("sqlglot")
-from core.rules import build, catalogue, describe  # noqa: E402
+from core.rules import BUILTIN, build, catalogue, describe  # noqa: E402
 
 TABLE = "sales_orders"
 
@@ -50,7 +50,9 @@ def test_every_rule_counts_the_rows_that_break_it():
               "max_length": {"length": 3},
               "matches": {"pattern": "a%"},
               "foreign_key": {"table": "customers", "column": "customer_id"}}
-    for kind in (r["kind"] for r in catalogue()):
+    # The built-ins only: a plugin's kinds are its own to test, and this one
+    # would have to know their parameters to call them.
+    for kind in (r["kind"] for r in catalogue() if r["kind"] in BUILTIN):
         out = sql(kind, params=params.get(kind))
         assert out.upper().startswith("SELECT COUNT"), f"{kind}: {out}"
 
@@ -106,3 +108,67 @@ def test_the_description_is_what_a_person_reads_when_it_fails():
         "country must be one of TR, DE"
     assert describe("between", "net_amount", {"min": 0, "max": 100}) == \
         "net_amount must be between 0 and 100"
+
+
+# --- kinds from outside this repo (ADR 0016) --------------------------------
+
+def _kind(**over):
+    from sqlglot import exp
+    from core.rules import RuleKind
+    return RuleKind(**{
+        "kind": "is_upper",
+        "builder": lambda c, _p: exp.NEQ(this=exp.func("UPPER", exp.column(c)),
+                                         expression=exp.column(c)),
+        "dimension": "conformity",
+        "description": "{column} must be upper case",
+        "label": "is upper case", **over})
+
+
+def test_a_registered_kind_is_in_the_catalogue_and_builds_sql():
+    """The dict was always the registry; this is the registration a package
+    outside this repo can reach."""
+    from core.rules import PARAMETERS, RULES, register
+    register(_kind())
+    try:
+        assert "is_upper" in {r["kind"] for r in catalogue()}
+        description, statement, dimension = build(
+            "is_upper", "customers", "country", {})
+        assert statement.upper().startswith("SELECT COUNT")
+        assert (description, dimension) == ("country must be upper case",
+                                            "conformity")
+    finally:
+        RULES.pop("is_upper"), PARAMETERS.pop("is_upper")
+
+
+@pytest.mark.parametrize("over, why", [
+    ({"kind": "unique"}, "already registered"),
+    ({"dimension": "vibes"}, "not one the score weights"),
+    ({"label": "is {what}"}, "cannot be a template"),
+    ({"description": "{column} must be {threshold}"}, "not a parameter"),
+    ({"parameters": [{"name": "n", "type": "slider", "label": "N"}]},
+     "not a form field"),
+])
+def test_a_kind_that_would_break_the_form_is_refused(over, why):
+    """At registration, not when somebody fills the form in: a catalogue that
+    lost a kind, or offers one that explodes, is worse than one that refuses
+    to load."""
+    from core.rules import register
+    with pytest.raises(ValueError, match=why):
+        register(_kind(**over))
+
+
+def test_a_plugin_that_raises_names_itself():
+    """A silently missing rule kind is the failure this must not have."""
+    from core.rule_plugins import load_plugins
+    class _Entry:
+        name, value = "iban_checksum", "my_pkg.rules:iban_checksum"
+        def load(self):
+            raise ImportError("no module named my_pkg")
+    import core.rule_plugins as plugins
+    original = plugins.entry_points
+    plugins.entry_points = lambda group: [_Entry()]
+    try:
+        with pytest.raises(RuntimeError, match="iban_checksum"):
+            load_plugins(lambda rule: None)
+    finally:
+        plugins.entry_points = original
