@@ -12,6 +12,12 @@
      - orders.currency       a handful outside TRY/USD/EUR (accepted values)
      - order_lines           ~1% where the header total disagrees (consistency)
      - one day with a third of the usual volume (volume anomaly)
+
+   Dropping a CDC-enabled table disables CDC for it -- silently, no error --
+   and `is_cdc_enabled` on the database stays 1 regardless, so a re-seed after
+   `deploy/mssql-cdc.sql` had already run looked fine and left
+   `cdc.fn_cdc_get_all_changes_*` gone. :r re-runs that script's table-enable
+   step against the tables this file just recreated, every time. See issue #17.
 */
 if db_id('erp') is null exec('create database erp');
 go
@@ -173,3 +179,11 @@ union all select 'products',   count(*) from dbo.products
 union all select 'orders',     count(*) from dbo.sales_orders
 union all select 'lines',      count(*) from dbo.sales_order_lines;
 go
+
+-- The tables above are freshly recreated, so any CDC capture instance they
+-- had is gone even though `sys.databases.is_cdc_enabled` still reads 1 --
+-- see the header comment and issue #17. deploy/mssql-cdc.sql is idempotent
+-- (it checks cdc.change_tables and odd_collector's existence before doing
+-- anything), so re-running it here is a no-op the first time a fresh `erp`
+-- database is seeded and a repair every other time.
+:r /deploy/mssql-cdc.sql
