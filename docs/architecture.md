@@ -70,7 +70,7 @@ requiring a SQL Server and a BI tool.
 
 | port | what |
 |---|---|
-| 8077 | the API, and the pointer page listing its routes |
+| 8077 | the API; `/` redirects to the OpenAPI docs it generates |
 | 8080 | ODD Platform — this is the UI you actually use |
 | 5442 | the source Postgres (`erp`, `dq`) — 5442 so it will not collide with a host install |
 | 5433 | ODD's own Postgres |

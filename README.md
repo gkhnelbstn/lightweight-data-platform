@@ -399,7 +399,8 @@ docker compose exec app python core/runner.py --backfill-days 44 \
 ```
 
 * ODD — http://localhost:8080 — the contract panel is on its Data Quality page
-* http://localhost:8077 — the API that panel calls, and a page saying so
+* http://localhost:8077 — the API that panel calls; `/` redirects to its
+  generated `/docs`
 
 That is the Postgres half. The second source, the replication and the chain
 that ends at a dashboard are in the second file:
@@ -473,7 +474,6 @@ does not enter into it.
 | `core/sync_view.py` | the same rule as a `postgres_fdw` view, where a copy buys nothing |
 | `deploy/mssql-cdc.sql` | turn on SQL Server CDC for the demo tables |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
-| `web/index.html` | a page saying the UI is in ODD, and listing the API routes |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
 | `integrations/odd/entity_page.py` | the links ODD shows on the table's own page |
 | `integrations/odd/curate.py` | owner, purpose, column meanings, glossary, query examples |
