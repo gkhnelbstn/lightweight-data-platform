@@ -381,6 +381,27 @@ def apply(contract: dict) -> dict:
             model, target.get("schema", "public"), rule, source.get("type")))
         for stmt in _identity_statements(model, target.get("schema", "public"), rule):
             cx.execute(stmt)
+        # DROP SUBSCRIPTION also drops the slot on the *publisher* by default --
+        # harmless the first time (nothing to lose yet), but fatal on a re-apply:
+        # it takes down the exact slot the source block above just confirmed
+        # exists, and CREATE SUBSCRIPTION below expects it to still be there
+        # (create_slot = false). Detaching first makes DROP SUBSCRIPTION leave
+        # the slot alone, so a re-apply of an already-correct rule stays applied
+        # instead of landing exactly the silent failure this module exists to
+        # prevent -- see issue #16.
+        # pg_subscription is a *shared* catalog -- visible from every database
+        # in the cluster -- so the name alone is not enough to know it is this
+        # database's subscription rather than another contract's of the same
+        # name on a different target.
+        if cx.execute(
+                "select 1 from pg_subscription s join pg_database d "
+                "on d.oid = s.subdbid where d.datname = current_database() "
+                "and s.subname = %s", (name,)).fetchone():
+            cx.execute(sql.SQL("alter subscription {} disable").format(
+                sql.Identifier(name)))
+            cx.execute(sql.SQL(
+                "alter subscription {} set (slot_name = none)").format(
+                sql.Identifier(name)))
         cx.execute(sql.SQL("drop subscription if exists {}").format(
             sql.Identifier(name)))
         cx.execute(sql.SQL(
