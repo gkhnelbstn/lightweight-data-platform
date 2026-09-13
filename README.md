@@ -349,6 +349,44 @@ contract, is left out of the list, and so **does not exist in the replica at
 all** -- masking a column in the UI is no use if the whole column was copied
 into another database.
 
+### A copy is not the only way to keep it in step
+
+Nothing in a `syncTo` rule says the target has to be a *copy*. Where both ends
+are Postgres, `mode: view` expresses the same rule as a `postgres_fdw` foreign
+table and a view over it: same name, same columns, same filter, and the rows
+exist once. No worker, no slot, no lag, nothing to be stale between two runs of
+anything — and it works across machines, because a foreign data wrapper is an
+ordinary client connection.
+
+It is a decision rather than an optimisation, because three things change
+([ADR 0017](docs/adr/0017-a-view-instead-of-a-copy.md)):
+
+* **The privacy boundary becomes a grant.** In copy mode a column outside the
+  list does not exist in the target. Here it exists at the source, so the
+  foreign server maps to a dedicated `sync_fdw` login holding column-level
+  `select` on the listed columns and nothing else — and `--apply` asks the
+  source `has_column_privilege` for every column the rule leaves out, refusing
+  the rule if any of them answers yes. A boundary that was only asked for is
+  not a boundary. A column the contract classifies may not be listed in a view
+  rule at all.
+* **The target is only as available as the source**, and carries its read load.
+* **There is nothing to be behind**, so `--status` reads through the view and
+  reports whether that worked.
+
+A SQL Server source is refused: `tds_fdw` is not in the image, and an image for
+one table is what invariant 6 exists to prevent. That is also where the mass
+is — 8.8 MB of the 8.9 MB duplicated in this stack is the CDC target, the one
+place a view cannot go. `erp.order_lines` carries the shipped example.
+
+The warehouse follows the same rule. `stg.orders` and `mart.revenue_daily` are
+views: one is a projection of `raw`, the other an aggregate of `fct` in the
+same database, and both used to be rebuilt on every run and stale in between.
+`raw` stays physical because it is a read that crossed a network, `fct.orders`
+because it is an as-of range join nobody wants per query, and `dim.customer`
+because Type 2 history is by definition rows the source no longer has. The
+scores did not move: `dwh.stg_orders` 0.9673 and `dwh.mart_revenue` 1.0000,
+before and after.
+
 For SQL Server the mechanism is CDC rather than logical decoding.
 `deploy/mssql-cdc.sql` turns it on -- and it is the *Agent*, not the T-SQL,
 that people forget: `sp_cdc_enable_table` returns success with the Agent
@@ -398,7 +436,8 @@ docker compose exec app python core/runner.py --backfill-days 44 \
 ```
 
 * ODD — http://localhost:8080 — the contract panel is on its Data Quality page
-* http://localhost:8077 — the API that panel calls, and a page saying so
+* http://localhost:8077 — the API that panel calls; `/` redirects to its
+  generated `/docs`
 
 That is the Postgres half. The second source, the replication and the chain
 that ends at a dashboard are in the second file:
@@ -470,9 +509,9 @@ does not enter into it.
 | `core/engines/` | one module per source engine: the window, the sampler, the counts |
 | `core/sync.py` | derive a Postgres publication/subscription from the contract |
 | `core/sync_mssql.py` | apply SQL Server's CDC change table to a Postgres target |
+| `core/sync_view.py` | the same rule as a `postgres_fdw` view, where a copy buys nothing |
 | `deploy/mssql-cdc.sql` | turn on SQL Server CDC for the demo tables |
 | `api/main.py` | read API + analyst rule authoring, writing ODCS |
-| `web/index.html` | a page saying the UI is in ODD, and listing the API routes |
 | `integrations/odd/` | ODDRN vocabulary, the datacontract → ODD bridge, PII classification |
 | `integrations/odd/entity_page.py` | the links ODD shows on the table's own page |
 | `integrations/odd/curate.py` | owner, purpose, column meanings, glossary, query examples |
@@ -717,6 +756,7 @@ Early. A working vertical slice, not a product.
 | odd-collector's Superset adapter: int ids, and lineage only for postgresql/sqlite | [odd-collectors#135](https://github.com/opendatadiscovery/odd-collectors/issues/135) |
 | metric ingestion is write-once per family: the second write is an NPE | [odd-platform#1882](https://github.com/opendatadiscovery/odd-platform/issues/1882) |
 | column-level lineage edges, alongside the existing dataset-level ones | [odd-platform#1895](https://github.com/opendatadiscovery/odd-platform/issues/1895) |
+| every lineage node draws the root's data source icon (one SVG, one filter id) | [odd-platform#1898](https://github.com/opendatadiscovery/odd-platform/issues/1898) — patched here, three anchored lines |
 
 ## Where this goes next
 

@@ -44,3 +44,4 @@ upstream feature that would let it be deleted.
 | [0014](0014-declared-lineage.md) | Lineage is declared, because nothing can infer it | the loads move to dbt, whose adapter reads the real project |
 | [0015](0015-the-boundary-what-is-ours.md) | The register of what is ours, and the file layout that follows it | every row above it is retired |
 | [0016](0016-extension-points.md) | Rule kinds take plugins; engines and integrations stay code | datacontract-cli grows pluggable check kinds |
+| [0017](0017-a-view-instead-of-a-copy.md) | A view where a copy buys nothing: `stg`, `mart`, and `syncTo mode: view` | dbt owns the warehouse materialisation |

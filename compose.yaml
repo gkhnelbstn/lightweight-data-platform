@@ -130,7 +130,6 @@ services:
       - ./core:/app/core
       - ./api:/app/api
       - ./integrations:/app/integrations
-      - ./web:/app/web
       - ./seed:/app/seed
       # So `docker compose exec app pytest -q tests` is the same command the
       # host runs -- see issue #7. Not baked in by the Dockerfile's COPY for
@@ -146,9 +145,10 @@ services:
       # itself from inside this network -- see issue #7.
       DWH_HOST: db
       DWH_PORT: "5432"
-      # The address ODD's links point at. Followed from a person's browser,
-      # not from inside this network, so it is not `http://app:8077`.
-      DQ_UI_URL: ${DQ_UI_URL:-http://localhost:8077}
+      # The address ODD's own links point at -- the panel lives on ODD's Data
+      # Quality route (ADR 0009), and these are followed from a person's
+      # browser rather than from inside this network.
+      DQ_ODD_UI_URL: ${DQ_ODD_UI_URL:-http://localhost:8080}
       # Where ODD Platform is served from, since its Data Quality page calls
       # this API from the browser. Named rather than `*`.
       DQ_CORS_ORIGINS: ${DQ_CORS_ORIGINS:-http://localhost:8080}

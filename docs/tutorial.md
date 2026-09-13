@@ -47,7 +47,7 @@ docker compose exec app python core/runner.py --backfill-days 44 --odd-url http:
 Open `customers` and its **Data Quality** tab has tests on it, with a run
 history going back 45 days.
 
-> The contract UI on :8077 is a pointer page listing the API routes. The UI you
+> :8077 is the API; `/` redirects to its generated `/docs`. The UI you
 > actually use is ODD's — the contract panel lives inside its Data Quality tab.
 > That is deliberate: ODD already has search, ownership, lineage and alerting,
 > and a second dashboard would have to be kept in step with it.

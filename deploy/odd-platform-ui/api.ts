@@ -214,6 +214,11 @@ export interface SyncRule {
      * active slot and zero lag say nothing about these -- see issue #35. */
     copying?: string[];
     streaming?: boolean;
+    /** A `mode: view` target reads through to the source, so the only status
+     * that means anything is whether the query works. ADR 0017. */
+    mode?: string;
+    reachable?: boolean;
+    error?: string;
     last_synced?: string | null;
     unreachable?: string;
   };

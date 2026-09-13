@@ -77,6 +77,17 @@ def sync_rule(contract: dict, model: dict | None = None) -> dict | None:
     return None
 
 
+def mode(rule: dict | None) -> str:
+    """`copy` (the default) or `view`. See ADR 0017.
+
+    A copy is replicated -- a publication and a subscription, or the CDC
+    reader. A view is `postgres_fdw`: the same filter and column list, read
+    through to the source instead of duplicated. The two have different
+    failure modes and a different privacy story, so the contract says which.
+    """
+    return (rule or {}).get("mode", "copy")
+
+
 def identity_columns(model: dict, rule: dict | None = None) -> list[str]:
     """What identifies a row for replication.
 
@@ -326,6 +337,20 @@ def plan(contract: dict) -> dict | None:
         return {"contract": contract["id"], "engine": source.get("type"),
                 "note": "not logical replication; see core/sync_mssql.py",
                 "problems": [], "source": [], "target": []}
+    if mode(rule) == "view":
+        from core import sync_view
+        with psycopg.connect(_dsn(source, *_credentials())) as cx:
+            render = lambda s: s.as_string(cx)  # noqa: E731
+            return {
+                "contract": contract["id"], "engine": "view (postgres_fdw)",
+                "problems": sync_view.problems(
+                    model, rule, contract, source.get("type")),
+                "source": [render(s) for s in sync_view.source_statements(
+                    model, source.get("schema", "public"), rule)],
+                "target": [render(s) for s in sync_view.target_statements(
+                    model, dict(rule, contract_id=contract["id"]), source,
+                    target.get("schema", "public"))],
+            }
     name = publication_name(contract)
     with psycopg.connect(_dsn(source, *_credentials())) as cx:
         render = lambda s: s.as_string(cx)  # noqa: E731
@@ -369,6 +394,8 @@ def apply(contract: dict) -> dict:
         return p
     rule, model = sync_rule(contract), contract["schema"][0]
     source, target = _server(contract, "erp"), _server(contract, rule["server"])
+    if mode(rule) == "view":
+        return _apply_view(contract, p, model, rule, source, target)
     name, user, password = publication_name(contract), *_credentials()
     slot = f"{name}{SLOT_SUFFIX}"
 
@@ -433,6 +460,51 @@ def apply(contract: dict) -> dict:
     return p
 
 
+def _apply_view(contract: dict, p: dict, model: dict, rule: dict,
+                source: dict, target: dict) -> dict:
+    """No publication, no subscription: a granted role and a foreign table."""
+    from core import sync_view
+    from core.bootstrap_db import ensure_database, grant_reader
+
+    user, password = _credentials()
+    with psycopg.connect(_dsn(source, user, password), autocommit=True) as cx:
+        sync_view.ensure_role(cx)
+        for stmt in sync_view.source_statements(
+                model, source.get("schema", "public"), rule):
+            cx.execute(stmt)
+        # The grant is the privacy boundary in this mode, so it is verified
+        # rather than assumed -- see ADR 0017.
+        leaked = sync_view.ungranted(
+            cx, model, source.get("schema", "public"), rule, contract)
+    if leaked:
+        p["problems"] = [f"{model.get('physicalName') or model['name']}: "
+                         f"{sync_view.FDW_ROLE} can still read "
+                         f"{', '.join(leaked)} after the grant"]
+        return p
+
+    if ensure_database(target["host"], target.get("port", 5432),
+                       target["database"]):
+        grant_reader(target["host"], target.get("port", 5432),
+                     target["database"], [target.get("schema", "public")])
+    with psycopg.connect(_dsn(target, user, password), autocommit=True) as cx:
+        # A copy-mode target may be sitting under the name this view wants.
+        kind = cx.execute(
+            "select relkind from pg_class where oid = to_regclass(%s)",
+            (f"{target.get('schema', 'public')}."
+             f"{model.get('physicalName') or model['name']}",)).fetchone()
+        if kind:
+            cx.execute(sql.SQL("drop {} if exists {}.{} cascade").format(
+                sql.SQL("view" if kind[0] == "v" else "table"),
+                sql.Identifier(target.get("schema", "public")),
+                sql.Identifier(model.get("physicalName") or model["name"])))
+        for stmt in sync_view.target_statements(
+                model, dict(rule, contract_id=contract["id"]), source,
+                target.get("schema", "public")):
+            cx.execute(stmt)
+    p["applied"] = True
+    return p
+
+
 def status(contract: dict) -> dict | None:
     """Is it actually applying, and how far behind?
 
@@ -444,6 +516,11 @@ def status(contract: dict) -> dict | None:
     if not rule:
         return None
     source, target = _server(contract, "erp"), _server(contract, rule["server"])
+    if mode(rule) == "view":
+        from core import sync_view
+        return {"contract": contract["id"], **sync_view.status(
+            contract["schema"][0], target, target.get("schema", "public"),
+            *_credentials())}
     if source.get("type") not in ("postgres", "postgresql"):
         return {"contract": contract["id"], "engine": source.get("type")}
     name, user, password = publication_name(contract), *_credentials()

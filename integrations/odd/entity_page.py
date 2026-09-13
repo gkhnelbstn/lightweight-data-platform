@@ -45,9 +45,13 @@ import urllib.request
 
 from core import store
 
-# Where a person's browser reaches the contract UI. Not the compose service
-# name: these URLs are followed from outside the network, not from inside it.
-UI_URL = os.getenv("DQ_UI_URL", "http://localhost:8077").rstrip("/")
+# Where a person's browser reaches the panel. Not the compose service name:
+# these URLs are followed from outside the network, not from inside it -- and
+# not the API's own port either, because since ADR 0009 there is no page
+# there. The panel is ODD's Data Quality route, on ODD's own address, which is
+# usually the host a person is already looking at.
+UI_URL = os.getenv("DQ_ODD_UI_URL", "http://localhost:8080").rstrip("/")
+PANEL = "/data-quality"
 
 
 def _get(url: str) -> dict:
@@ -91,12 +95,28 @@ def desired_links(contract: dict) -> list[dict]:
 
     Deliberately few. An Attachments card with eight links in it is a menu,
     and the point is to get someone to the one page that answers "which rows".
+
+    Two of them, because the two questions are different: the contract's own
+    page is the score and the schema behind it, and the checks list is what a
+    person is looking for when they got here from a red test -- what does it
+    check, on which column, with what SQL. `dq_checks_contract` filters the
+    Checks tab; `dq_contract` opens the Contracts one. Issue #23.
+
+    Per *check* links are possible -- ODD accepts and renders an Attachments
+    card on a `DATA_QUALITY_TEST` entity, measured rather than assumed -- and
+    are deliberately not made: 257 checks a day is 257 entity lookups and 257
+    links to keep, for a hop the filtered list already makes in one.
     """
-    links = [{"name": "Veri kalitesi (kontrat)",
-              "url": f"{UI_URL}/#contract={contract['id']}"}]
+    links = [
+        {"name": "Kontroller", "url":
+            f"{UI_URL}{PANEL}?dq_checks_contract={contract['id']}"},
+        {"name": "Veri kalitesi (kontrat)", "url":
+            f"{UI_URL}{PANEL}?dq_contract={contract['id']}"},
+    ]
     for prop in contract.get("customProperties") or []:
         if prop.get("property") == "syncTo":
-            links.append({"name": "Senkron kurali", "url": f"{UI_URL}/#sync"})
+            links.append({"name": "Senkron kurali",
+                          "url": f"{UI_URL}{PANEL}?dq_tab=Replication"})
     return links
 
 

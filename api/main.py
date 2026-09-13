@@ -25,7 +25,7 @@ import psycopg
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
@@ -47,7 +47,16 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Contract-driven data quality on ODD", lifespan=lifespan)
+app = FastAPI(
+    title="Contract-driven data quality on ODD",
+    # This shows on /docs, which is where `/` sends anyone who arrives here
+    # looking for a UI. There is no page of ours to serve: the panel is inside
+    # ODD (ADR 0009) and the route list is generated from the routes.
+    description=(
+        "The contract panel is part of ODD Platform's own Data Quality page, "
+        "at `/data-quality` on the platform (`:8080` in this compose). This "
+        "service is the API behind it."),
+    lifespan=lifespan)
 
 # ODD Platform's own UI calls this API from its own origin -- the Contracts
 # panel on its Data Quality page is served by ODD and talks to us. A browser
@@ -783,6 +792,9 @@ def save_rule(draft: RuleDraft) -> dict:
     return _save(draft)
 
 
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse(ROOT / "web" / "index.html")
+@app.get("/", include_in_schema=False)
+def index() -> RedirectResponse:
+    """There is no UI here -- ADR 0009 moved it into ODD's own page, and the
+    hand-written page that said so was a second copy of the route list FastAPI
+    already generates. Issue #26."""
+    return RedirectResponse("/docs")

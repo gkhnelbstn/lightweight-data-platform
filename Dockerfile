@@ -29,7 +29,6 @@ RUN pip install --no-cache-dir pytest
 RUN pip install --no-cache-dir "presidio-analyzer>=2.2"  && python -m spacy download en_core_web_sm
 COPY contracts contracts
 COPY seed seed
-COPY web web
 
 EXPOSE 8077
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8077"]
