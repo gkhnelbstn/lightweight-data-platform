@@ -33,8 +33,7 @@ from odd_models.models import (DataEntity, DataEntityList, DataEntityType,
                                DataQualityTestExpectationCategory,
                                DataQualityTestRun, MetadataExtension,
                                QualityRunStatus, Tag)
-from oddrn_generator import (MssqlGenerator, MysqlGenerator,
-                             PostgresqlGenerator)
+from oddrn_generator import MysqlGenerator
 
 from integrations.odd.mapper import (SCHEMA_URL, ContractGenerator,
                                      datasource_oddrn, entity_list)
@@ -43,12 +42,16 @@ HOST = os.getenv("DQ_HOST", "dq.local")
 DATASOURCE_NAME = os.getenv("ODD_DATASOURCE_NAME", "datafletch-contracts")
 
 # The generator has to be the one odd-collector uses for that source, or the
-# tests land on a dataset ODDRN nobody else refers to.
-_GENERATORS = {
-    "sqlserver": MssqlGenerator, "mssql": MssqlGenerator,
-    "postgres": PostgresqlGenerator, "postgresql": PostgresqlGenerator,
-    "mysql": MysqlGenerator,
-}
+# tests land on a dataset ODDRN nobody else refers to. Which one that is is
+# the engine's to say -- see core/engines/ -- except MySQL, which nothing here
+# implements beyond being able to name its generator.
+def _generator(kind: str):
+    from core import engines
+    if engines.known(kind):
+        return engines.engine(kind).oddrn_generator()
+    if kind == "mysql":
+        return MysqlGenerator
+    raise KeyError(kind)
 
 _STATUS = {
     "passed": QualityRunStatus.SUCCESS,
@@ -114,9 +117,11 @@ def dataset_oddrn(contract: dict, server_key: str | None = None) -> str:
     server = next((s for s in servers if server_key in (None, s.get("server"))), None)
     if server is None:
         raise SystemExit("contract has no servers block")
-    gen = _GENERATORS.get(str(server.get("type", "")).lower())
-    if gen is None:
-        raise SystemExit(f"no ODDRN generator for server type {server.get('type')!r}")
+    try:
+        gen = _generator(str(server.get("type", "")).lower())
+    except KeyError:
+        raise SystemExit(
+            f"no ODDRN generator for server type {server.get('type')!r}") from None
     schema = contract["schema"][0]
     table = schema.get("physicalName") or schema["name"]
     g = gen(host_settings=server["host"],
