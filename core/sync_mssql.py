@@ -67,6 +67,24 @@ def capture_instance(schema: str, table: str) -> str:
     return f"{schema}_{table}"
 
 
+def capture_start_lsn(mssql, instance: str) -> bytes | None:
+    """The oldest LSN this capture instance can answer for -- `None` if it
+    does not exist at all.
+
+    Dropping a table disables CDC for it silently: no error, and
+    `sys.databases.is_cdc_enabled` stays 1 regardless, because that flag is
+    database-level. A demo reseed does exactly this. Without this check, a
+    stale watermark from before the drop reaches `fn_cdc_get_all_changes_*`
+    for an instance that no longer exists and pyodbc reports a generic
+    "insufficient number of arguments" that says nothing about why. See
+    issue #17.
+    """
+    row = mssql.cursor().execute(
+        "select start_lsn from cdc.change_tables where capture_instance = ?",
+        instance).fetchone()
+    return bytes(row[0]) if row else None
+
+
 def read_watermark(cx, key: str) -> bytes | None:
     row = cx.execute("select lsn from sync_watermarks where source = %s",
                      (key,)).fetchone()
@@ -241,6 +259,18 @@ def sync_once(contract: dict) -> dict:
         store.init(dq)
         since = read_watermark(dq, key)
     with mssql_connect(source) as ms:
+        start_lsn = capture_start_lsn(ms, instance)
+        if start_lsn is None:
+            return {"contract": contract["id"],
+                    "note": f"no CDC capture instance {instance!r} -- "
+                            f"re-run deploy/mssql-cdc.sql (see issue #17)"}
+        # A watermark older than this instance's own start_lsn belonged to a
+        # capture instance that no longer exists -- a reseed dropped and
+        # recreated the table since the last run. There is nothing CDC can
+        # tell us about the gap, so this resnapshots, the same as a contract
+        # that has never synced at all.
+        if since is not None and since < start_lsn:
+            since = None
         if since is None:
             to_lsn = ms.cursor().execute("select sys.fn_cdc_get_max_lsn()").fetchval()
             if to_lsn is None:

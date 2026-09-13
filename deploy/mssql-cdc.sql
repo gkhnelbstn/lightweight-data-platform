@@ -12,6 +12,11 @@
 --   * Developer and Enterprise have it; Express does not. The image defaults
 --     to Developer, which is why the demo can show it at all.
 --
+-- Idempotent by design -- see the loop and the `if ... is null` checks below
+-- -- which is what lets demo/mssql-seed.sql :r this file after every reseed
+-- rather than only on the first one. Dropping a table (which a reseed does)
+-- silently drops its capture instance; this repairs that as a side effect.
+--
 --   docker compose exec -T mssql /opt/mssql-tools18/bin/sqlcmd \
 --     -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -d erp -i /tmp/mssql-cdc.sql
 use erp;
@@ -21,7 +26,7 @@ if (select is_cdc_enabled from sys.databases where name = 'erp') = 0
     exec sys.sp_cdc_enable_db;
 go
 
-declare @t sysname;
+declare @t sysname, @tries int;
 declare tables cursor for
     select name from sys.tables
     where schema_id = schema_id('dbo')
@@ -32,11 +37,34 @@ while @@fetch_status = 0
 begin
     if not exists (select 1 from cdc.change_tables ct
                    where ct.source_object_id = object_id('dbo.' + @t))
-        -- @role_name null: reading the change table needs no extra grant
-        -- beyond SELECT on the source, which is what the sync role has.
-        exec sys.sp_cdc_enable_table
-            @source_schema = 'dbo', @source_name = @t,
-            @role_name = null, @supports_net_changes = 1;
+    begin
+        -- A reseed drops and recreates the table: a new object_id, but SQL
+        -- Server does not free the capture instance *name* in the same
+        -- instant -- sp_cdc_enable_table right after a drop can fail with
+        -- error 22926, "capture instance name already exists", against an
+        -- instance that, by object_id, no longer belongs to anything. It
+        -- clears on its own within a couple of seconds (confirmed: a fresh
+        -- connection sees cdc.change_tables empty well before this session
+        -- would); retry rather than fail the whole reseed over that race.
+        set @tries = 0;
+        while 1 = 1
+        begin
+            begin try
+                -- @role_name null: reading the change table needs no extra
+                -- grant beyond SELECT on the source, which is what the sync
+                -- role has.
+                exec sys.sp_cdc_enable_table
+                    @source_schema = 'dbo', @source_name = @t,
+                    @role_name = null, @supports_net_changes = 1;
+                break;
+            end try
+            begin catch
+                if error_number() <> 22926 or @tries >= 9 throw;
+                set @tries += 1;
+                waitfor delay '00:00:01';
+            end catch
+        end
+    end
     fetch next from tables into @t;
 end
 close tables; deallocate tables;

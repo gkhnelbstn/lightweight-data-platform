@@ -100,6 +100,13 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 * SQL Server CDC is a *SQL Server Agent* feature. `sp_cdc_enable_table`
   succeeds with the Agent stopped and then nothing ever lands in the change
   table; `MSSQL_AGENT_ENABLED` in compose.yaml is why the demo works.
+* Dropping a CDC-enabled table disables CDC for it, silently -- no error, and
+  `sys.databases.is_cdc_enabled` stays 1 regardless, because that flag is
+  database-level. `demo/mssql-seed.sql` drops and recreates every table on a
+  reseed, so it `:r`s `deploy/mssql-cdc.sql` at the end to repair what it just
+  broke; `core/sync_mssql.py`'s `capture_start_lsn` refuses a watermark older
+  than the current capture instance rather than handing SQL Server an LSN it
+  cannot answer for. See issue #17.
 * ODD's metrics API is write-once per family: the second push of the same
   family, byte-identical, is a 500 (`MetricFamilyPojo.getId()` on null). Its
   published OpenAPI also disagrees with its own models — `metric_points` is a
