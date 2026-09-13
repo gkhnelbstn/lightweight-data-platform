@@ -109,8 +109,11 @@ def test_the_model_overrides_the_contract():
 
 def test_turkish_identifier_checksums():
     """Both are checksum-validated, which is the whole reason they can be
-    recognised in a column of digits without guessing."""
-    from integrations.odd.classify import tckn_is_valid, vkn_is_valid
+    recognised in a column of digits without guessing. TCKN's validator is
+    upstream now (ADR 0007); VKN's is still ours."""
+    from presidio_analyzer.predefined_recognizers import TrNationalIdRecognizer
+    from integrations.odd.classify import vkn_is_valid
+    tckn_is_valid = TrNationalIdRecognizer().validate_result
 
     assert tckn_is_valid("80005543320")
     assert not tckn_is_valid("80005543321")      # wrong final check digit
@@ -125,8 +128,10 @@ def test_turkish_identifier_checksums():
 def test_the_seed_produces_identifiers_the_classifier_accepts():
     """If the seed made invalid numbers the demo would silently find nothing,
     which looked exactly like the classifier being broken."""
-    from integrations.odd.classify import tckn_is_valid, vkn_is_valid
+    from presidio_analyzer.predefined_recognizers import TrNationalIdRecognizer
+    from integrations.odd.classify import vkn_is_valid
     from seed.seed import _tckn, _vkn
+    tckn_is_valid = TrNationalIdRecognizer().validate_result
     assert all(tckn_is_valid(_tckn(i)) for i in range(1, 200))
     assert all(vkn_is_valid(_vkn(i)) for i in range(1, 200))
 

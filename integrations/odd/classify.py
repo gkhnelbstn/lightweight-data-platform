@@ -15,12 +15,14 @@ earns very little here. With `en_core_web_sm` (15 MB) and the entity list
 restricted, the same columns are found and a false `MEDICAL_LICENSE` on an IBAN
 goes away.
 
-**Turkish identifiers are ours, for now.** Both are checksum-validated, so they
-are `PatternRecognizer`s with a validator rather than a regex that would match
-any eleven digits. TCKN exists upstream independently of us
-(`TrNationalIdRecognizer`, microsoft/presidio#1995); VKN was offered
-(`TrTaxIdRecognizer`, microsoft/presidio#2250). See ADR 0007 for what happens
-when either ships in a release -- ours gets deleted, not kept alongside.
+**Turkish identifiers, one upstream and one still ours.** Both are
+checksum-validated -- a validator rather than a regex that would match any
+eleven digits. TCKN shipped upstream (`TrNationalIdRecognizer` /
+`TR_NATIONAL_ID`, microsoft/presidio#1995, released in presidio-analyzer
+2.2.364) and is registered from there now. VKN is still ours as a
+`PatternRecognizer`: offered upstream (`TrTaxIdRecognizer`,
+microsoft/presidio#2250) but not yet in a release. See ADR 0007 for what
+happens when it lands -- it gets deleted, not kept alongside.
 
     python integrations/odd/classify.py --url http://odd-platform:8080
 """
@@ -45,7 +47,7 @@ from integrations.odd.from_datacontract import dataset_oddrn
 # What we look for. Everything else Presidio can find is either free-text
 # oriented or too loose to be useful on a column of values.
 ENTITIES = ["EMAIL_ADDRESS", "IBAN_CODE", "CREDIT_CARD", "PHONE_NUMBER",
-            "IP_ADDRESS", "TR_TCKN", "TR_VKN"]
+            "IP_ADDRESS", "TR_NATIONAL_ID", "TR_VKN"]
 
 SAMPLE = int(os.getenv("DQ_CLASSIFY_SAMPLE", "200"))
 # The gate is how much of the sample is regulated data *at all*. Below it the
@@ -57,17 +59,6 @@ THRESHOLD = float(os.getenv("DQ_CLASSIFY_THRESHOLD", "0.8"))
 # companies and TCKN for sole traders, and calling it only the more common one
 # would be wrong about the data.
 MIN_SHARE = float(os.getenv("DQ_CLASSIFY_MIN_SHARE", "0.1"))
-
-
-def tckn_is_valid(value: str) -> bool:
-    """Turkish national identity number. Eleven digits with two check digits."""
-    if len(value) != 11 or not value.isdigit() or value[0] == "0":
-        return False
-    d = [int(c) for c in value]
-    odd, even = d[0] + d[2] + d[4] + d[6] + d[8], d[1] + d[3] + d[5] + d[7]
-    if (odd * 7 - even) % 10 != d[9]:
-        return False
-    return sum(d[:10]) % 10 == d[10]
 
 
 def vkn_is_valid(value: str) -> bool:
@@ -86,20 +77,13 @@ def build_analyzer():
     """Presidio with the small model, plus the two Turkish identifiers."""
     from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
     from presidio_analyzer.nlp_engine import NlpEngineProvider
+    from presidio_analyzer.predefined_recognizers import TrNationalIdRecognizer
 
     engine = NlpEngineProvider(nlp_configuration={
         "nlp_engine_name": "spacy",
         "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
     }).create_engine()
     analyzer = AnalyzerEngine(nlp_engine=engine)
-
-    class Tckn(PatternRecognizer):
-        def __init__(self):
-            super().__init__(supported_entity="TR_TCKN", patterns=[
-                Pattern("tckn", r"\b[1-9][0-9]{10}\b", 0.3)])
-
-        def validate_result(self, pattern_text: str):
-            return tckn_is_valid(pattern_text)
 
     class Vkn(PatternRecognizer):
         def __init__(self):
@@ -109,7 +93,9 @@ def build_analyzer():
         def validate_result(self, pattern_text: str):
             return vkn_is_valid(pattern_text)
 
-    analyzer.registry.add_recognizer(Tckn())
+    # supported_language="tr" by default; classify_column always calls
+    # analyzer.analyze(language="en") so it must match what we register with.
+    analyzer.registry.add_recognizer(TrNationalIdRecognizer(supported_language="en"))
     analyzer.registry.add_recognizer(Vkn())
     return analyzer
 
