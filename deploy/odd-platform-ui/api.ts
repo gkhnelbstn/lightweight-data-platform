@@ -52,6 +52,34 @@ export interface OpenFailure {
   reason: string | null;
 }
 
+/** One check's most recent run. `stale` means its contract has run since
+ * without it -- the rule was deleted and only its history remains; see
+ * CLAUDE.md, "Results outlive checks". */
+export interface CheckRow {
+  check_id: string;
+  contract_id: string;
+  dimension: string;
+  status: string;
+  failed_rows: number;
+  total_rows: number;
+  fail_ratio: string | number | null;
+  run_at: string;
+  name: string | null;
+  check_type: string | null;
+  field: string | null;
+  reason: string | null;
+  sql: string | null;
+  stale: boolean;
+}
+
+export interface CheckRun {
+  run_at: string;
+  status: string;
+  failed_rows: number;
+  total_rows: number;
+  fail_ratio: string | number | null;
+}
+
 export interface Overview {
   trend: { run_at: string; score: string | number }[];
   contracts: ContractSummary[];
@@ -186,6 +214,11 @@ export const getOverview = () => json<Overview>('/api/overview');
 
 export const getContract = (id: string) =>
   json<ContractDetail>(`/api/contracts/${encodeURIComponent(id)}`);
+
+export const getChecks = () => json<CheckRow[]>('/api/checks');
+
+export const getCheckHistory = (checkId: string) =>
+  json<CheckRun[]>(`/api/checks/${encodeURIComponent(checkId)}/history`);
 
 export const getSample = (checkId: string) =>
   json<Sample>(`/api/checks/${encodeURIComponent(checkId)}/sample`);

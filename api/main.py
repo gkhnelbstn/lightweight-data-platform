@@ -224,6 +224,32 @@ def contract_audit(contract_id: str) -> list[dict]:
                 order by run_at desc""", (contract_id,))
 
 
+@app.get("/api/checks")
+def checks() -> list[dict]:
+    """Every check's most recent incremental run, across all contracts.
+
+    Results outlive checks -- deleting a rule from a contract leaves its
+    history behind (see CLAUDE.md). A deleted check simply stops getting new
+    rows, so its latest run is older than its contract's latest run: that is
+    what `stale` means here. The rows stay in the list because they are real
+    history, but the UI can tell a live check from a ghost.
+
+    `contract_title` and `source_table` are not in check_results; the UI maps
+    them from /api/overview, which it has already fetched.
+    """
+    return q("""
+        select distinct on (r.check_id)
+               r.check_id, r.contract_id, r.dimension, r.status, r.failed_rows,
+               r.total_rows, r.fail_ratio, r.run_at, r.name, r.check_type,
+               r.field, r.reason, r.sql, r.run_at < last.run_at as stale
+        from check_results r
+        join (select contract_id, max(run_at) as run_at from check_results
+              where run_window = 'incremental' group by contract_id) last
+          on last.contract_id = r.contract_id
+        where r.run_window = 'incremental'
+        order by r.check_id, r.run_at desc""")
+
+
 @app.get("/api/checks/{check_id}/history")
 def check_history(check_id: str) -> list[dict]:
     return q("""select run_at, status, failed_rows, total_rows, fail_ratio
