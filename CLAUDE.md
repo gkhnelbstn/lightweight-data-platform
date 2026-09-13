@@ -190,3 +190,14 @@ files, foreign APIs). Comments explain *why*, especially where a decision looks
 arbitrary — the scoring blend and the window choice both have measurements
 behind them. Keep modules under ~150 lines; if one grows past that it is usually
 two concerns.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` (not yet created) + `docs/adr/`. See
+`docs/agents/domain.md`.
