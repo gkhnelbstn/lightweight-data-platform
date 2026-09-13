@@ -30,7 +30,7 @@ still missing after ODD and datacontract-cli have done their part"**.
 | catalog, search, glossary, ownership, RBAC | **ODD Platform** (Apache-2.0, active) | Postgres full-text, no Elasticsearch. Their last 25 commits are all search |
 | schema discovery | **odd-collector** | 64 MB, one config file |
 | column profiling | **odd-collector-profiler** | string lengths, means, inferred types. The two numbers that belong beside a *check* -- nulls and distincts, in the day's window -- are taken in the pass the runner already makes; the sort-bound half stays theirs |
-| alert lifecycle | **ODD Platform** | opens on failure, closes itself on the next pass. Measured: 3 open, 10 auto-resolved over a 45-day backfill |
+| alert lifecycle | **ODD Platform** | opens on failure, closes itself on the next pass. Measured: 3 open, 10 auto-resolved over a 45-day backfill. What it does not do is *leave the platform* -- one webhook here does that, below |
 | contract format | **ODCS** (Bitol / Linux Foundation) | adopted — `contracts/*.odcs.yaml` |
 | deriving and running the checks | **datacontract-cli** (MIT) | adopted — 27 checks on Postgres, 24 on SQL Server, executed in the source database |
 | dbt / Great Expectations / 24 more exports | **datacontract-cli** | `export dbt-models`, `export great-expectations` |
@@ -191,6 +191,43 @@ Reached from ODD, not from a port number — the table's own page carries the wa
 in, as ODD's own *Attachments* card:
 
 ![Our pages on ODD's entity page](docs/odd-entity-links.png)
+
+### Telling someone, once
+
+A contract can miss its SLA, an apply worker can die and a CDC poll can stop,
+and until there was a webhook every one of those was discovered by a person
+opening a page. ODD's alert lifecycle is real and is adopted -- it opens on
+failure and closes itself on the next passing run -- but it lives inside the
+platform, and a quality platform whose failures are only visible to whoever
+happens to look is a reporting tool rather than a control.
+
+`DQ_ALERT_URL` is one Slack or Teams incoming webhook and `core/alerts.py` is
+135 lines. One POST per run, and only for the day just finished -- a backfill
+is rebuilding history that has already happened and has nothing to announce.
+
+What it says is the part worth arguing about. **Not "these checks are
+failing"** -- that is the same twenty every morning, which is how a channel
+gets muted and then deleted. It reports:
+
+* a contract **below its SLA**, and whether that is a low score or checks that
+  could not run at all -- invariant 5, kept apart in the sentence as well as in
+  the score;
+* checks that **newly started failing**: failing today and not failing on that
+  contract's previous run;
+* replication that is **not moving**, in whichever of the ways it can manage
+  that -- a dead apply worker, a table stuck in the initial copy, an
+  unreachable source.
+
+An *accepted* failure never alerts, which is what accepting one means
+([#29](https://github.com/gkhnelbstn/lightweight-data-platform/issues/29)). An
+*acknowledged* one still does when it newly fails: looking at something once
+does not make the next outage unremarkable.
+
+Not in scope, and each for a reason: email (SMTP credentials, bounce handling
+and a From address are three problems for one message), per-check
+subscriptions (that needs identity -- ADR 0010) and an alert history page (the
+run log already records what happened; an alert that fired is not a second
+kind of fact).
 
 ### Which dashboards break
 
@@ -426,6 +463,7 @@ does not enter into it.
 | `core/store.py` | DDL, monthly partitions, writes |
 | `core/rules.py` | the rule vocabulary, and the SQL it compiles to per dialect |
 | `core/rule_plugins.py` | rule kinds a package outside this repo registers |
+| `core/alerts.py` | one webhook, one POST per run, only what is new |
 | `core/sample.py` | rewrite a check's SQL into the rows it counted |
 | `core/profile.py` | nulls and distincts per declared column, in the day's window |
 | `core/versions.py` | what a contract says about its own history, and reading it |
