@@ -230,11 +230,14 @@ def build() -> None:
         opened, closed = merge_dim_customer(dwh)
 
         # --- fct: modelled ------------------------------------------------
+        # `loaded_at` is carried through for the daily window and for nothing
+        # else. Without it the window has no column to filter on, and this
+        # contract was scored over the whole table every day (#46).
         dwh.execute("""
             drop table if exists fct.orders cascade;
             create table fct.orders as
             select o.order_id, o.customer_id, c.country, c.segment,
-                   o.order_date, o.currency, o.net_amount
+                   o.order_date, o.currency, o.net_amount, o.loaded_at
             from stg.orders o
             left join dim.customer c
               on c.customer_id = o.customer_id
@@ -247,11 +250,16 @@ def build() -> None:
         # rows over 2,523. Materialise it when a dashboard says to, which is a
         # `create materialized view` and a `refresh` here -- not a decision to
         # take in advance of the measurement (ADR 0017).
+        #
+        # `max(loaded_at)` rather than grouping by it: the grain stays a day,
+        # a currency and a country, and a row enters the day's window when an
+        # order that changes it arrives.
         drop_any(dwh, "mart.revenue_daily")
         dwh.execute("""
             create view mart.revenue_daily as
             select order_date, currency, country,
-                   count(*) as orders, sum(net_amount) as revenue
+                   count(*) as orders, sum(net_amount) as revenue,
+                   max(loaded_at) as loaded_at
             from fct.orders
             group by order_date, currency, country""")
 

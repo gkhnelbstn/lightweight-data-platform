@@ -20,7 +20,7 @@ customProperties:
   - property: derivedBy
     value: >
       select order_date, currency, country, count(*) as orders,
-             sum(net_amount) as revenue
+             sum(net_amount) as revenue, max(loaded_at) as loaded_at
       from fct.orders group by order_date, currency, country
 
 servers:
@@ -76,6 +76,11 @@ schema:
         logicalType: number
         physicalType: numeric
         description: "Sum of net_amount for the day, currency and country."
+        required: true
+      - name: loaded_at
+        logicalType: date
+        physicalType: date
+        description: "When the most recent order in this row arrived. Not part of the grain: the daily window filters on it, so a row is re-checked on any day an order changes it."
         required: true
 
     quality:
