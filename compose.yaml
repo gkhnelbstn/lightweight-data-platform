@@ -152,6 +152,10 @@ services:
       # Where ODD Platform is served from, since its Data Quality page calls
       # this API from the browser. Named rather than `*`.
       DQ_CORS_ORIGINS: ${DQ_CORS_ORIGINS:-http://localhost:8080}
+      # Where a run says that something broke. Unset means no alerting, the
+      # same way --odd-url does: one Slack or Teams incoming webhook, one POST
+      # per run that has something new to report. See issue #31.
+      DQ_ALERT_URL: ${DQ_ALERT_URL:-}
       # Rule authoring compiles and runs a person's SQL. Set a token or the
       # write routes refuse; generate one with `openssl rand -hex 32`.
       DQ_API_TOKEN: ${DQ_API_TOKEN:-}

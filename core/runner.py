@@ -359,6 +359,45 @@ def run(as_of: date, contracts: list[dict] | None = None,
     return out
 
 
+def announce(as_of: date, results: list[dict], contracts: list[dict]) -> bool:
+    """Tell the webhook what this run found, if there is anything to tell.
+
+    Once per run and only for the day just finished: a 44-day backfill has
+    nothing to alert about, it is rebuilding history that has already
+    happened. Best effort, like the ODD push -- the results are stored either
+    way, and a webhook that will not answer must not fail a run.
+    """
+    from core import alerts
+    if not alerts.ALERT_URL:
+        return False
+    minimum = {c.get("id"): _min_score(c) for c in contracts}
+    breaches = [
+        {"contract": r["contract"], "score": r["score"], "errored": r["errored"],
+         "sla_min": minimum.get(r["contract"], 0.0)}
+        for r in results
+        if r["errored"] or r["score"] < minimum.get(r["contract"], 0.0)]
+
+    new_failures, statuses = {}, []
+    try:
+        with store.connect() as dq:
+            for r in results:
+                names = alerts.newly_failing(dq, r["contract"], as_of)
+                if names:
+                    new_failures[r["contract"]] = names
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN alerts: could not read the previous run ({e})", flush=True)
+    try:
+        from core.sync import status, sync_rule
+        statuses = [s for s in (status(c) for c in contracts if sync_rule(c))
+                    if s]
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN alerts: could not read replication status ({e})", flush=True)
+
+    text = alerts.compose(as_of, contracts, breaches, new_failures,
+                          alerts.sync_problems(statuses))
+    return alerts.send(text) if text else False
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--as-of", default=str(date.today()))
@@ -377,7 +416,10 @@ def main() -> None:
     end = date.fromisoformat(a.as_of)
     for i in range(a.backfill_days, -1, -1):
         day = end - timedelta(days=i)
-        for r in run(day, contracts, a.window, odd_url=a.odd_url):
+        results = run(day, contracts, a.window, odd_url=a.odd_url)
+        if day == end:
+            announce(day, results, contracts)
+        for r in results:
             # An errored run is neither OK nor a quality failure: nothing was
             # measured, so the score says nothing and the flag should not
             # pretend otherwise.

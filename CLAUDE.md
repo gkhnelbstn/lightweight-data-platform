@@ -89,6 +89,13 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   *database* on SQL Server, because a rule written `dbo.sales_orders` cannot
   see a second schema. `CREATE DATABASE` also refuses to run inside pyodbc's
   implicit transaction — set `autocommit` first.
+* Alerting is one webhook and one POST per run (`core/alerts.py`), and what
+  it reports is *newly* failing checks -- failing today, not failing on that
+  contract's previous run. "Currently failing" is the same twenty every
+  morning, which is how a channel gets muted. An `accepted` check never
+  alerts; an `acknowledged` one still does when it newly fails. A backfill
+  announces nothing: only the last day of a run is announced, because the
+  other 44 already happened.
 * The column profile (`core/profile.py`) is a measurement beside the checks,
   never among them: nothing in `column_profile` passes, fails, or reaches
   `core/scoring.py`. It is two numbers -- nulls and distincts -- taken in the
