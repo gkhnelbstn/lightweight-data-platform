@@ -318,6 +318,22 @@ def _min_score(contract: dict) -> float:
     return float(os.getenv("DQ_MIN_SCORE", "0.95"))
 
 
+def window_missing(contract: dict) -> dict:
+    """A run that measured nothing, shaped the way datacontract reports one.
+
+    `general` is datacontract's run-level result, and `persist` already stores
+    it as `error` rather than as a data failure -- the same path an unreachable
+    source takes, so the run breaks its SLA and the UI shows why.
+    """
+    schema = (_server(contract, DAILY_SERVER) or {}).get("schema")
+    return {"checks": [{
+        "type": "general", "key": "daily_window", "name": "daily window",
+        "result": "failed",
+        "reason": f"the daily window built no relation in {schema!r}; "
+                  "the tables were not checked rather than checked whole",
+    }]}
+
+
 def run(as_of: date, contracts: list[dict] | None = None,
         window: str = "incremental", odd_url: str | None = None) -> list[dict]:
     contracts = contracts if contracts is not None else load_contracts()
@@ -332,22 +348,32 @@ def run(as_of: date, contracts: list[dict] | None = None,
         # `datacontract test` fail on its own terms, which is how the run comes
         # to be recorded as errored rather than as a stack trace.
         try:
-            windowed = bool(build_window(c, as_of, window=window))
+            made = build_window(c, as_of, window=window)
         except Exception as e:
             print(f"WARN {as_of} {c.get('id')}: no window ({e})", flush=True)
-            windowed = False
-        results = run_contract(c, as_of, windowed=windowed)
-        if windowed and _has_table_scoped(c):
-            # A second pass against the real tables, for the checks a daily
-            # window would make meaningless.
-            results = merge_table_scoped(results, run_contract(c, as_of,
-                                                               windowed=False))
-        server_key = DAILY_SERVER if windowed else "erp"
-        counts = table_rows(c, server_key)
-        # Beside the checks, not among them: see core/profile.py. Best effort,
-        # like the counts above -- a missing profile must not fail a run that
-        # measured the contract fine.
-        profile.collect(c, as_of, server_key, window)
+            made = None
+        windowed = bool(made)
+        if made == 0 and _server(c, DAILY_SERVER):
+            # The source answered, the contract declares a window, and nothing
+            # was built. Running on anyway means running on the real tables and
+            # storing the result as `window` -- a whole-table score under the
+            # name of a daily one, which is how three warehouse contracts went
+            # unnoticed for a week (#46). Nothing was measured, so say that.
+            results = window_missing(c)
+            counts = None
+        else:
+            results = run_contract(c, as_of, windowed=windowed)
+            if windowed and _has_table_scoped(c):
+                # A second pass against the real tables, for the checks a daily
+                # window would make meaningless.
+                results = merge_table_scoped(results, run_contract(
+                    c, as_of, windowed=False))
+            server_key = DAILY_SERVER if windowed else "erp"
+            counts = table_rows(c, server_key)
+            # Beside the checks, not among them: see core/profile.py. Best
+            # effort, like the counts above -- a missing profile must not fail
+            # a run that measured the contract fine.
+            profile.collect(c, as_of, server_key, window)
         rows = persist(results, c, as_of, window, counts)
         s = score(rows)
         if odd_url:

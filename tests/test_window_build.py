@@ -54,3 +54,41 @@ def test_a_model_that_is_a_view_gets_a_filtered_window(db):
     with psycopg.connect(db) as cx:
         rows = cx.execute("select id from asof_src.orders").fetchall()
     assert rows == [(2,)]
+
+
+def test_a_window_that_built_nothing_is_an_error_not_a_whole_table_score(
+        monkeypatch):
+    """No database: the runner is asked what it does when `build_window`
+    returns 0 for a contract that declares one. It used to run on the real
+    tables and store that as `incremental`."""
+    from core import runner
+
+    contract = {"id": "t.orders",
+                "servers": [{"server": "erp", "type": "postgres",
+                             "schema": "src"},
+                            {"server": runner.DAILY_SERVER, "type": "postgres",
+                             "schema": "asof_src"}],
+                "schema": [{"name": "orders"}]}
+    monkeypatch.setattr(runner, "build_window", lambda *a, **k: 0)
+
+    def must_not_run(*a, **k):
+        raise AssertionError("checks ran with no window")
+    monkeypatch.setattr(runner, "run_contract", must_not_run)
+    monkeypatch.setattr(runner, "table_rows", must_not_run)
+    for name in ("init", "ensure_partition", "write_results", "write_score"):
+        monkeypatch.setattr(runner.store, name, lambda *a, **k: None)
+    monkeypatch.setattr(runner.store, "connect", _NullConnection)
+
+    [result] = runner.run(DAY, [contract])
+    assert result["errored"] == 1 and result["failed"] == 0
+
+
+class _NullConnection:
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
