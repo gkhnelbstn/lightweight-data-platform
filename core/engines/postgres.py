@@ -65,9 +65,14 @@ def build_window(contract: dict, as_of: date, source: dict, src_schema: str,
                     for m in contract.get("schema", [])}
         # Every table in the source schema is mirrored: the ones the contract
         # names get the day's rows, the rest are passed through so joins work.
+        # Views count as tables here. ADR 0017 turned `stg.orders` and
+        # `mart.revenue_daily` into views, and a filter on BASE TABLE made the
+        # window build nothing for them -- which the runner reads as "no window"
+        # and scores the whole table instead (#46).
         rows = cx.execute(
             """select table_name from information_schema.tables
-               where table_schema = %s and table_type = 'BASE TABLE'""",
+               where table_schema = %s
+                 and table_type in ('BASE TABLE', 'VIEW')""",
             (src_schema,)).fetchall()
         for (table,) in rows:
             has_window = cx.execute(

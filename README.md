@@ -2,7 +2,7 @@
 
 Contract-driven data quality on top of **OpenDataDiscovery**. The catalog,
 search, glossary, alerting and schema discovery are ODD's. The contracts, the
-daily run, the score and the trend are here. Eleven contracts, 257 checks a day,
+daily run, the score and the trend are here. Eleven contracts, 263 checks a day,
 45 days of history, PostgreSQL.
 
 **New here?** [`docs/architecture.md`](docs/architecture.md) is how it works,
