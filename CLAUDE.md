@@ -207,6 +207,15 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   (Type 2 history) stay physical. `drop_any` exists because `drop table` on a
   view and `drop view` on a table are both errors, and a warehouse built
   before ADR 0017 has tables where the script now wants views.
+* `generated` in a `syncTo` rule is the target's half: columns that exist only
+  in the replica and that the replica fills itself, so a sequence or a default
+  there is what puts a value in them. They are never in `columns`, which is why
+  neither reader needed changing -- but `target_table_statement` is `create
+  table if not exists`, so a replica that predates the rule keeps its old shape
+  and `generated_statements` is the `add column if not exists` that repairs it.
+  That one is target-only; `_identity_statements` beside it runs on **both**
+  ends, and a source that grew the replica's surrogate key would replicate it
+  back. Issue #45.
 * The `identity` widening in a `syncTo` rule is a *logical replication*
   requirement. The CDC reader has whole rows and does not need it; a mutable
   column in the identity breaks it there.
