@@ -319,10 +319,16 @@ def sync_once(contract: dict) -> dict:
         # identity statements come with it -- the upsert is `on conflict
         # (identity)`, which needs the unique index that makes the identity
         # one, not merely columns of the right name.
-        from core.sync import _identity_statements, target_table_statement
+        from core.sync import (_identity_statements, generated_statements,
+                               target_table_statement)
         schema = target.get("schema", "public")
         pg.execute(target_table_statement(model, schema, rule,
                                           source.get("type")))
+        # After the create, because a replica that predates the rule's
+        # `generated` block already exists and `create table if not exists`
+        # would leave it in its old shape. Issue #45.
+        for stmt in generated_statements(model, schema, rule):
+            pg.execute(stmt)
         for stmt in _identity_statements(model, schema, rule):
             pg.execute(stmt)
         pg.commit()

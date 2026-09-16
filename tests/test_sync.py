@@ -185,6 +185,106 @@ def test_sql_server_types_are_translated():
     assert " int," not in stmt and "decimal" not in stmt
 
 
+# --- columns the target fills itself (issue #45) -----------------------------
+
+def test_a_generated_column_is_added_to_the_target():
+    """The half of issue #45 that was genuinely missing: a sequence or default
+    on the target never fired, because every column was sent verbatim."""
+    from core.sync import target_table_statement
+    stmt = target_table_statement(
+        _model(), "public",
+        {"columns": ["customer_id", "name"],
+         "generated": {"replica_row_id": "bigint generated always as identity"}},
+        "postgres").as_string()
+    assert '"replica_row_id" bigint generated always as identity' in stmt
+
+
+def test_a_generated_column_is_not_sent_by_the_reader():
+    """Nothing has to exclude it: it is not a contract property, so it is not
+    in the column list either path builds its statements from."""
+    rule = {"generated": {"replica_row_id": "bigint generated always as identity"}}
+    columns = rule.get("columns") or [p["name"] for p in _model()["properties"]]
+    assert "replica_row_id" not in columns
+
+
+def test_a_generated_column_may_not_shadow_a_replicated_one():
+    """Both halves would emit it and `create table` fails on the duplicate --
+    at the first sync, which is the failure target_table_statement exists to
+    prevent."""
+    found = problems(_model(), {"columns": ["customer_id", "name"],
+                                "generated": {"name": "text default ''"}})
+    assert any("declare it twice" in p for p in found)
+
+
+def test_a_generated_column_may_not_reuse_a_held_back_columns_name():
+    """tax_id is left out of the rule to keep it out of the replica. Reusing
+    the name would not fail the create -- it would put a column called tax_id
+    in the target meaning something else, which is worse than an error."""
+    found = problems(_model(), {"columns": ["customer_id", "name"],
+                                "generated": {"tax_id": "text default ''"}})
+    assert any("held back" in p for p in found)
+    assert not any("declare it twice" in p for p in found)
+
+
+def test_a_generated_column_may_not_be_part_of_the_identity():
+    """Rows are matched on the identity, and the source never sends this one --
+    there would be nothing to match."""
+    found = problems(_model(), {"identity": ["customer_id", "replica_row_id"],
+                                "generated": {"replica_row_id": "bigint"}})
+    assert any("cannot be part of" in p for p in found)
+
+
+def test_a_filter_may_not_read_a_generated_column():
+    """The filter is evaluated against the source row, which does not have
+    it -- see the `keep` predicate in core/sync_mssql.py."""
+    found = problems(_model(), {"filter": "replica_row_id > 0",
+                                "identity": ["customer_id"],
+                                "generated": {"replica_row_id": "bigint"}})
+    assert any("evaluated" in p for p in found)
+
+
+def test_a_generated_column_must_say_how():
+    found = problems(_model(), {"generated": {"replica_row_id": "  "}})
+    assert any("does not say" in p for p in found)
+
+
+def test_an_existing_target_gains_the_generated_column():
+    """`create table if not exists` leaves a replica that predates the rule in
+    its old shape, so the feature would do nothing wherever it had already
+    run. Measured on the demo's 50 288-row replica: every row got a number."""
+    from core.sync import generated_statements
+    stmts = [s.as_string() for s in generated_statements(
+        _model(), "public",
+        {"generated": {"replica_row_id": "bigint generated always as identity"}})]
+    assert stmts == ['alter table "public"."customers" add column if not exists '
+                     '"replica_row_id" bigint generated always as identity']
+
+
+def test_nothing_is_altered_when_the_rule_has_no_generated_block():
+    """Every rule that predates issue #45 keeps emitting exactly what it did."""
+    from core.sync import generated_statements
+    assert generated_statements(_model(), "public", {"columns": ["name"]}) == []
+
+
+def test_generated_columns_are_never_added_to_the_source():
+    """_identity_statements runs on both ends; this one must not. A source that
+    grew the target's surrogate key would be replicating a column back."""
+    import inspect
+    from core import sync
+    body = inspect.getsource(sync.plan)
+    target_half = body.split('"target"', 1)[1]
+    assert "generated_statements" in target_half
+    assert "generated_statements" not in body.split('"target"', 1)[0]
+
+
+def test_the_shipped_mssql_rule_still_holds_with_its_generated_column():
+    """The demo case. sqlserver, because the CDC reader is what applies it."""
+    doc = yaml.safe_load((CONTRACTS / "erp_mssql.odcs.yaml").read_text(encoding="utf-8"))
+    rule = sync_rule(doc)
+    assert rule["generated"]
+    assert problems(doc["schema"][0], rule, "sqlserver") == []
+
+
 # --- authoring a rule that does not exist on disk yet -----------------------
 # The write path issue #10 asks for: the same four preconditions, run against
 # a proposed rule rather than one already saved. `unsound_identity` needs a

@@ -66,6 +66,18 @@ customProperties:
       # looked for a row that no longer existed under that name.
       identity: [order_id]
       columns: [order_id, customer_id, order_date, currency, status, net_amount]
+      # Columns the *target* fills. SQL Server's sales_orders has no surrogate
+      # key -- order_id is the ERP's own number -- so the replica gives itself
+      # one, and records when each row landed. Neither exists at the source, so
+      # neither is sent: the sequence and the default are what put a value
+      # there. Issue #45.
+      #
+      # order_id stays the identity, so this is still idempotent. A resnapshot
+      # after a reseed (see capture_start_lsn) matches on order_id and updates,
+      # and an update leaves replica_row_id at the value it was first given.
+      generated:
+        replica_row_id: bigint generated always as identity
+        replicated_at: timestamptz not null default now()
 
 schema:
   - name: sales_orders
