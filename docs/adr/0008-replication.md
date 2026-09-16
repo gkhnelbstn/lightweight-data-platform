@@ -86,6 +86,12 @@ proof gets designed against that real pair, not a hypothetical one.
 
 ## On upgrade
 
+* **The Kafka premise in the Context above expired.** Debezium Server runs
+  without Kafka and its JDBC sink makes database-to-database one container, so
+  "no row count justifies Kafka" no longer refuses anything. The decision was
+  re-taken against a running prototype and did not change, for four reasons
+  that are not this one -- see **ADR 0018**. Read that before citing this
+  record's Context as a reason for anything.
 * **PostgreSQL major version:** re-read the publication rules; row filters and
   column lists arrived in 15 and their interaction with replica identity is
   exactly what bit us. `tests/test_sync.py` pins all four preconditions.
