@@ -45,3 +45,4 @@ upstream feature that would let it be deleted.
 | [0015](0015-the-boundary-what-is-ours.md) | The register of what is ours, and the file layout that follows it | every row above it is retired |
 | [0016](0016-extension-points.md) | Rule kinds take plugins; engines and integrations stay code | datacontract-cli grows pluggable check kinds |
 | [0017](0017-a-view-instead-of-a-copy.md) | A view where a copy buys nothing: `stg`, `mart`, and `syncTo mode: view` | dbt owns the warehouse materialisation |
+| [0018](0018-debezium-without-kafka.md) | Debezium runs without Kafka now, and the CDC reader still stays ours | Debezium grows a native row filter |
