@@ -30,6 +30,7 @@ python integrations/odd/lineage.py --url http://odd-platform:8080   # declared l
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
 python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
 uvicorn api.main:app --port 8077                           # UI + API
+python core/mapping.py --check                             # validate the declared column mappings
 python core/sync.py --check                                # validate the sync rules
 python core/sync.py --apply                                # publication + subscription
 python core/sync_mssql.py --interval 30                    # SQL Server CDC -> Postgres
@@ -207,6 +208,31 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   (Type 2 history) stay physical. `drop_any` exists because `drop table` on a
   view and `drop view` on a table are both errors, and a warehouse built
   before ADR 0017 has tables where the script now wants views.
+* **A `syncTo` rule is a replica; a `derivedFrom` column map is not.** The
+  replica's shape comes from the *source* model -- `target_table_statement`
+  builds it -- which is correct for a copy and a lie for a target with a schema
+  of its own. `core/mapping.py` is the second shape: the **target's** contract
+  states which of its columns come from where, as detail on the `derivedFrom`
+  that lineage already reads (ADR 0014). A bare `derivedFrom: [id]` is
+  unchanged and is never checked against a column map, so nothing that passed
+  before can start failing.
+* A column with no upstream is not a gap when the contract says so, and **two
+  vocabularies say it because two different things do the filling**:
+  `syncTo.generated` is the target database (a sequence, a default -- issue
+  #45), `computedHere` is our own process (`dim.customer`'s surrogate key and
+  its Type 2 `valid_from`/`is_current`, which `demo/medallion.py` computes and
+  which exist in no source row). Kept apart on purpose: only the first
+  survives a change of engine.
+* **The privacy boundary changes shape again in a mapping.** In a `syncTo`
+  column list it is physical -- a column left out has no column in the target.
+  A mapping names the target column explicitly, so there is no such physics,
+  and `core/mapping.py` checks instead that a classified source column does not
+  land somewhere that fails to classify it. Same boundary, enforced rather than
+  enforced-by-absence.
+* `core/mapping.py` deliberately does **no type checking**. A mapping between
+  two schemas changes types legitimately and often, so flagging every
+  difference is noise; a real widening rule needs a lattice nobody has asked
+  for. Issue #50 is the narrower case that *is* a bug.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why

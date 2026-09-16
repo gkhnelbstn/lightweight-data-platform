@@ -23,8 +23,27 @@ description:
     placed under rather than to today's.
 
 customProperties:
+  # Column detail, because dim.customer is not a copy of erp.customers -- it is
+  # a different schema. Its key is its own, its grain is a version rather than
+  # a customer, and tax_id does not cross at all. Stating which column comes
+  # from where is what lets core/mapping.py refuse the mistakes: a required
+  # column nothing fills, a key that cannot match a row, a classified value
+  # arriving somewhere that does not classify it.
   - property: derivedFrom
-    value: [erp.customers]
+    value:
+      - contract: erp.customers
+        columns:
+          customer_id: customer_id
+          name: name
+          country: country
+          segment: segment
+  # The columns this table invents rather than carries. The surrogate key is
+  # one per *version* (the natural key repeats), and the Type 2 bookkeeping
+  # exists in no source row -- demo/medallion.py computes all four. loaded_at
+  # is ours too: it is the arrival date of the row that opened the version,
+  # which the source does not carry as a column.
+  - property: computedHere
+    value: [customer_key, valid_from, valid_to, is_current, loaded_at]
   - property: derivedBy
     value: >
       update dim.customer d set valid_to = s.loaded_at, is_current = false

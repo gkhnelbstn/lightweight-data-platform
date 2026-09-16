@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 
+from core.mapping import declared as mapping_entries
 from core.runner import HOST, load_contracts
 from integrations.odd.from_datacontract import (dataset_oddrn,
                                                 ensure_datasource, post)
@@ -34,15 +35,19 @@ from integrations.odd.mapper import entity_list
 
 
 def declared(contract: dict) -> tuple[list[str], str | None]:
-    """`(upstream, sql)` as the contract states them."""
-    upstream, sql = [], None
+    """`(upstream, sql)` as the contract states them.
+
+    A `derivedFrom` entry is a bare reference or a reference carrying a column
+    map (core/mapping.py). The edge is the same either way -- which table came
+    from which -- so the references are what this module reads, and the column
+    detail is `core.mapping`'s to validate. Going through its parser rather
+    than re-reading the property keeps one place that knows both forms.
+    """
+    sql = None
     for prop in contract.get("customProperties") or []:
-        if prop.get("property") == "derivedFrom":
-            value = prop["value"]
-            upstream = list(value) if isinstance(value, list) else [value]
-        elif prop.get("property") == "derivedBy":
+        if prop.get("property") == "derivedBy":
             sql = str(prop["value"])
-    return upstream, sql
+    return [m.reference for m in mapping_entries(contract)], sql
 
 
 def resolve(reference: str, by_id: dict[str, dict]) -> str | None:
