@@ -66,6 +66,25 @@ does not otherwise speak, in an image we would have to build. A row filter that
 is quietly wrong about NULL does not throw. It copies rows that should not have
 crossed.
 
+**This is about the row filter and nothing else.** Changing the *shape* of a
+row needs no scripting at all: `ReplaceField` is a core Kafka Connect SMT and
+is already on the stock image's classpath, so renaming and dropping columns
+works out of the box. Measured on the same probe --
+
+    debezium.transforms.rename.type=org.apache.kafka.connect.transforms.ReplaceField$Value
+    debezium.transforms.rename.renames=order_id:order_no,net_amount:total
+    debezium.transforms.rename.exclude=currency
+
+58 667 rows landed with `net_amount` arriving as `total` and `currency` absent,
+with no jar, no script engine and no Dockerfile. Only `Filter` and
+content-based routing need `debezium-scripting`.
+
+One thing that measurement also found, because it is the silent kind:
+`ReplaceField$Value` leaves the *key* alone, and `primary.key.mode=record_key`
+builds the key column from it -- so a renamed key column arrives twice, once
+under each name, and every row count still matches. Renaming a key needs
+`ReplaceField$Key` beside it.
+
 `status` is `required: true` in the shipped contract, so this rule would not
 hit it. The next contract might, and nothing would say so.
 
