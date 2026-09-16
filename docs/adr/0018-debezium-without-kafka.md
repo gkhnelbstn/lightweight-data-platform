@@ -35,8 +35,13 @@ validation while naming nothing.
 
 ## Decision
 
-**Keep the hand-written CDC reader. The Kafka premise is dead; the conclusion
-is not — but it now rests on four different reasons, and they are better ones.**
+**Keep the hand-written CDC reader for the replica case. The Kafka premise is
+dead; the conclusion is not — but it now rests on four different reasons, and
+they are better ones.**
+
+*For the replica case* is load-bearing. See "What this record does not decide"
+below: an integration between two different schemas is a separate question that
+none of the four reasons touch.
 
 Each of these is a difference in *what the replica is*, not a benchmark.
 
@@ -114,6 +119,48 @@ parts for one.
 **Nothing here is a claim that the reader is better software.** Debezium is a
 maintained CDC implementation and ours is 371 lines. The four points above are
 about the replica the two produce, not about their quality.
+
+## What this record does *not* decide, and the reason it cannot
+
+Everything above compares two ways of producing **a replica**: the same table,
+narrowed. Same column names, same shape, fewer rows or fewer columns.
+
+That is not the only thing a `syncTo`-shaped rule gets asked for. The other
+shape is an **integration**: two schemas that each exist on their own terms,
+connected by a stream. A row becoming a document, a column becoming two, a
+target whose key is its own.
+
+The four reasons above say nothing about that case, and neither does the
+prototype. Worth stating here rather than leaving the record to be cited for a
+question it never asked.
+
+Every tool measured in this thread is a replica tool, and each says so in its
+own way:
+
+* SQL Server peer-to-peer **forbids row and column filters**, because its
+  premise is that every node is identical (#54);
+* Debezium's JDBC sink `schema.evolution` mirrors the source's shape into the
+  target -- that is what it is for;
+* pgEdge Spock is a logical replication extension, a replica by construction;
+* **`target_table_statement` builds the target from the *source* model.** Ours
+  is a replica tool too, and `syncTo` is named correctly for what it does.
+
+Which is why ADR 0008's rule cannot settle an integration case:
+
+> "**A new engine:** add replication only if it already has its own. Do not
+> write one."
+
+**No engine has "its own" schema-to-schema integration.** Built-in replication
+produces a replica -- that is what built-in replication *is*. The rule is not
+incomplete; it answers a different question, and it answers that one correctly.
+
+So the open work is not another transport. Transports exist for every pair. It
+is where the mapping between two schemas lives -- invariant 1 leaves only the
+contract -- and what refuses a mapping that would silently drop a column,
+widen a type, or produce a document missing a field the target's own contract
+requires. `problems()` does that for a replica rule and has no counterpart for
+a mapping. That refusal is ours under every tool on this list, which is why it
+is worth building before choosing one. See #53.
 
 ## Consequences
 
