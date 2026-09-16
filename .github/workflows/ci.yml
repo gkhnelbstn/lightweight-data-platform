@@ -30,6 +30,13 @@ jobs:
       - name: pytest
         run: pytest -q
 
+      # A declared column mapping is refused for reasons the schema cannot
+      # see -- a required column nothing fills, a key nothing fills, a
+      # classified value landing somewhere that does not classify it. Needs no
+      # database: it reads the contracts and compares them to each other.
+      - name: check the declared column mappings
+        run: python core/mapping.py --check
+
       # The contracts are the source of truth; a broken one is a broken build.
       # `lint` validates against the ODCS JSON Schema without touching a
       # database, which is the half that belongs in CI.
