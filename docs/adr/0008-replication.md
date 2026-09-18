@@ -129,6 +129,6 @@ proof gets designed against that real pair, not a hypothetical one.
   and merge replication publishes the same articles everywhere. "Use the
   engine's own" therefore cannot decide it. That case is issue #53, where the
   target's contract declares the column map (`core/mapping.py`). See ADR 0018,
-  *What this record does not decide*.
+  *What this does not decide*.
 * Deleting a row from `sync_watermarks` re-snapshots that source, which is
   idempotent but not free.
