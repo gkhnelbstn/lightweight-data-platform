@@ -273,6 +273,13 @@ TSQL_TO_PG = {"int": "integer", "smallint": "smallint", "bigint": "bigint",
               "datetime2": "timestamp", "decimal": "numeric",
               "numeric": "numeric", "float": "double precision",
               "money": "numeric", "uniqueidentifier": "uuid"}
+# The types whose parenthesised part means the same thing in Postgres. A string
+# length is dropped on purpose -- every textual type becomes `text` -- but
+# decimal(14,2) is not a longer spelling of numeric: a bare numeric accepts a
+# scale the source would reject, so the replica could hold a value the source
+# cannot. Issue #50. datetime2(n) is left out: SQL Server allows n up to 7 and
+# Postgres's timestamp(n) stops at 6.
+KEEPS_ARGUMENTS = {"decimal", "numeric"}
 
 
 def target_table_statement(model: dict, schema: str, rule: dict,
@@ -299,7 +306,10 @@ def target_table_statement(model: dict, schema: str, rule: dict,
     for name in columns:
         physical = str(types.get(name, "text")).lower()
         if mssql:
-            physical = TSQL_TO_PG.get(physical.split("(")[0], "text")
+            base, paren, args = physical.partition("(")
+            physical = TSQL_TO_PG.get(base.strip(), "text")
+            if paren and base.strip() in KEEPS_ARGUMENTS:
+                physical += "(" + args
         defs.append(sql.SQL("{} {}").format(
             sql.Identifier(name), sql.SQL(physical))
             + (sql.SQL(" not null") if name in identity else sql.SQL("")))
