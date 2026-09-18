@@ -122,5 +122,13 @@ proof gets designed against that real pair, not a hypothetical one.
   conflict policy is still missing, see above.
 * **A new engine:** add replication only if it already has its own. Do not
   write one.
+* **Two different products on the same engine are not this record's case.**
+  Siber and Zirve, both on SQL Server, have different schemas, so this is
+  integration rather than replication. Every engine's own replication needs
+  identical schemas on both ends: SQL Server peer-to-peer says so outright,
+  and merge replication publishes the same articles everywhere. "Use the
+  engine's own" therefore cannot decide it. That case is issue #53, where the
+  target's contract declares the column map (`core/mapping.py`). See ADR 0018,
+  *What this record does not decide*.
 * Deleting a row from `sync_watermarks` re-snapshots that source, which is
   idempotent but not free.
