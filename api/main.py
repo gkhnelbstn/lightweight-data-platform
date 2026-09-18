@@ -538,9 +538,7 @@ def sync_rules() -> list[dict]:
                "engine": engine,
                "identity": sync.identity_columns(contract["schema"][0], rule)}
         try:
-            row["problems"] = (
-                sync.problems(contract["schema"][0], rule, engine)
-                + sync.unsound_identity(contract, rule))
+            row["problems"] = sync.rule_problems(contract, rule, engine)
         except Exception as e:
             row["problems"] = [str(e)]
         try:
