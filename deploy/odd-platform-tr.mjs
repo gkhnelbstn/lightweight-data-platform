@@ -15,8 +15,8 @@
  * which is why the catalogue has to be registered there and not added later
  * from the panel.
  *
- * The catalogue is offered upstream. This is a carried patch (ADR 0011) and
- * leaves when upstream ships Turkish.
+ * The catalogue is offered upstream as odd-platform#1904. This is a carried
+ * patch (ADR 0011) and leaves when upstream ships Turkish.
  *
  *   node deploy/odd-platform-tr.mjs <odd-platform checkout>
  */
