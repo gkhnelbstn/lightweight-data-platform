@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 227 tests; the ones that need a database skip without one
+pytest -q                                                  # 275 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -233,6 +233,15 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   two schemas changes types legitimately and often, so flagging every
   difference is noise; a real widening rule needs a lattice nobody has asked
   for. Issue #50 is the narrower case that *is* a bug.
+* **A two-way pair is two `derivedFrom` maps pointing at each other**, and
+  each can pass `core/mapping.py` alone while the pair corrupts data.
+  `core/two_way.py` checks the pair: the maps must be inverses, and every
+  mapped column has exactly one side in `masteredHere`. Mastership decides
+  who *wins a conflict*, not who may write -- both sides edit the same rows,
+  which is why ADR 0008's row-disjointness proof was replaced rather than
+  built. The Siber/Zirve pair it was designed against is hypothetical and
+  lives in `tests/test_two_way.py`, not `contracts/`: a contract there is
+  windowed, scored and catalogued, and nothing serves this one.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why

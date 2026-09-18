@@ -84,6 +84,38 @@ point at each other gets exactly what is described above, unguarded.
 Revisit this the day a contract actually wants two-way sync; the disjointness
 proof gets designed against that real pair, not a hypothetical one.
 
+### Amended: a two-way integration pair, designed against a stand-in
+
+The case came, and one condition above had to give. The pair is Siber (ERP)
+and Zirve (accounting) on SQL Server, issue #53. It is two different
+products, so it is integration, not replication (see *On upgrade*). Their
+real schemas are not available, so it was decided to **design against a
+hypothetical pair** built to have the same problems. The fixture in
+`tests/test_two_way.py` has different column names, a classified identifier
+on both sides, and both sides editing the same customer card.
+
+That last property rules out the disjointness proof entirely. It is not merely
+expensive: the rows are *the same* rows by construction. What replaces it is
+disjointness by **column** rather than by row. Each column of the pair names
+exactly one side in `masteredHere`, and that side's value wins when both
+changed the column since the last sync. Both sides may still write every
+column; mastership only answers the conflict. Checking it is set membership,
+not a theorem prover. `core/two_way.py` refuses a pair when:
+
+* one side's map is not the inverse of the other side's; or
+* a column is mastered by neither side, or by both.
+
+Scope of this amendment:
+
+* It applies to integration pairs declared with `derivedFrom` column maps
+  only.
+* Two `syncTo` rules pointing at each other remain exactly as unguarded as
+  described above.
+* Nothing executes a pair yet. The executor, and value or type
+  transformations such as `'E'/'H'` against a `bit`, are still open in #53.
+* The stand-in is a stand-in. When a real schema arrives, re-check it
+  against the fixture's assumptions before trusting the refusals.
+
 ## Consequences
 
 * `--status` exists because a dead apply worker and a quiet one look identical.
