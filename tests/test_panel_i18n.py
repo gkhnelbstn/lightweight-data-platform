@@ -16,11 +16,19 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 DEPLOY = Path(__file__).resolve().parents[1] / "deploy"
 PANEL = DEPLOY / "odd-platform-ui"
 CALL = re.compile(r"""(?<![\w$.])(?:t|tr)\(\s*(['"])(.+?)(?<!\\)\1\s*[,)]""", re.S)
 CODE = re.compile(r"""\bk=(['"])(.+?)\1""")
 PLACEHOLDER = re.compile(r"{{\w+}}")
+
+# The app container mounts the Python sources and tests but not deploy/, so
+# `docker compose exec app pytest -q tests` has no UI to read. CI runs from a
+# checkout, where it does.
+pytestmark = pytest.mark.skipif(
+    not PANEL.is_dir(), reason="the panel sources are not in this checkout")
 
 
 def _load(path: Path) -> dict[str, str]:
