@@ -47,11 +47,27 @@ creates it.
 
 `origin = none` on the subscription (PostgreSQL 16) makes a two-way pair
 possible without the change echoing back and forth forever — that much was
-verified on the running stack. What it does not give is a **conflict
-policy**: two writers touching the same row is last-writer-wins at best, and
-a genuine conflict — a duplicate key on the subscriber — stops the apply
-worker the way logical replication always fails here, silently, in a
-background process that only writes to the server log.
+verified on the running stack. Two things stood in the way after that, and
+they are different enough to track separately:
+
+1. **No conflict policy.** Two writers touching the same row is
+   last-writer-wins at best, and a genuine conflict — a duplicate key on the
+   subscriber — stops the apply worker and waits for a person.
+2. **Silence.** That stop happens in a background process that only writes to
+   the server log, so nothing reports it.
+
+**PostgreSQL 18 closes the second and not the first.** It detects and names
+conflicts — `insert_exists`, `update_origin_differs`, `update_exists`,
+`update_missing`, `delete_origin_differs`, `delete_missing`,
+`multiple_unique_conflicts` — and counts them in `pg_stat_subscription_stats`,
+so a stopped worker becomes a named error and a queryable counter.
+`update_origin_differs` and `delete_origin_differs` only exist in a
+multi-origin topology and need `track_commit_timestamp` on the subscriber. It
+does **not** resolve anything: there is no `conflict_resolver` on
+`CREATE SUBSCRIPTION`, and a constraint violation still stops replication
+until someone fixes the data or runs `ALTER SUBSCRIPTION ... SKIP`. Issue #52.
+
+**This stack runs PostgreSQL 16** (`compose.yaml`), so here both still stand.
 
 A real policy would be a `syncTo` pair rejected unless the two sides'
 row filters can be shown to touch disjoint rows — `country = 'TR'` on one
@@ -71,6 +87,10 @@ proof gets designed against that real pair, not a hypothetical one.
 ## Consequences
 
 * `--status` exists because a dead apply worker and a quiet one look identical.
+  On PostgreSQL 18 `pg_stat_subscription_stats` counts conflicts by type, which
+  is a second, cheaper way to tell them apart — and it applies to the
+  one-directional rules this repository already runs, not only to a two-way
+  pair. Not available on the 16 this stack uses.
 * Bi-directional is unguarded, not merely unbuilt — see above. `--status` still
   tells a stopped worker from a quiet one either way, which is the one piece
   of this that has to work regardless of direction.
@@ -95,6 +115,11 @@ proof gets designed against that real pair, not a hypothetical one.
 * **PostgreSQL major version:** re-read the publication rules; row filters and
   column lists arrived in 15 and their interaction with replica identity is
   exactly what bit us. `tests/test_sync.py` pins all four preconditions.
+* **PostgreSQL 18:** conflicts become named and counted
+  (`pg_stat_subscription_stats`). Worth adding to `core/sync.py --status` the
+  day the stack moves to 18: it answers "is the worker stopped on a conflict"
+  directly instead of by inference. It does not make bi-directional safe — the
+  conflict policy is still missing, see above.
 * **A new engine:** add replication only if it already has its own. Do not
   write one.
 * Deleting a row from `sync_watermarks` re-snapshots that source, which is
