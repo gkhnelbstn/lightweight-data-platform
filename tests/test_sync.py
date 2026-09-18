@@ -285,6 +285,23 @@ def test_the_shipped_mssql_rule_still_holds_with_its_generated_column():
     assert problems(doc["schema"][0], rule, "sqlserver") == []
 
 
+def test_a_stated_precision_survives_translation():
+    """decimal(14,2) is a different type from a bare numeric, which accepts a
+    scale the source would reject. A string length is dropped on purpose --
+    every textual type becomes text. Issue #50."""
+    from core.sync import target_table_statement
+    model = {"name": "sales_orders", "physicalName": "sales_orders",
+             "properties": [
+                 {"name": "order_id", "physicalType": "bigint", "primaryKey": True},
+                 {"name": "net_amount", "physicalType": "decimal(14,2)"},
+                 {"name": "rate", "physicalType": "numeric(9, 4)"},
+                 {"name": "name", "physicalType": "nvarchar(200)"}]}
+    stmt = target_table_statement(model, "public", {}, "sqlserver").as_string()
+    assert '"net_amount" numeric(14,2)' in stmt
+    assert '"rate" numeric(9, 4)' in stmt
+    assert '"name" text,' in stmt or stmt.endswith('"name" text)')
+
+
 # --- authoring a rule that does not exist on disk yet -----------------------
 # The write path issue #10 asks for: the same four preconditions, run against
 # a proposed rule rather than one already saved. `unsound_identity` needs a
