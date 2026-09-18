@@ -191,6 +191,7 @@ def main() -> None:
     """
     import argparse
 
+    from core import two_way
     from core.runner import load_contracts
 
     ap = argparse.ArgumentParser(description="Validate declared column mappings.")
@@ -203,7 +204,7 @@ def main() -> None:
     by_id = {c["id"]: c for c in contracts}
     bad = 0
     for contract in contracts:
-        found = problems(contract, by_id)
+        found = problems(contract, by_id) + two_way.problems(contract, by_id)
         detailed = [m for m in declared(contract) if m.detailed]
         if not found and not detailed:
             continue
