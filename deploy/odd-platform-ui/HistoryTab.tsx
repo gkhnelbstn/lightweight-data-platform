@@ -9,7 +9,7 @@ import {
 } from 'components/shared/elements';
 import type { ChangedKey, Version, VersionedContract } from './api';
 import { getChangedKeys, getVersionedContracts, getVersions } from './api';
-import { readParam, writeParams } from './shared';
+import { Code, readParam, useT, writeParams } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -29,6 +29,7 @@ import * as S from './Contracts.styles';
  */
 
 export const HistoryTab: React.FC = () => {
+  const t = useT();
   const [contracts, setContracts] = useState<VersionedContract[] | null>(null);
   const [contractId, setContractId] = useState('');
   const [changed, setChanged] = useState<ChangedKey[] | null>(null);
@@ -82,17 +83,14 @@ export const HistoryTab: React.FC = () => {
   if (!contracts) {
     return (
       <Typography variant='body2' color='texts.secondary'>
-        Loading…
+        {t('Loading…')}
       </Typography>
     );
   }
   if (contracts.length === 0) {
     return (
       <Typography variant='body2' color='texts.secondary'>
-        No contract declares versions. A table keeps history here when its
-        contract has <code>valid_from</code>, <code>valid_to</code>,{' '}
-        <code>is_current</code> and a <code>versionedBy</code> property naming
-        the business key.
+        <Code k='No contract declares versions. A table keeps history here when its contract has <c>valid_from</c>, <c>valid_to</c>, <c>is_current</c> and a <c>versionedBy</c> property naming the business key.' />
       </Typography>
     );
   }
@@ -105,7 +103,7 @@ export const HistoryTab: React.FC = () => {
         {contracts.length > 1 && (
           <AppSelect
             id='history-contract'
-            label='Table'
+            label={t('Table')}
             value={contractId}
             onChange={e => {
               setContractId(e.target.value as string);
@@ -121,7 +119,7 @@ export const HistoryTab: React.FC = () => {
         )}
         <Input
           variant='search-lg'
-          placeholder={`Open one by ${contract?.key ?? 'key'}`}
+          placeholder={t('Open one by {{key}}', { key: contract?.key ?? t('key') })}
           value={key}
           onChange={e => open(e.target.value)}
           handleCleanUp={() => open('')}
@@ -130,7 +128,10 @@ export const HistoryTab: React.FC = () => {
 
       {contract?.unreachable ? (
         <Typography variant='body2' color='error.main'>
-          {contract.title} is not reachable: {contract.unreachable}
+          {t('{{title}} is not reachable: {{error}}', {
+            title: contract.title,
+            error: contract.unreachable,
+          })}
         </Typography>
       ) : (
         <Summary contract={contract} summary={summary} />
@@ -139,7 +140,7 @@ export const HistoryTab: React.FC = () => {
       {key && versions ? (
         <Versions versions={versions} contract={contract} keyValue={key} />
       ) : (
-        <Changed rows={changed} label={contract?.key ?? 'key'} onOpen={open} />
+        <Changed rows={changed} label={contract?.key ?? t('key')} onOpen={open} />
       )}
     </>
   );
@@ -149,23 +150,28 @@ const Summary: React.FC<{
   contract?: VersionedContract;
   summary: VersionedContract | null;
 }> = ({ contract, summary }) => {
+  const t = useT();
   if (!contract || !summary) return null;
   return (
     <S.Facts>
-      <LabeledInfoItem label='Versions' labelWidth={4}>
-        {summary.versions} rows for {summary.keys} {contract.key} values
+      <LabeledInfoItem label={t('Versions')} labelWidth={4}>
+        {t('{{versions}} rows for {{keys}} {{key}} values', {
+          versions: summary.versions,
+          keys: summary.keys,
+          key: contract.key,
+        })}
       </LabeledInfoItem>
-      <LabeledInfoItem label='Closed' labelWidth={4}>
+      <LabeledInfoItem label={t('Closed')} labelWidth={4}>
         {summary.closed === 0
-          ? 'none yet — the source has not changed since this table was built'
-          : `${summary.closed} versions the source has since overwritten`}
+          ? t('none yet — the source has not changed since this table was built')
+          : t('{{n}} versions the source has since overwritten', { n: summary.closed })}
       </LabeledInfoItem>
-      <LabeledInfoItem label='Oldest opens' labelWidth={4}>
+      <LabeledInfoItem label={t('Oldest opens')} labelWidth={4}>
         {summary.earliest}
         {summary.earliest?.startsWith('0001') &&
-          ' — the sentinel. We know this is the oldest version we have, not when it began.'}
+          ` — ${t('the sentinel. We know this is the oldest version we have, not when it began.')}`}
       </LabeledInfoItem>
-      <LabeledInfoItem label='Tracked columns' labelWidth={4}>
+      <LabeledInfoItem label={t('Tracked columns')} labelWidth={4}>
         {contract.attributes.join(', ')}
       </LabeledInfoItem>
     </S.Facts>
@@ -177,23 +183,25 @@ const Changed: React.FC<{
   label: string;
   onOpen: (key: string) => void;
 }> = ({ rows, label, onOpen }) => {
+  const t = useT();
   if (!rows) {
     return (
       <Typography variant='body2' color='texts.secondary'>
-        Loading…
+        {t('Loading…')}
       </Typography>
     );
   }
   return (
     <div>
       <Typography variant='subtitle2' color='texts.secondary'>
-        The ones that changed. A row still on its first version has no history
-        to show, so it is not listed.
+        {t('The ones that changed. A row still on its first version has no history to show, so it is not listed.')}
       </Typography>
       <EmptyContentPlaceholder
         isContentEmpty={rows.length === 0}
         fullPage={false}
-        text='Nothing has changed yet. demo/medallion.py --with-history re-grades a few customers and rebuilds, which is what gives this table something to keep.'
+        text={t(
+          'Nothing has changed yet. demo/medallion.py --with-history re-grades a few customers and rebuilds, which is what gives this table something to keep.'
+        )}
       />
       {rows.length > 0 && (
         <Table.HeaderContainer>
@@ -201,10 +209,10 @@ const Changed: React.FC<{
             <Typography variant='caption'>{label}</Typography>
           </Table.Cell>
           <Table.Cell $flex={1}>
-            <Typography variant='caption'>Versions</Typography>
+            <Typography variant='caption'>{t('Versions')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={2}>
-            <Typography variant='caption'>Last changed</Typography>
+            <Typography variant='caption'>{t('Last changed')}</Typography>
           </Table.Cell>
         </Table.HeaderContainer>
       )}
@@ -251,10 +259,15 @@ const Versions: React.FC<{
   contract?: VersionedContract;
   keyValue: string;
 }> = ({ versions, contract, keyValue }) => {
+  const t = useT();
   if (versions.length === 0) {
     return (
       <Typography variant='body2' color='texts.secondary'>
-        No {contract?.key ?? 'row'} {keyValue} in {contract?.table}.
+        {t('No {{key}} {{value}} in {{table}}.', {
+          key: contract?.key ?? t('row'),
+          value: keyValue,
+          table: contract?.table,
+        })}
       </Typography>
     );
   }
@@ -262,18 +275,19 @@ const Versions: React.FC<{
   return (
     <div>
       <Typography variant='h4'>
-        {contract?.key} {keyValue} · {versions.length} version
-        {versions.length === 1 ? '' : 's'}
+        {contract?.key} {keyValue} ·{' '}
+        {t(versions.length === 1 ? '{{n}} version' : '{{n}} versions', { n: versions.length })}
       </Typography>
       {versions.map(v => (
         <S.PropertyRow key={v.valid_from}>
           <S.Actions>
             <Typography variant='body1'>
-              {v.valid_from} → {v.valid_to ?? 'now'}
+              {v.valid_from} → {v.valid_to ?? t('now')}
             </Typography>
             <Typography variant='caption' color='texts.secondary'>
-              {v.is_current ? 'current' : 'closed'}
-              {v.changed.length > 0 && ` · changed: ${v.changed.join(', ')}`}
+              {v.is_current ? t('current') : t('closed')}
+              {v.changed.length > 0 &&
+                ` · ${t('changed: {{columns}}', { columns: v.changed.join(', ') })}`}
             </Typography>
           </S.Actions>
           <S.Facts>

@@ -7,7 +7,7 @@ import { ChecksTab } from './ChecksTab';
 import { ContractsTab } from './ContractsTab';
 import { HistoryTab } from './HistoryTab';
 import { Replication } from './Replication';
-import { readParam, showDashboard, writeParams } from './shared';
+import { readParam, showDashboard, useT, writeParams } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -42,9 +42,12 @@ import * as S from './Contracts.styles';
  * lives on. See docs/adr/0009-fork-odd-platform-ui.md for why it is a fork.
  */
 
+// English, because the name also goes into the URL (`dq_tab`) and a link has
+// to open the same tab in either language. Translated where it is shown.
 const TABS = ['Checks', 'Contracts', 'History', 'Replication', 'Platform overview'];
 
 export const Contracts: React.FC = () => {
+  const t = useT();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ruleTypes, setRuleTypes] = useState<RuleType[]>([]);
@@ -88,26 +91,26 @@ export const Contracts: React.FC = () => {
   if (error) {
     return (
       <Typography variant='body1' color='texts.secondary'>
-        Contract service unreachable: {error}
+        {t('Contract service unreachable: {{error}}', { error })}
       </Typography>
     );
   }
   if (!overview) {
     return (
       <Typography variant='body2' color='texts.secondary'>
-        Loading contract quality…
+        {t('Loading contract quality…')}
       </Typography>
     );
   }
 
   return (
     <S.Shell>
-      <Typography variant='h4'>Contract quality</Typography>
+      <Typography variant='h4'>{t('Contract quality')}</Typography>
       <AppTabs
         type='primary'
         selectedTab={tab}
         handleTabChange={changeTab}
-        items={TABS.map(name => ({ name }))}
+        items={TABS.map(name => ({ name: t(name) }))}
       />
 
       {tab === 0 && <ChecksTab contracts={overview.contracts} />}
@@ -118,9 +121,9 @@ export const Contracts: React.FC = () => {
       {tab === 3 && <Replication />}
       {tab === 4 && (
         <Typography variant='subtitle2' color='texts.secondary'>
-          This platform&apos;s own dashboard, below — table health, the test
-          results breakdown and the category table, counted from everything it
-          has ingested rather than from the contracts.
+          {t(
+            "This platform's own dashboard, below — table health, the test results breakdown and the category table, counted from everything it has ingested rather than from the contracts."
+          )}
         </Typography>
       )}
     </S.Shell>

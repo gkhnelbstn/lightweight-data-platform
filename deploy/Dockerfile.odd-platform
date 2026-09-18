@@ -53,7 +53,11 @@ COPY odd-platform-dq-panel.mjs /tmp/patch.mjs
 # in three lines and reported as odd-platform#1898 -- delete both this line
 # and the script when it merges (ADR 0011).
 COPY odd-platform-lineage-icon.mjs /tmp/lineage-icon.mjs
-RUN node /tmp/patch.mjs /src && node /tmp/lineage-icon.mjs /src
+# Turkish in ODD's own language picker, issue #44. Carried until upstream
+# ships a Turkish catalogue (ADR 0011); the script says what to delete.
+COPY odd-platform-tr.mjs /tmp/tr.mjs
+COPY odd-platform-locale-tr.json /src/odd-platform-ui/src/locales/translations/tr.json
+RUN node /tmp/patch.mjs /src && node /tmp/lineage-icon.mjs /src && node /tmp/tr.mjs /src
 WORKDIR /src/odd-platform-ui
 # pnpm is pinned rather than taken from corepack: the lockfile is version 9.0
 # and corepack hands out whatever is current, which rejects it under

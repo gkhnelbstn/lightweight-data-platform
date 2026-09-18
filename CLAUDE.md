@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 275 tests; the ones that need a database skip without one
+pytest -q                                                  # 278 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -152,6 +152,15 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   untouched. The patch is two anchors in `DataQualityContent.tsx` and it
   **fails the build** when they move — do not soften that into a warning, and
   do not vendor their file.
+* The UI's language is **ODD's own picker**, and Turkish is a carried patch
+  (`deploy/odd-platform-tr.mjs`, ADR 0011). The panel shares ODD's i18n
+  instance through `shared.tsx`'s `useT`, in its own `ldp` namespace, with
+  English phrases as keys -- English needs no catalogue, and a missing
+  Turkish key silently renders English, which is why
+  `tests/test_panel_i18n.py` exists. Contract text is never translated:
+  the rule form writes English descriptions into `*.odcs.yaml` (issue #44).
+  A dynamic key (`t(c.dimension)`) is outside that test; add its entry to
+  `deploy/odd-platform-ui/tr.json` by hand.
 * ODD reports an existing collector's token **masked**, so it cannot be read
   back. `odd-bootstrap.sh` reuses the token from the config it wrote last time
   and rotates only when there is no local copy — creating a collector whose

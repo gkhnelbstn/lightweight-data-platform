@@ -3,7 +3,7 @@ import { Typography } from '@mui/material';
 import { EmptyContentPlaceholder, Table } from 'components/shared/elements';
 import type { SyncRule } from './api';
 import { getSyncRules } from './api';
-import { when } from './shared';
+import { Code, tr, useT, when } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -16,6 +16,7 @@ import * as S from './Contracts.styles';
  * sides are here too, and what the last passes moved. Issue #28.
  */
 export const Replication: React.FC = () => {
+  const t = useT();
   const [rows, setRows] = useState<SyncRule[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
@@ -26,7 +27,7 @@ export const Replication: React.FC = () => {
   if (!rows) {
     return (
       <Typography variant='body2' color='texts.secondary'>
-        Loading replication rules…
+        {t('Loading replication rules…')}
       </Typography>
     );
   }
@@ -34,30 +35,29 @@ export const Replication: React.FC = () => {
   return (
     <>
       <Typography variant='subtitle2' color='texts.secondary'>
-        The contract says where its table is replicated to; the engine is the
-        database&apos;s own — logical replication on Postgres, CDC on SQL Server.
-        Nothing of ours sits in the stream. A rule is added on the contract&apos;s
-        own tab.
+        {t(
+          "The contract says where its table is replicated to; the engine is the database's own — logical replication on Postgres, CDC on SQL Server. Nothing of ours sits in the stream. A rule is added on the contract's own tab."
+        )}
       </Typography>
       <EmptyContentPlaceholder
         isContentEmpty={rows.length === 0}
         fullPage={false}
-        text='No contract declares a syncTo rule yet.'
+        text={t('No contract declares a syncTo rule yet.')}
       />
       {rows.length > 0 && (
         <div>
           <Table.HeaderContainer>
             <Table.Cell $flex={1.8}>
-              <Typography variant='caption'>Contract</Typography>
+              <Typography variant='caption'>{t('Contract')}</Typography>
             </Table.Cell>
             <Table.Cell $flex={1.6}>
-              <Typography variant='caption'>Rows arriving</Typography>
+              <Typography variant='caption'>{t('Rows arriving')}</Typography>
             </Table.Cell>
             <Table.Cell $flex={1.6}>
-              <Typography variant='caption'>Rule</Typography>
+              <Typography variant='caption'>{t('Rule')}</Typography>
             </Table.Cell>
             <Table.Cell $flex={1.8}>
-              <Typography variant='caption'>State</Typography>
+              <Typography variant='caption'>{t('State')}</Typography>
             </Table.Cell>
           </Table.HeaderContainer>
           {rows.map(r => (
@@ -93,9 +93,9 @@ export const Replication: React.FC = () => {
                 </Table.Cell>
                 <Table.Cell $flex={1.6}>
                   <div>
-                    <Typography variant='body2'>{r.rule.filter ?? 'everything'}</Typography>
+                    <Typography variant='body2'>{r.rule.filter ?? t('everything')}</Typography>
                     <Typography variant='caption' color='texts.secondary'>
-                      {columnList(r)} · identity {(r.identity ?? []).join(', ')}
+                      {columnList(r)} · {t('identity {{columns}}', { columns: (r.identity ?? []).join(', ') })}
                     </Typography>
                   </div>
                 </Table.Cell>
@@ -118,9 +118,9 @@ export const Replication: React.FC = () => {
  * the full list is in the contract. */
 const columnList = (rule: SyncRule) => {
   const columns = rule.rule.columns;
-  if (!columns) return 'all columns';
+  if (!columns) return tr('all columns');
   if (columns.length <= 3) return columns.join(', ');
-  return `${columns.slice(0, 3).join(', ')} +${columns.length - 3} more`;
+  return `${columns.slice(0, 3).join(', ')} ${tr('+{{n}} more', { n: columns.length - 3 })}`;
 };
 
 /**
@@ -131,12 +131,13 @@ const columnList = (rule: SyncRule) => {
  * the target is only news when there is no filter.
  */
 const Arriving: React.FC<{ rule: SyncRule }> = ({ rule }) => {
+  const t = useT();
   const a = rule.arriving;
   if (!a) return null;
   if (a.target_error) {
     return (
       <Typography variant='body2' color='error.main'>
-        target unreachable
+        {t('target unreachable')}
       </Typography>
     );
   }
@@ -145,16 +146,17 @@ const Arriving: React.FC<{ rule: SyncRule }> = ({ rule }) => {
   return (
     <div>
       <Typography variant='body1' color={short ? 'error.main' : 'texts.primary'}>
-        {a.target ?? '—'} of {a.source ?? '—'}
+        {t('{{target}} of {{source}}', { target: a.target ?? '—', source: a.source ?? '—' })}
       </Typography>
       <Typography variant='caption' color='texts.secondary'>
-        {a.filter ? 'rows, filtered' : 'rows, unfiltered'}
+        {a.filter ? t('rows, filtered') : t('rows, unfiltered')}
       </Typography>
     </div>
   );
 };
 
 const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
+  const t = useT();
   const status = rule.status ?? {};
   const isCdc = !!status.engine && status.engine !== 'logical replication';
   // A view target has no worker and no lag: it is the source, read through a
@@ -175,8 +177,10 @@ const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
           color={status.reachable ? 'success.main' : 'error.main'}
         >
           {status.reachable
-            ? 'reading through — no copy'
-            : `source unreachable — ${status.error ?? 'the view cannot be read'}`}
+            ? t('reading through — no copy')
+            : t('source unreachable — {{error}}', {
+                error: status.error ?? t('the view cannot be read'),
+              })}
         </Typography>
       ) : isCdc ? (
         <Typography
@@ -184,8 +188,8 @@ const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
           color={status.last_synced ? 'success.main' : 'texts.secondary'}
         >
           {status.last_synced
-            ? `read ${when(status.last_synced)}`
-            : 'never read — is core/sync_mssql.py running?'}
+            ? t('read {{when}}', { when: when(status.last_synced) })
+            : t('never read — is core/sync_mssql.py running?')}
         </Typography>
       ) : (
         <Typography
@@ -197,15 +201,17 @@ const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
           }
         >
           {streaming
-            ? `streaming · ${status.behind ?? ''} behind`
+            ? t('streaming · {{behind}} behind', { behind: status.behind ?? '' })
             : copying.length
-            ? `${copying.join(', ')} stuck in the initial copy`
-            : 'not applied'}
+            ? t('{{tables}} stuck in the initial copy', { tables: copying.join(', ') })
+            : t('not applied')}
         </Typography>
       )}
       {last?.applied_through && (
         <Typography variant='caption' color='texts.secondary' component='div'>
-          changes applied through {new Date(last.applied_through).toLocaleTimeString()}
+          {t('changes applied through {{time}}', {
+            time: new Date(last.applied_through).toLocaleTimeString(),
+          })}
         </Typography>
       )}
       {(rule.problems ?? []).map(p => (
@@ -220,28 +226,26 @@ const State: React.FC<{ rule: SyncRule }> = ({ rule }) => {
 /** The last passes, newest first. A run that moved nothing after a week of
  * moving hundreds is the shape worth seeing, which a total would hide. */
 const Runs: React.FC<{ rule: SyncRule }> = ({ rule }) => {
+  const t = useT();
   const runs = rule.runs ?? [];
   return (
     <S.Panel>
-      <Typography variant='h4'>Recent passes</Typography>
+      <Typography variant='h4'>{t('Recent passes')}</Typography>
       {runs.length === 0 ? (
         <Typography variant='body2' color='texts.secondary'>
-          Nothing recorded. Logical replication is the database&apos;s own apply
-          worker and keeps no per-pass count here — the row counts above are the
-          measurement for it. For CDC this fills in once{' '}
-          <code>core/sync_mssql.py</code> has run.
+          <Code k="Nothing recorded. Logical replication is the database's own apply worker and keeps no per-pass count here — the row counts above are the measurement for it. For CDC this fills in once <c>core/sync_mssql.py</c> has run." />
         </Typography>
       ) : (
         <S.Scroll>
           <S.Cells>
             <thead>
               <tr>
-                <th>Ran</th>
-                <th>Mode</th>
-                <th>Changes read</th>
-                <th>Upserted</th>
-                <th>Deleted</th>
-                <th>Applied through</th>
+                <th>{t('Ran')}</th>
+                <th>{t('Mode')}</th>
+                <th>{t('Changes read')}</th>
+                <th>{t('Upserted')}</th>
+                <th>{t('Deleted')}</th>
+                <th>{t('Applied through')}</th>
               </tr>
             </thead>
             <tbody>
@@ -264,10 +268,9 @@ const Runs: React.FC<{ rule: SyncRule }> = ({ rule }) => {
         </S.Scroll>
       )}
       <Typography variant='caption' color='texts.secondary'>
-        Changes read is CDC rows, which is more than rows moved: an update
-        arrives as a before image and an after image, and both are needed —
-        without the before image an update that changes an identity column
-        silently duplicates the row.
+        {t(
+          'Changes read is CDC rows, which is more than rows moved: an update arrives as a before image and an after image, and both are needed — without the before image an update that changes an identity column silently duplicates the row.'
+        )}
       </Typography>
     </S.Panel>
   );

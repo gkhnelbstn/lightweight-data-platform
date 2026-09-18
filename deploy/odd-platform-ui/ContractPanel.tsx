@@ -16,7 +16,7 @@ import type {
 } from './api';
 import { getContractAudit } from './api';
 import { RawSqlRule, RuleBuilder, SyncRuleForm } from './RuleForms';
-import { runStatus, when } from './shared';
+import { runStatus, useT, when } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -36,6 +36,7 @@ interface Props {
   onSaved: () => void;
 }
 
+// English keys into the panel's catalogue; translated where shown.
 const TABS = ['Schema', 'Checks', 'Add a rule', 'Replication', 'Changes'];
 
 export const ContractPanel: React.FC<Props> = ({
@@ -44,6 +45,7 @@ export const ContractPanel: React.FC<Props> = ({
   ruleTypes,
   onSaved,
 }) => {
+  const t = useT();
   const [tab, setTab] = useState(0);
   // AuditTrail only refetches on its own when `detail.contract.id` changes;
   // a save from any form here changes what it should show without changing
@@ -59,9 +61,11 @@ export const ContractPanel: React.FC<Props> = ({
       <div>
         <Typography variant='h4'>{detail.contract.title}</Typography>
         <Typography variant='caption' color='texts.secondary'>
-          {detail.contract.source_table} ({detail.contract.server_type}) ·{' '}
-          {detail.file} · {detail.properties.length} columns ·{' '}
-          {detail.checks.length} checks
+          {detail.contract.source_table} ({detail.contract.server_type}) · {detail.file} ·{' '}
+          {t('{{columns}} columns · {{checks}} checks', {
+            columns: detail.properties.length,
+            checks: detail.checks.length,
+          })}
         </Typography>
       </div>
 
@@ -69,7 +73,7 @@ export const ContractPanel: React.FC<Props> = ({
         type='secondary'
         selectedTab={tab}
         handleTabChange={setTab}
-        items={TABS.map(name => ({ name }))}
+        items={TABS.map(name => ({ name: t(name) }))}
       />
 
       {tab === 0 && (
@@ -100,9 +104,10 @@ const Definitions: React.FC<{
   properties: ContractProperty[];
   profile?: ColumnProfile[];
 }> = ({ properties, profile }) => {
+  const t = useT();
   const measured = new Map((profile ?? []).map(p => [p.column_name, p]));
   const flags = (p: ContractProperty) =>
-    [p.primaryKey && 'primary key', p.unique && 'unique', p.required && 'required']
+    [p.primaryKey && t('primary key'), p.unique && t('unique'), p.required && t('required')]
       .filter(Boolean)
       .join(' · ');
 
@@ -111,14 +116,15 @@ const Definitions: React.FC<{
       <EmptyContentPlaceholder
         isContentEmpty={properties.length === 0}
         fullPage={false}
-        text='This contract declares no columns.'
+        text={t('This contract declares no columns.')}
       />
       {properties.map(p => (
         <S.PropertyRow key={p.name}>
           <LabeledInfoItem label={p.name} labelWidth={3}>
             {p.logicalType ?? p.physicalType ?? '—'}
             {flags(p) && ` · ${flags(p)}`}
-            {p.classification && ` · classified: ${p.classification}`}
+            {p.classification &&
+              ` · ${t('classified: {{as}}', { as: p.classification })}`}
           </LabeledInfoItem>
           {p.description && (
             <Typography variant='caption' color='texts.secondary'>
@@ -141,6 +147,7 @@ const Definitions: React.FC<{
  * so. Of the day's window, not the whole table -- see core/profile.py.
  */
 const Profile: React.FC<{ row?: ColumnProfile }> = ({ row }) => {
+  const t = useT();
   if (!row || row.rows === 0) return null;
   const pct = (n: number, of: number) => `${((n / of) * 100).toFixed(1)}%`;
   // A fraction, not a count: yesterday's window is a different size, so "4
@@ -152,18 +159,20 @@ const Profile: React.FC<{ row?: ColumnProfile }> = ({ row }) => {
 
   return (
     <Typography variant='caption' color='texts.secondary' component='div'>
-      {row.rows} rows ·{' '}
+      {t('{{n}} rows', { n: row.rows })} ·{' '}
       <Typography
         variant='caption'
         component='span'
         color={row.nulls > 0 ? 'warning.main' : 'texts.secondary'}
       >
-        {row.nulls} null ({pct(row.nulls, row.rows)})
+        {t('{{n}} null ({{pct}})', { n: row.nulls, pct: pct(row.nulls, row.rows) })}
       </Typography>
-      {rising && before !== null && ` ↑ from ${(before * 100).toFixed(1)}%`}
+      {rising &&
+        before !== null &&
+        ` ${t('↑ from {{pct}}', { pct: `${(before * 100).toFixed(1)}%` })}`}
       {' · '}
-      {row.distinct_count} distinct
-      {row.distinct_count === row.rows && ' — every row'}
+      {t('{{n}} distinct', { n: row.distinct_count })}
+      {row.distinct_count === row.rows && ` — ${t('every row')}`}
     </Typography>
   );
 };
@@ -172,35 +181,40 @@ const Profile: React.FC<{ row?: ColumnProfile }> = ({ row }) => {
  * each one last found. The full detail (SQL, every run, the failing rows)
  * is on the Checks tab, which is the same check under a stable id. */
 const ContractChecks: React.FC<{ detail: ContractDetail }> = ({ detail }) => {
+  const t = useT();
   const runsOf = (checkId: string) => detail.history.filter(h => h.check_id === checkId);
 
   return (
     <div>
       <Typography variant='subtitle2' color='texts.secondary'>
-        Derived from the schema above, plus {detail.rules.length} rule
-        {detail.rules.length === 1 ? '' : 's'} written into the contract.
+        {t(
+          detail.rules.length === 1
+            ? 'Derived from the schema above, plus {{n}} rule written into the contract.'
+            : 'Derived from the schema above, plus {{n}} rules written into the contract.',
+          { n: detail.rules.length }
+        )}
       </Typography>
       <EmptyContentPlaceholder
         isContentEmpty={detail.checks.length === 0}
         fullPage={false}
-        text='No checks recorded for this contract yet.'
+        text={t('No checks recorded for this contract yet.')}
       />
       {detail.checks.length > 0 && (
         <Table.HeaderContainer>
           <Table.Cell $flex={0.5}>
-            <Typography variant='caption'>Result</Typography>
+            <Typography variant='caption'>{t('Result')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={3}>
-            <Typography variant='caption'>Check</Typography>
+            <Typography variant='caption'>{t('Check')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={1}>
-            <Typography variant='caption'>Column</Typography>
+            <Typography variant='caption'>{t('Column')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={1}>
-            <Typography variant='caption'>Last run</Typography>
+            <Typography variant='caption'>{t('Last run')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={1} $justifyContent='flex-end'>
-            <Typography variant='caption'>Runs passed</Typography>
+            <Typography variant='caption'>{t('Runs passed')}</Typography>
           </Table.Cell>
         </Table.HeaderContainer>
       )}
@@ -246,13 +260,16 @@ const ContractChecks: React.FC<{ detail: ContractDetail }> = ({ detail }) => {
 };
 
 const AddRule: React.FC<Props> = ({ detail, dimensions, ruleTypes, onSaved }) => {
+  const t = useT();
   const [mode, setMode] = useState(0);
 
   return (
     <>
       <Typography variant='subtitle2' color='texts.secondary'>
-        Saved as an ODCS quality entry in {detail.file}, then re-run. The
-        contract stays the source of truth; this is an editor for it.
+        {t(
+          'Saved as an ODCS quality entry in {{file}}, then re-run. The contract stays the source of truth; this is an editor for it.',
+          { file: detail.file }
+        )}
       </Typography>
       {/* A tab, not a small link -- the SQL escape hatch existed before and
           was easy to miss because "Write SQL instead" was the only clue it
@@ -261,7 +278,7 @@ const AddRule: React.FC<Props> = ({ detail, dimensions, ruleTypes, onSaved }) =>
         type='secondary'
         selectedTab={mode}
         handleTabChange={setMode}
-        items={[{ name: 'Form' }, { name: 'Write SQL' }]}
+        items={[{ name: t('Form') }, { name: t('Write SQL') }]}
       />
       {mode === 1 ? (
         <RawSqlRule detail={detail} dimensions={dimensions} onSaved={onSaved} />
@@ -276,13 +293,13 @@ const AddRule: React.FC<Props> = ({ detail, dimensions, ruleTypes, onSaved }) =>
 
       {detail.rules.length > 0 && (
         <div>
-          <Typography variant='h4'>Rules already written for this contract</Typography>
+          <Typography variant='h4'>{t('Rules already written for this contract')}</Typography>
           {detail.rules.map(rule => (
             <div key={rule.description}>
               <Typography variant='body1'>
                 {rule.description}{' '}
                 <Typography variant='caption' color='texts.secondary'>
-                  {rule.dimension}
+                  {rule.dimension && t(rule.dimension)}
                 </Typography>
               </Typography>
               <S.Sql>{rule.query}</S.Sql>
@@ -300,6 +317,7 @@ const AddRule: React.FC<Props> = ({ detail, dimensions, ruleTypes, onSaved }) =>
  * contract_audit rather than pretending to know a person made the change.
  */
 const AuditTrail: React.FC<{ contractId: string }> = ({ contractId }) => {
+  const t = useT();
   const [entries, setEntries] = useState<AuditEntry[] | null>(null);
 
   useEffect(() => {
@@ -314,12 +332,12 @@ const AuditTrail: React.FC<{ contractId: string }> = ({ contractId }) => {
       <EmptyContentPlaceholder
         isContentEmpty={!!entries && entries.length === 0}
         fullPage={false}
-        text='Nothing has changed about this contract since the audit trail existed.'
+        text={t('Nothing has changed about this contract since the audit trail existed.')}
       />
       {(entries ?? []).slice(0, 20).map((e, i) => (
         // eslint-disable-next-line react/no-array-index-key
         <Typography key={i} variant='caption' color='texts.secondary' component='div'>
-          {e.run_at} · {e.action} {e.change_type.replace('_', ' ')} &quot;{e.description}
+          {e.run_at} · {t(e.action)} {t(e.change_type.replace('_', ' '))} &quot;{e.description}
           &quot;{e.caller_label ? ` — ${e.caller_label}` : ''}
         </Typography>
       ))}

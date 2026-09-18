@@ -4,7 +4,7 @@ import { Button, LabeledInfoItem, TestRunStatusItem } from 'components/shared/el
 import type { CheckRow, CheckRun, ContractSummary, Sample } from './api';
 import { getCheckHistory, getSample } from './api';
 import { CheckStatusForm } from './CheckStatus';
-import { Rows, runStatus, when } from './shared';
+import { Rows, runStatus, useT, when } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -21,6 +21,7 @@ import * as S from './Contracts.styles';
  * where.
  */
 
+// English keys into the panel's catalogue; translated where shown.
 const KINDS: Record<string, string> = {
   field_is_present: 'the column exists in the source',
   field_physical_type: 'the column has the type the contract declares',
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export const CheckDetail: React.FC<Props> = ({ check, contract, onStatusSaved }) => {
+  const t = useT();
   const [history, setHistory] = useState<CheckRun[] | null>(null);
   const [sample, setSample] = useState<Sample | string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -74,37 +76,41 @@ export const CheckDetail: React.FC<Props> = ({ check, contract, onStatusSaved })
 
       {check.stale && (
         <Typography variant='body2' color='texts.secondary'>
-          This check is no longer in the contract. Its results are kept — a
-          deleted rule does not delete the history it produced — but it will not
-          run again.
+          {t(
+            'This check is no longer in the contract. Its results are kept — a deleted rule does not delete the history it produced — but it will not run again.'
+          )}
         </Typography>
       )}
 
       <S.Facts>
-        <LabeledInfoItem label='What it checks' labelWidth={4}>
-          {kind ?? check.check_type ?? 'custom SQL from the contract'}
+        <LabeledInfoItem label={t('What it checks')} labelWidth={4}>
+          {kind ? t(kind) : check.check_type ?? t('custom SQL from the contract')}
         </LabeledInfoItem>
-        <LabeledInfoItem label='Where' labelWidth={4}>
+        <LabeledInfoItem label={t('Where')} labelWidth={4}>
           {contract?.source_table ?? check.contract_id}
           {check.field ? ` · ${check.field}` : ''}
           {contract?.server_type ? ` (${contract.server_type})` : ''}
         </LabeledInfoItem>
-        <LabeledInfoItem label='Dimension' labelWidth={4}>
-          {check.dimension} — this is the weight it carries in the score
+        <LabeledInfoItem label={t('Dimension')} labelWidth={4}>
+          {t('{{dimension}} — this is the weight it carries in the score', {
+            dimension: t(check.dimension),
+          })}
         </LabeledInfoItem>
-        <LabeledInfoItem label='Last run' labelWidth={4}>
+        <LabeledInfoItem label={t('Last run')} labelWidth={4}>
           {when(check.run_at)} · {check.run_at}
         </LabeledInfoItem>
-        <LabeledInfoItem label='Result' labelWidth={4}>
-          {check.status} · {check.failed_rows} failing
-          {check.total_rows ? ` of ${check.total_rows} rows in the day's window` : ''}
+        <LabeledInfoItem label={t('Result')} labelWidth={4}>
+          {t('{{status}} · {{n}} failing', { status: t(check.status), n: check.failed_rows })}
+          {check.total_rows
+            ? ` ${t("of {{total}} rows in the day's window", { total: check.total_rows })}`
+            : ''}
         </LabeledInfoItem>
         {check.reason && (
-          <LabeledInfoItem label='Reason' labelWidth={4}>
+          <LabeledInfoItem label={t('Reason')} labelWidth={4}>
             {check.reason}
           </LabeledInfoItem>
         )}
-        <LabeledInfoItem label='Check id' labelWidth={4}>
+        <LabeledInfoItem label={t('Check id')} labelWidth={4}>
           {check.check_id}
         </LabeledInfoItem>
       </S.Facts>
@@ -117,8 +123,8 @@ export const CheckDetail: React.FC<Props> = ({ check, contract, onStatusSaved })
                 ("column 'country' exists in customer"), and calling that SQL
                 would be a label that lies. */}
             {/^\s*(select|with)\b/i.test(check.sql)
-              ? 'SQL, as the engine ran it'
-              : 'What the engine asserted'}
+              ? t('SQL, as the engine ran it')
+              : t('What the engine asserted')}
           </Typography>
           <S.Sql>{check.sql}</S.Sql>
         </div>
@@ -131,7 +137,7 @@ export const CheckDetail: React.FC<Props> = ({ check, contract, onStatusSaved })
       <S.Actions>
         <Button
           buttonType='secondary-m'
-          text={sample ? 'Hide failing rows' : 'Show failing rows'}
+          text={sample ? t('Hide failing rows') : t('Show failing rows')}
           isLoading={busy}
           onClick={showRows}
         />
@@ -150,19 +156,24 @@ export const CheckDetail: React.FC<Props> = ({ check, contract, onStatusSaved })
  * 4), so each square is one day's verdict and a streak is readable at a
  * glance -- which a cumulative number would hide. */
 const History: React.FC<{ runs: CheckRun[] | null }> = ({ runs }) => {
+  const t = useT();
   if (!runs || runs.length === 0) return null;
   const passed = runs.filter(r => r.status === 'pass').length;
   return (
     <div>
       <Typography variant='caption' color='texts.secondary'>
-        {passed} of {runs.length} runs passed
+        {t('{{passed}} of {{total}} runs passed', { passed, total: runs.length })}
       </Typography>
       {/* Decorative: the line above is the accessible summary, and the
           per-day detail is in the title tooltips, mouse-only. Same choice as
           the score sparkline on the Contracts tab. */}
       <S.Runs aria-hidden='true'>
         {runs.map(r => (
-          <S.Run key={r.run_at} $status={r.status} title={`${r.run_at}: ${r.status}, ${r.failed_rows} failing`} />
+          <S.Run key={r.run_at} $status={r.status} title={t('{{at}}: {{status}}, {{n}} failing', {
+              at: r.run_at,
+              status: t(r.status),
+              n: r.failed_rows,
+            })} />
         ))}
       </S.Runs>
     </div>

@@ -5,7 +5,7 @@ import { DataEntityRunStatus } from 'generated-sources';
 import type { ContractDetail, Overview, RuleType } from './api';
 import { getContract } from './api';
 import { ContractPanel } from './ContractPanel';
-import { fmt, readParam, writeParams } from './shared';
+import { fmt, readParam, useT, writeParams } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -25,6 +25,7 @@ interface Props {
 type SortKey = 'title' | 'score' | 'tests';
 
 export const ContractsTab: React.FC<Props> = ({ overview, ruleTypes, onSaved }) => {
+  const t = useT();
   const [selected, setSelected] = useState<string | null>(() => readParam('contract'));
   const [detail, setDetail] = useState<ContractDetail | null>(null);
   const [filterText, setFilterText] = useState('');
@@ -113,31 +114,36 @@ export const ContractsTab: React.FC<Props> = ({ overview, ruleTypes, onSaved }) 
       <S.Actions>
         <Input
           variant='search-lg'
-          placeholder='Filter by name, id or source table'
+          placeholder={t('Filter by name, id or source table')}
           value={filterText}
           onChange={e => setFilterText(e.target.value)}
           handleCleanUp={() => setFilterText('')}
         />
       </S.Actions>
       <Typography variant='subtitle2' color='texts.secondary'>
-        Select a contract for its schema, its checks, and the forms that add a
-        rule to it.
-        {filterText && ` Showing ${visibleContracts.length} of ${overview.contracts.length}.`}
+        {t('Select a contract for its schema, its checks, and the forms that add a rule to it.')}
+        {filterText &&
+          ` ${t('Showing {{visible}} of {{total}}.', {
+            visible: visibleContracts.length,
+            total: overview.contracts.length,
+          })}`}
       </Typography>
 
       <div>
         <Table.HeaderContainer>
           <Table.Cell $flex={2.2}>
             <S.SortableHeader onClick={() => toggleSort('title')}>
-              Contract{arrow('title')}
+              {t('Contract')}
+              {arrow('title')}
             </S.SortableHeader>
           </Table.Cell>
           <Table.Cell $flex={1.6}>
-            <Typography variant='caption'>Source</Typography>
+            <Typography variant='caption'>{t('Source')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={0.8} $justifyContent='flex-end'>
             <S.SortableHeader onClick={() => toggleSort('score')}>
-              Score{arrow('score')}
+              {t('Score')}
+              {arrow('score')}
             </S.SortableHeader>
           </Table.Cell>
           <Table.Cell $flex={0.8} $justifyContent='flex-end'>
@@ -145,13 +151,14 @@ export const ContractsTab: React.FC<Props> = ({ overview, ruleTypes, onSaved }) 
           </Table.Cell>
           <Table.Cell $flex={1.8}>
             <S.SortableHeader onClick={() => toggleSort('tests')}>
-              Tests{arrow('tests')}
+              {t('Tests')}
+              {arrow('tests')}
             </S.SortableHeader>
           </Table.Cell>
         </Table.HeaderContainer>
         {visibleContracts.length === 0 && (
           <Typography variant='body2' color='texts.secondary' sx={{ py: 2 }}>
-            No contract matches &quot;{filterText}&quot;.
+            {t('No contract matches "{{text}}".', { text: filterText })}
           </Typography>
         )}
         {visibleContracts.map(c => (
@@ -266,6 +273,7 @@ export const ContractsTab: React.FC<Props> = ({ overview, ruleTypes, onSaved }) 
 const Trend: React.FC<{ points: { run_at: string; score: string | number }[] }> = ({
   points,
 }) => {
+  const t = useT();
   if (points.length < 2) return null;
   const w = 420;
   const h = 72;
@@ -282,7 +290,7 @@ const Trend: React.FC<{ points: { run_at: string; score: string | number }[] }> 
       <div>
         <Typography variant='h1'>{last.toFixed(3)}</Typography>
         <Typography variant='caption' color='texts.secondary'>
-          {points.length} days · dimension-weighted
+          {t('{{n}} days · dimension-weighted', { n: points.length })}
         </Typography>
       </div>
       {/* Decorative: the number and day count beside it already say what this
