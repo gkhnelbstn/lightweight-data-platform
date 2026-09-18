@@ -3,6 +3,7 @@ import { MenuItem, Typography } from '@mui/material';
 import { AppSelect, Button, Input } from 'components/shared/elements';
 import type { CheckRow } from './api';
 import { setCheckStatus } from './api';
+import { useT } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -24,6 +25,7 @@ import * as S from './Contracts.styles';
  * stops being a measurement.
  */
 
+// English keys into the panel's catalogue; translated where shown.
 const STATES: { value: CheckRow['state']; label: string; help: string }[] = [
   { value: 'open', label: 'Open', help: 'Nobody has looked at this yet.' },
   {
@@ -45,6 +47,7 @@ interface Props {
 }
 
 export const CheckStatusForm: React.FC<Props> = ({ check, onSaved }) => {
+  const t = useT();
   const [state, setState] = useState<CheckRow['state']>(check.state);
   const [note, setNote] = useState(check.note ?? '');
   const [busy, setBusy] = useState(false);
@@ -75,35 +78,39 @@ export const CheckStatusForm: React.FC<Props> = ({ check, onSaved }) => {
 
   return (
     <div>
-      <Typography variant='h4'>Status</Typography>
+      <Typography variant='h4'>{t('Status')}</Typography>
       {check.state !== 'open' && check.noted_at && (
         <Typography variant='caption' color='texts.secondary' component='div'>
-          {check.state} on {new Date(check.noted_at).toLocaleString()}
-          {check.noted_run_at && ` · about the ${check.noted_run_at} run`}
+          {t('{{state}} on {{date}}', {
+            state: t(check.state),
+            date: new Date(check.noted_at).toLocaleString(),
+          })}
+          {check.noted_run_at &&
+            ` · ${t('about the {{run}} run', { run: check.noted_run_at })}`}
         </Typography>
       )}
       <S.Actions>
         <AppSelect
           id={`state-${check.check_id}`}
-          label='State'
+          label={t('State')}
           value={state}
           onChange={e => setState(e.target.value as CheckRow['state'])}
         >
           {STATES.map(s => (
             <MenuItem key={s.value} value={s.value}>
-              {s.label}
+              {t(s.label)}
             </MenuItem>
           ))}
         </AppSelect>
         <Input
           variant='main-m'
-          label='Note — what is known about it, for whoever opens this next'
+          label={t('Note — what is known about it, for whoever opens this next')}
           value={note}
           onChange={e => setNote(e.target.value)}
         />
         <Button
           buttonType='main-m'
-          text='Save'
+          text={t('Save')}
           disabled={!dirty}
           isLoading={busy}
           onClick={save}
@@ -111,7 +118,7 @@ export const CheckStatusForm: React.FC<Props> = ({ check, onSaved }) => {
       </S.Actions>
       {help && (
         <Typography variant='caption' color='texts.secondary'>
-          {help}
+          {t(help)}
         </Typography>
       )}
       {error && (

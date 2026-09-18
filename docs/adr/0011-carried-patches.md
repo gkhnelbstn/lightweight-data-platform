@@ -52,6 +52,34 @@ Reported as
 upstream** — tracked in
 [#19](https://github.com/gkhnelbstn/lightweight-data-platform/issues/19).
 
+### `deploy/odd-platform-tr.mjs` — Turkish in ODD's language picker
+
+ODD already switches language, through a picker that lists `LANGUAGES_MAP`
+and an `i18n.ts` that loads one catalogue per entry. It has no Turkish. The
+panel lives in the same i18n instance, so adding Turkish *there* changes the
+whole page, ODD's screens as well as ours. A switch of our own would have left
+half the screen in the other language, which is what issue #44 set out to end.
+
+The patch has three anchored lines:
+
+* `i18n.ts`: the import and the `resources` entry;
+* `constants.ts`: `LANGUAGES_MAP` and `LANG_TO_COUNTRY_CODE_MAP`.
+
+The `Lang` type is derived from the map, so it needs no change. There is also
+one file, `deploy/odd-platform-locale-tr.json`, which has all 739 of ODD's
+keys. The registration has to be upstream's: `i18n.ts` rejects a stored
+language that is not in its `resources`, so Turkish added later from the
+panel would not survive a reload.
+
+The panel's own words are a separate catalogue in a separate namespace,
+`deploy/odd-platform-ui/tr.json`, which is ours to keep. Nothing in it goes
+upstream. `tests/test_panel_i18n.py` fails when a literal key has no Turkish
+entry, because i18next falls back to English silently.
+
+**Delete the script, `odd-platform-locale-tr.json` and the Dockerfile lines
+that use them when ODD ships a Turkish catalogue.** Offered upstream so it
+can.
+
 ### Worked around without a patch
 
 odd-collector's `mssql` adapter enumerates every `BASE TABLE` it can see and

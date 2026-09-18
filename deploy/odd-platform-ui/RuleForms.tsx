@@ -17,6 +17,7 @@ import {
   saveStructured,
   saveSyncRule,
 } from './api';
+import { Code, useT } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -52,6 +53,7 @@ export const RuleBuilder: React.FC<RuleFormProps> = ({
   ruleTypes,
   onSaved,
 }) => {
+  const t = useT();
   const columns = detail.properties.map(p => p.name);
   const [column, setColumn] = useState(columns[0] ?? '');
   const [kind, setKind] = useState(ruleTypes[0]?.kind ?? '');
@@ -109,7 +111,7 @@ export const RuleBuilder: React.FC<RuleFormProps> = ({
   return (
     <>
       <S.Actions>
-        <AppSelect id='rule-column' label='Column' value={column} onChange={e => setColumn(e.target.value as string)}>
+        <AppSelect id='rule-column' label={t('Column')} value={column} onChange={e => setColumn(e.target.value as string)}>
           {columns.map(c => (
             <MenuItem key={c} value={c}>
               {c}
@@ -118,7 +120,7 @@ export const RuleBuilder: React.FC<RuleFormProps> = ({
         </AppSelect>
         <AppSelect
           id='rule-kind'
-          label='Rule'
+          label={t('Rule')}
           value={kind}
           onChange={e => {
             setKind(e.target.value as string);
@@ -128,20 +130,24 @@ export const RuleBuilder: React.FC<RuleFormProps> = ({
         >
           {ruleTypes.map(r => (
             <MenuItem key={r.kind} value={r.kind}>
-              {r.label}
+              {t(r.label)}
             </MenuItem>
           ))}
         </AppSelect>
         <AppSelect
           id='rule-dimension'
-          label='Dimension — weights the score'
+          label={t('Dimension — weights the score')}
           value={dimension}
           onChange={e => setDimension(e.target.value as string)}
         >
-          <MenuItem value=''>default ({selected?.dimension ?? '—'})</MenuItem>
+          <MenuItem value=''>
+            {t('default ({{dimension}})', {
+              dimension: selected ? t(selected.dimension) : '—',
+            })}
+          </MenuItem>
           {dimensions.map(d => (
             <MenuItem key={d} value={d}>
-              {d}
+              {t(d)}
             </MenuItem>
           ))}
         </AppSelect>
@@ -152,7 +158,7 @@ export const RuleBuilder: React.FC<RuleFormProps> = ({
           key={p.name}
           variant='main-m'
           type={p.type === 'number' ? 'number' : 'text'}
-          label={p.label}
+          label={t(p.label)}
           value={params[p.name] ?? ''}
           onChange={e => setParams({ ...params, [p.name]: e.target.value })}
         />
@@ -161,13 +167,13 @@ export const RuleBuilder: React.FC<RuleFormProps> = ({
       <S.Actions>
         <Button
           buttonType='secondary-m'
-          text='Preview'
+          text={t('Preview')}
           isLoading={busy}
           onClick={() => run(false)}
         />
         <Button
           buttonType='main-m'
-          text='Save and run'
+          text={t('Save and run')}
           isLoading={busy}
           onClick={() => run(true)}
         />
@@ -183,6 +189,7 @@ export const RawSqlRule: React.FC<Omit<RuleFormProps, 'ruleTypes'>> = ({
   dimensions,
   onSaved,
 }) => {
+  const t = useT();
   const [draft, setDraft] = useState<RuleDraft>({
     contract_id: detail.contract.id,
     description: '',
@@ -223,29 +230,29 @@ export const RawSqlRule: React.FC<Omit<RuleFormProps, 'ruleTypes'>> = ({
     <>
       <Input
         variant='main-m'
-        label='Description — becomes the test name'
+        label={t('Description — becomes the test name')}
         value={draft.description}
         onChange={e => setDraft({ ...draft, description: e.target.value })}
       />
       <S.Actions>
         <AppSelect
           id='raw-dimension'
-          label='Dimension — weights the score'
+          label={t('Dimension — weights the score')}
           value={draft.dimension}
           onChange={e => setDraft({ ...draft, dimension: e.target.value as string })}
         >
           {dimensions.map(d => (
             <MenuItem key={d} value={d}>
-              {d}
+              {t(d)}
             </MenuItem>
           ))}
         </AppSelect>
       </S.Actions>
       <div>
         <Typography variant='caption' color='texts.secondary'>
-          SQL — must return one number, the count of bad rows. Do not pin the
-          day&apos;s window yourself, and on Postgres do not qualify the schema:
-          the runner points the query at the window view.
+          {t(
+            "SQL — must return one number, the count of bad rows. Do not pin the day's window yourself, and on Postgres do not qualify the schema: the runner points the query at the window view."
+          )}
         </Typography>
         <S.Textarea
           value={draft.query}
@@ -255,20 +262,20 @@ export const RawSqlRule: React.FC<Omit<RuleFormProps, 'ruleTypes'>> = ({
       <Input
         variant='main-m'
         type='password'
-        label='API token — only this route needs one, and the service prints it at startup'
+        label={t('API token — only this route needs one, and the service prints it at startup')}
         value={token}
         onChange={e => setToken(e.target.value)}
       />
       <S.Actions>
         <Button
           buttonType='secondary-m'
-          text='Preview'
+          text={t('Preview')}
           isLoading={busy}
           onClick={() => run(false)}
         />
         <Button
           buttonType='main-m'
-          text='Save and run'
+          text={t('Save and run')}
           isLoading={busy}
           onClick={() => run(true)}
         />
@@ -288,6 +295,7 @@ export const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => voi
   detail,
   onSaved,
 }) => {
+  const t = useT();
   // The source and the daily-window schema are already excluded server-side
   // -- see GET /api/contracts/{id} -- neither is a sensible replication
   // target even though nothing here would catch it as unsound.
@@ -326,26 +334,24 @@ export const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => voi
   return (
     <>
       <Typography variant='subtitle2' color='texts.secondary'>
-        Written as this contract&apos;s own <code>syncTo</code> custom property, then
-        checked against ADR 0008&apos;s four preconditions before it is saved --
-        rejected with the specific reason if it would not actually replicate.
+        <Code k="Written as this contract's own <c>syncTo</c> custom property, then checked against ADR 0008's four preconditions before it is saved -- rejected with the specific reason if it would not actually replicate." />
       </Typography>
       <S.Actions>
         <AppSelect
           id='sync-target'
-          label='Target server'
+          label={t('Target server')}
           value={server}
           onChange={e => setServer(e.target.value as string)}
         >
-          {targets.map(t => (
-            <MenuItem key={t.server} value={t.server}>
-              {t.server} ({t.type})
+          {targets.map(target => (
+            <MenuItem key={target.server} value={target.server}>
+              {target.server} ({target.type})
             </MenuItem>
           ))}
         </AppSelect>
         <Input
           variant='main-m'
-          label="Row filter — optional, e.g. country = 'TR'"
+          label={t("Row filter — optional, e.g. country = 'TR'")}
           value={filter}
           onChange={e => setFilter(e.target.value)}
         />
@@ -353,13 +359,13 @@ export const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => voi
       <S.Actions>
         <Input
           variant='main-m'
-          label='Columns — optional, comma separated; empty replicates all'
+          label={t('Columns — optional, comma separated; empty replicates all')}
           value={columns}
           onChange={e => setColumns(e.target.value)}
         />
         <Input
           variant='main-m'
-          label='Widen identity — optional, only if the filter needs it'
+          label={t('Widen identity — optional, only if the filter needs it')}
           value={identity}
           onChange={e => setIdentity(e.target.value)}
         />
@@ -367,11 +373,11 @@ export const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => voi
       <Input
         variant='main-m'
         type='password'
-        label='API token — the service prints it at startup'
+        label={t('API token — the service prints it at startup')}
         value={token}
         onChange={e => setToken(e.target.value)}
       />
-      <Button buttonType='main-m' text='Save' isLoading={busy} onClick={save} />
+      <Button buttonType='main-m' text={t('Save')} isLoading={busy} onClick={save} />
       {result &&
         (typeof result === 'string' ? (
           <Typography variant='body2' color='error.main'>
@@ -379,7 +385,10 @@ export const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => voi
           </Typography>
         ) : (
           <Typography variant='body2' color='success.main'>
-            Saved. {result.rule.filter ?? 'Replicates everything'} to {result.rule.server}.
+            {t('Saved. {{what}} to {{server}}.', {
+              what: result.rule.filter ?? t('Replicates everything'),
+              server: result.rule.server,
+            })}
           </Typography>
         ))}
     </>
@@ -389,6 +398,7 @@ export const SyncRuleForm: React.FC<{ detail: ContractDetail; onSaved: () => voi
 export const PreviewResultView: React.FC<{
   preview: PreviewShape | string | null;
 }> = ({ preview }) => {
+  const t = useT();
   if (!preview) return null;
   if (typeof preview === 'string') {
     return (
@@ -407,8 +417,11 @@ export const PreviewResultView: React.FC<{
         color={preview.ok ? 'success.main' : 'error.main'}
       >
         {preview.ok
-          ? `compiled · result ${preview.result} · failing rows ${preview.failed_rows ?? '—'}`
-          : (preview.error ?? preview.reason ?? 'the rule did not compile')}
+          ? t('compiled · result {{result}} · failing rows {{n}}', {
+              result: preview.result,
+              n: preview.failed_rows ?? '—',
+            })
+          : (preview.error ?? preview.reason ?? t('the rule did not compile'))}
       </Typography>
       {(preview.compiled_sql ?? preview.query) && (
         <S.Sql>{preview.compiled_sql ?? preview.query}</S.Sql>

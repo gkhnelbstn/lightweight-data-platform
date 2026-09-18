@@ -1,10 +1,47 @@
 import React from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Typography } from '@mui/material';
 import { DataEntityRunStatus } from 'generated-sources';
+import i18n from 'locales/i18n';
+import turkish from './tr.json';
 import type { Sample } from './api';
 import * as S from './Contracts.styles';
 
 /** The few things every tab in this panel needs. */
+
+/**
+ * The panel's words, in ODD's own i18n instance and its own namespace.
+ *
+ * ODD's language picker switches this panel too, because it is the same
+ * instance (issue #44). The namespace is ours so that a phrase both of us use,
+ * such as 'All' or 'Result', never changes their wording or ours. Keys are the
+ * English phrases, which is upstream's convention, so English needs no
+ * catalogue: a key with no translation renders as itself. Imported from
+ * `locales/i18n` rather than `i18next` so the instance is initialised before
+ * the bundle is added, whatever order the page loads modules in.
+ */
+const NS = 'ldp';
+i18n.addResourceBundle('tr', NS, turkish, true, true);
+
+type Vars = Record<string, unknown>;
+// React escapes what it renders; i18next escaping as well would show a
+// contract titled `A & B` as `A &amp; B`.
+const RAW = { interpolation: { escapeValue: false } };
+
+/** For a component: re-renders when the language changes. */
+export const useT = () => {
+  const { t } = useTranslation(NS);
+  return (key: string, vars?: Vars) => t(key, { ...RAW, ...vars });
+};
+
+/** A sentence with markup in it: `<c>...</c>` in the key becomes `<code>`. */
+export const Code: React.FC<{ k: string; vars?: Vars }> = ({ k, vars }) => (
+  <Trans ns={NS} i18nKey={k} values={vars} components={{ c: <code /> }} />
+);
+
+/** For a helper that runs during a render the hook above already subscribed. */
+export const tr = (key: string, vars?: Vars) =>
+  i18n.t(key, { ns: NS, ...RAW, ...vars });
 
 export const fmt = (v: unknown) =>
   v === null || v === undefined ? '—' : Number(v).toFixed(3);
@@ -13,13 +50,13 @@ export const fmt = (v: unknown) =>
  * ISO strings; a run that happened today should not make anyone do date
  * arithmetic to notice that. */
 export const when = (iso: string | null | undefined) => {
-  if (!iso) return 'never';
+  if (!iso) return tr('never');
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return iso;
   const hours = (Date.now() - at.getTime()) / 3_600_000;
-  if (hours < 24) return `${Math.max(1, Math.round(hours))}h ago`;
-  if (hours < 24 * 7) return `${Math.round(hours / 24)}d ago`;
-  return at.toLocaleDateString();
+  if (hours < 24) return tr('{{n}}h ago', { n: Math.max(1, Math.round(hours)) });
+  if (hours < 24 * 7) return tr('{{n}}d ago', { n: Math.round(hours / 24) });
+  return at.toLocaleDateString(i18n.language);
 };
 
 /** Our three check outcomes onto the four this platform already has icons,
@@ -140,40 +177,48 @@ export const showDashboard = (show: boolean) => {
 };
 
 /** The rows a check failed on. */
-export const Rows: React.FC<{ sample: Sample }> = ({ sample }) => (
-  <div>
-    <Typography variant='caption' color='texts.secondary'>
-      {sample.run_at} · scope {sample.scope} · {sample.failed_rows} failing rows
-      {sample.masked.length > 0 && ` · masked: ${sample.masked.join(', ')}`}
-    </Typography>
-    {sample.note ? (
-      <Typography variant='body2'>{sample.note}</Typography>
-    ) : sample.rows.length === 0 ? (
-      <Typography variant='body2'>No rows in this window.</Typography>
-    ) : (
-      <S.Scroll>
-        <S.Cells>
-          <thead>
-            <tr>
-              {sample.columns.map((c, i) => (
-                // eslint-disable-next-line react/no-array-index-key
-                <th key={`${c}-${i}`}>{c}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sample.rows.map((row, ri) => (
-              // eslint-disable-next-line react/no-array-index-key
-              <tr key={ri}>
-                {row.map((v, ci) => (
+export const Rows: React.FC<{ sample: Sample }> = ({ sample }) => {
+  const t = useT();
+  return (
+    <div>
+      <Typography variant='caption' color='texts.secondary'>
+        {t('{{at}} · scope {{scope}} · {{n}} failing rows', {
+          at: sample.run_at,
+          scope: sample.scope,
+          n: sample.failed_rows,
+        })}
+        {sample.masked.length > 0 &&
+          ` · ${t('masked: {{columns}}', { columns: sample.masked.join(', ') })}`}
+      </Typography>
+      {sample.note ? (
+        <Typography variant='body2'>{sample.note}</Typography>
+      ) : sample.rows.length === 0 ? (
+        <Typography variant='body2'>{t('No rows in this window.')}</Typography>
+      ) : (
+        <S.Scroll>
+          <S.Cells>
+            <thead>
+              <tr>
+                {sample.columns.map((c, i) => (
                   // eslint-disable-next-line react/no-array-index-key
-                  <td key={ci}>{v === null ? 'null' : String(v)}</td>
+                  <th key={`${c}-${i}`}>{c}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </S.Cells>
-      </S.Scroll>
-    )}
-  </div>
-);
+            </thead>
+            <tbody>
+              {sample.rows.map((row, ri) => (
+                // eslint-disable-next-line react/no-array-index-key
+                <tr key={ri}>
+                  {row.map((v, ci) => (
+                    // eslint-disable-next-line react/no-array-index-key
+                    <td key={ci}>{v === null ? 'null' : String(v)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </S.Cells>
+        </S.Scroll>
+      )}
+    </div>
+  );
+};

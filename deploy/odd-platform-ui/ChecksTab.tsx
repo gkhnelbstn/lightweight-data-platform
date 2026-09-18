@@ -10,7 +10,7 @@ import {
 import type { CheckRow, ContractSummary } from './api';
 import { getChecks } from './api';
 import { CheckDetail } from './CheckDetail';
-import { readParam, runStatus, when, writeParams } from './shared';
+import { readParam, runStatus, useT, when, writeParams } from './shared';
 import * as S from './Contracts.styles';
 
 /**
@@ -29,6 +29,7 @@ interface Props {
 }
 
 export const ChecksTab: React.FC<Props> = ({ contracts }) => {
+  const t = useT();
   const [rows, setRows] = useState<CheckRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(() => readParam('check'));
@@ -90,14 +91,14 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
   if (error) {
     return (
       <Typography variant='body1' color='texts.secondary'>
-        Contract service unreachable: {error}
+        {t('Contract service unreachable: {{error}}', { error })}
       </Typography>
     );
   }
   if (!rows) {
     return (
       <Typography variant='body2' color='texts.secondary'>
-        Loading checks…
+        {t('Loading checks…')}
       </Typography>
     );
   }
@@ -107,29 +108,29 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
       <S.Actions>
         <Input
           variant='search-lg'
-          placeholder='Filter by check, column or table'
+          placeholder={t('Filter by check, column or table')}
           value={needle}
           onChange={e => setNeedle(e.target.value)}
           handleCleanUp={() => setNeedle('')}
         />
         <AppSelect
           id='check-status'
-          label='Result'
+          label={t('Result')}
           value={status}
           onChange={e => setStatus(e.target.value as string)}
         >
-          <MenuItem value='failing'>Needs attention</MenuItem>
-          <MenuItem value='passing'>Passing</MenuItem>
-          <MenuItem value='accepted'>Accepted failures</MenuItem>
-          <MenuItem value=''>All</MenuItem>
+          <MenuItem value='failing'>{t('Needs attention')}</MenuItem>
+          <MenuItem value='passing'>{t('Passing')}</MenuItem>
+          <MenuItem value='accepted'>{t('Accepted failures')}</MenuItem>
+          <MenuItem value=''>{t('All')}</MenuItem>
         </AppSelect>
         <AppSelect
           id='check-contract'
-          label='Contract'
+          label={t('Contract')}
           value={contract}
           onChange={e => pick(e.target.value as string)}
         >
-          <MenuItem value=''>All contracts</MenuItem>
+          <MenuItem value=''>{t('All contracts')}</MenuItem>
           {contracts.map(c => (
             <MenuItem key={c.id} value={c.id}>
               {c.title}
@@ -138,36 +139,38 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
         </AppSelect>
       </S.Actions>
       <Typography variant='subtitle2' color='texts.secondary'>
-        {visible.length} of {rows.length} checks. Select one for what it does,
-        its SQL and every run it has had.
+        {t(
+          '{{visible}} of {{total}} checks. Select one for what it does, its SQL and every run it has had.',
+          { visible: visible.length, total: rows.length }
+        )}
       </Typography>
 
       <div>
         <Table.HeaderContainer>
           <Table.Cell $flex={0.5}>
-            <Typography variant='caption'>Result</Typography>
+            <Typography variant='caption'>{t('Result')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={3}>
-            <Typography variant='caption'>Check</Typography>
+            <Typography variant='caption'>{t('Check')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={1.6}>
-            <Typography variant='caption'>Table · column</Typography>
+            <Typography variant='caption'>{t('Table · column')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={1}>
-            <Typography variant='caption'>Dimension</Typography>
+            <Typography variant='caption'>{t('Dimension')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={0.9}>
-            <Typography variant='caption'>Last run</Typography>
+            <Typography variant='caption'>{t('Last run')}</Typography>
           </Table.Cell>
           <Table.Cell $flex={1} $justifyContent='flex-end'>
-            <Typography variant='caption'>Failing rows</Typography>
+            <Typography variant='caption'>{t('Failing rows')}</Typography>
           </Table.Cell>
         </Table.HeaderContainer>
 
         <EmptyContentPlaceholder
           isContentEmpty={visible.length === 0}
           fullPage={false}
-          text='No check matches these filters.'
+          text={t('No check matches these filters.')}
         />
 
         {visible.map(c => (
@@ -200,8 +203,8 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
                   <Typography variant='body1'>{c.name ?? c.check_id}</Typography>
                   <Typography variant='caption' color='texts.secondary'>
                     {source.get(c.contract_id)?.title ?? c.contract_id}
-                    {c.stale && ' · removed from the contract'}
-                    {c.state !== 'open' && ` · ${c.state}`}
+                    {c.stale && ` · ${t('removed from the contract')}`}
+                    {c.state !== 'open' && ` · ${t(c.state)}`}
                     {c.note ? `: ${c.note}` : ''}
                   </Typography>
                 </div>
@@ -214,7 +217,7 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
               </Table.Cell>
               <Table.Cell $flex={1}>
                 <Typography variant='body2' color='texts.secondary'>
-                  {c.dimension}
+                  {t(c.dimension)}
                 </Typography>
               </Table.Cell>
               <Table.Cell $flex={0.9}>
