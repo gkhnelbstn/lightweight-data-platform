@@ -77,8 +77,9 @@ upstream. `tests/test_panel_i18n.py` fails when a literal key has no Turkish
 entry, because i18next falls back to English silently.
 
 **Delete the script, `odd-platform-locale-tr.json` and the Dockerfile lines
-that use them when ODD ships a Turkish catalogue.** Offered upstream so it
-can.
+that use them when ODD ships a Turkish catalogue.** Offered upstream as
+[odd-platform#1904](https://github.com/opendatadiscovery/odd-platform/pull/1904),
+against `main` (746 keys, and the calendar's `BCP47` map as well).
 
 ### Worked around without a patch
 
