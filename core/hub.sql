@@ -350,7 +350,10 @@ declare
     skip    text[];
     linked  boolean := false;
     fresh   boolean := false;
+    -- Fields whose value the flow's value map did not know (#84).
+    unmapped text[] := array(select jsonb_array_elements_text(coalesce(p_row -> '_unmapped', '[]')));
 begin
+    p_row := p_row - '_unmapped';
     select e.key, e.authority, e.required, e.keys into keycols, auth, req, xkeys
       from hub.entity e where e.name = p_entity;
     if keycols is null then
@@ -392,10 +395,17 @@ begin
     else
         raise exception 'hub: % is not a row kind', p_kind;
     end if;
+    -- A value outside a value map arrives as NULL, and that NULL is not the
+    -- system emptying the field. It is taken out here and logged below.
+    after := after - unmapped;
+    before := before - unmapped;
 
     if ac is not null then
         select r.hk, r.linked, r.fresh into k, linked, fresh
-          from hub.resolve(p_entity, p_system, p_kind, p_ms, coalesce(after, before)) r;
+          from hub.resolve(p_entity, p_system, p_kind, p_ms, coalesce(after, before)
+                           || case when cardinality(unmapped) > 0
+                                   then jsonb_build_object('_unmapped', to_jsonb(unmapped))
+                                   else '{}' end) r;
         if k is null then
             return;
         end if;
@@ -408,6 +418,15 @@ begin
                 from unnest(keycols) c);
     execute format('select to_jsonb(g) from hub.%I g, jsonb_populate_record(null::hub.%I, $1) r where %s',
                    p_entity, p_entity, keyed) into g using k;
+
+    -- The hub keeps its own value for a field whose value the map did not
+    -- know, and says so: nothing in SeaTunnel's SQL can raise.
+    if after is not null then
+        insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms, reason)
+        select p_entity, k, u.name, g -> u.name, g -> '_by' ->> u.name,
+               (g -> '_at' ->> u.name)::bigint, null, p_system, p_ms, 'unmapped'
+          from unnest(unmapped) u(name);
+    end if;
 
     -- A delete: the latest commit decides, against the newest field.
     if after is null then
@@ -628,11 +647,16 @@ end $$;
 create or replace function hub.on_inbox() returns trigger language plpgsql as $$
 declare
     r jsonb := to_jsonb(new) - 'id' - 'system' - 'row_kind' - 'source_ms'
-                             - 'landed_at' - 'fields';
+                             - 'landed_at' - 'fields' - 'unmapped';
 begin
     if new.fields is not null then
         r := (select jsonb_object_agg(f, r -> f)
                 from unnest(string_to_array(new.fields, ',')) f);
+    end if;
+    -- `unmapped` is the flow's list of fields whose value its map did not know.
+    if coalesce(new.unmapped, '') <> '' then
+        r := r || jsonb_build_object('_unmapped', to_jsonb(
+            string_to_array(trim(trailing ',' from new.unmapped), ',')));
     end if;
     perform hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r);
     return null;

@@ -254,8 +254,15 @@ without it: they read the key's column in `_changed` like `*`.
   final golden record, so the intermediate value is never sent. The awaited
   value is then never consumed. It is harmless unless that system edits the
   field to exactly that value within the hour it lives.
-* A value outside a value map lands as NULL (ADR 0020). The hub contract's
-  checks have to catch it.
+* **A value outside a value map** lands as NULL (ADR 0020), and SeaTunnel's
+  SQL cannot raise. So the in-flow also says which fields it happened to
+  (`unmapped`, a `CASE` per mapped column). The hub keeps its own value, since a
+  NULL there is not the system emptying the field, and logs the loss in
+  `hub.conflict` with reason `unmapped`, which the Integration tab shows (#84).
+  The system keeps its unknown value until a person decides. Overwriting a
+  code someone typed on purpose would be just as silent. On the way out, a hub
+  value the target's map lacks still lands as NULL. The maps are checked to be
+  inverses, so only a third system's value could get there.
 * Postgres *targets* are not compiled yet. They need the guarded upsert and a
   delete branch of ADR 0020, and the compiler refuses them rather than emit
   a looping job.

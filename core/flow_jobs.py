@@ -96,17 +96,35 @@ def _where(conditions: list[str]) -> str:
     return f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
 
+def _unmapped(flow: flowmod.Flow) -> str | None:
+    """The fields whose value the flow's value map did not know, as `a,b,`.
+
+    Such a value lands as NULL and SeaTunnel's SQL cannot raise, so the flow
+    says which fields it happened to and the hub keeps its own value (#84)."""
+    cases = [f"CASE WHEN {src} IS NOT NULL AND ({_expression(src, values)}) IS NULL "
+             f"THEN {_literal(tgt + ',')} ELSE '' END"
+             for tgt, src in flow.mapping.columns.items()
+             if (values := flow.mapping.values.get(tgt))]
+    if not cases:
+        return None
+    return cases[0] if len(cases) == 1 else f"CONCAT({', '.join(cases)})"
+
+
 def inbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
     """`fields` tells the hub which columns this flow carries: a table holding
     part of a record leaves the others null, and those nulls are not values.
     `match` takes one kind of row from a table with several per record."""
     hub, entity = by_id[flow.target], by_id[flow.target]["schema"][0]["name"]
     cols = list(flow.mapping.columns)
+    unmapped = _unmapped(flow)
+    extra = ["unmapped"] if unmapped else []
     sql = (f"SELECT row_kind, source_ms, {_literal(flow.mapping.reference)} AS system, "
-           f"{_literal(','.join(cols))} AS fields, {_projection(flow)} FROM dual"
+           f"{_literal(','.join(cols))} AS fields, {_projection(flow)}"
+           + (f", {unmapped} AS unmapped" if unmapped else "") + " FROM dual"
            + _where([f"{c} = {_literal(v)}" for c, v in flow.match.items()]))
     insert = (f"insert into hub.{entity}_inbox (row_kind, source_ms, system, fields, "
-              f"{', '.join(cols)}) values ({', '.join('?' * (len(cols) + 4))})")
+              f"{', '.join(cols + extra)}) values "
+              f"({', '.join('?' * (len(cols) + len(extra) + 4))})")
     return {
         "env": {"job.mode": "STREAMING", "checkpoint.interval": CHECKPOINT_MS,
                 "parallelism": 1, "job.name": flow.id},

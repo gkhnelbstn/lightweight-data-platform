@@ -57,7 +57,7 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
     record and system.
     """
     clash = sorted(set(columns) & {*META, "id", "system", "row_kind",
-                                   "source_ms", "landed_at", "fields"})
+                                   "source_ms", "landed_at", "fields", "unmapped"})
     if clash:
         raise ValueError(f"{name}: {', '.join(clash)} is reserved in the hub")
     if not set(key) <= set(columns):
@@ -83,6 +83,8 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
         "fields text, {}, landed_at timestamptz not null default clock_timestamp())"
     ).format(inbox, cols))
     cx.execute(sql.SQL("alter table hub.{} add column if not exists fields text").format(inbox))
+    # The fields whose value the flow's value map did not know (#84).
+    cx.execute(sql.SQL("alter table hub.{} add column if not exists unmapped text").format(inbox))
     cx.execute(sql.SQL("drop trigger if exists merge on hub.{}").format(inbox))
     cx.execute(sql.SQL(
         "create trigger merge after insert on hub.{} for each row "

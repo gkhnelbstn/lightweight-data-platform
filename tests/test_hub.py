@@ -373,3 +373,20 @@ def test_reserved_columns_are_refused():
     from core import hub as h
     with pytest.raises(ValueError, match="reserved"):
         h.register_entity(None, "x", ["id"], {"id": "int", "_rev": "int"}, "a")
+
+
+# --- a value its value map did not know (#84) --------------------------------
+
+def test_a_value_outside_the_value_map_is_kept_out_and_logged(hub):
+    """CRM's ACTIVE is 'X': the flow's map lands it as NULL and says so. The
+    hub keeps its own value -- a NULL here is not the CRM emptying the field --
+    and the loss is on record."""
+    send(hub, "crm", "INSERT", 100, **ACME)
+    hub.execute("insert into hub.customer_inbox (system, row_kind, source_ms, fields, "
+                "code, name, active, unmapped) values ('crm', 'UPDATE_BEFORE', 200, "
+                "'code,name,active', 1, 'Acme', true, null), ('crm', 'UPDATE_AFTER', 200, "
+                "'code,name,active', 1, 'Acme Corp', null, 'active,')")
+    assert golden(hub)[:2] == ("Acme Corp", True)
+    assert hub.execute("select field, kept, lost, lost_by, reason from hub.conflict"
+                       ).fetchall() == [("active", True, None, "crm", "unmapped")]
+    assert ("active", None) not in expected(hub, "billing")

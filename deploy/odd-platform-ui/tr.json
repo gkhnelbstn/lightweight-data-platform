@@ -247,5 +247,6 @@
   "A person links a code to a record on the hub database with <c>hub.link(entity, system, code, record)</c>; without a record, the code becomes a record of its own.": "Bir kişi, merkez veritabanında <c>hub.link(entity, system, code, record)</c> ile bir kodu bir kayda bağlar; kayıt verilmezse kod kendi başına yeni bir kayıt olur.",
   "Nothing deleted.": "Silinen bir şey yok.",
   "Deleted by": "Silen",
-  "running": "çalışıyor"
+  "running": "çalışıyor",
+  "its value map does not know the value: the hub kept its own": "değer haritası bu değeri tanımıyor: merkez kendi değerini korudu"
 }
