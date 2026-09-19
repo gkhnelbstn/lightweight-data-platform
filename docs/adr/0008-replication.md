@@ -91,28 +91,31 @@ and Zirve (accounting) on SQL Server, issue #53. It is two different
 products, so it is integration, not replication (see *On upgrade*). Their
 real schemas are not available, so it was decided to **design against a
 hypothetical pair** built to have the same problems. The fixture in
-`tests/test_two_way.py` has different column names, a classified identifier
+`tests/test_flows.py` has different column names, a classified identifier
 on both sides, and both sides editing the same customer card.
 
 That last property rules out the disjointness proof entirely. It is not merely
 expensive: the rows are *the same* rows by construction. What replaces it is
-disjointness by **column** rather than by row. Each column of the pair names
-exactly one side in `masteredHere`, and that side's value wins when both
-changed the column since the last sync. Both sides may still write every
-column; mastership only answers the conflict. Checking it is set membership,
-not a theorem prover. `core/two_way.py` refuses a pair when:
+disjointness by **column** rather than by row. Each column of the pair is
+won by exactly one of the two flows (`winsOnConflict`), and that side's value
+stands when both changed the column since the last sync. Both sides may
+still write every column; the winner only answers the conflict. Checking it
+is set membership, not a theorem prover. `core/flows.py` refuses a pair when:
 
-* one side's map is not the inverse of the other side's; or
-* a column is mastered by neither side, or by both.
+* one side's map is not the inverse of the other side's;
+* a value map is not one-to-one, or its way back is not its inverse; or
+* a column is won by neither flow, or by both.
+
+The pair is two integration flows in their own files, not lines in either
+system's table contract. That shape is ADR 0019's.
 
 Scope of this amendment:
 
-* It applies to integration pairs declared with `derivedFrom` column maps
-  only.
+* It applies to integration flows only (`contracts/flows/`).
 * Two `syncTo` rules pointing at each other remain exactly as unguarded as
   described above.
-* Nothing executes a pair yet. The executor, and value or type
-  transformations such as `'E'/'H'` against a `bit`, are still open in #53.
+* Nothing executes a pair yet; the executor is still open in #53. Value
+  translation (`'E'/'H'` against a `bit`) is a value map, see ADR 0019.
 * The stand-in is a stand-in. When a real schema arrives, re-check it
   against the fixture's assumptions before trusting the refusals.
 
@@ -159,8 +162,8 @@ Scope of this amendment:
   integration rather than replication. Every engine's own replication needs
   identical schemas on both ends: SQL Server peer-to-peer says so outright,
   and merge replication publishes the same articles everywhere. "Use the
-  engine's own" therefore cannot decide it. That case is issue #53, where the
-  target's contract declares the column map (`core/mapping.py`). See ADR 0018,
-  *What this does not decide*.
+  engine's own" therefore cannot decide it. That case is issue #53, and the
+  column map lives in an integration flow of its own (`core/flows.py`, ADR
+  0019). See ADR 0018, *What this record does not decide*.
 * Deleting a row from `sync_watermarks` re-snapshots that source, which is
   idempotent but not free.

@@ -39,8 +39,8 @@ validation while naming nothing.
 dead; the conclusion is not — but it now rests on four different reasons, and
 they are better ones.**
 
-*For the replica case* is load-bearing. See "What this does not decide"
-below: an integration between two different schemas is a separate question that
+*For the replica case* is load-bearing. See "What this record does not
+decide" below: an integration between two different schemas is a separate question that
 none of the four reasons touch.
 
 Each of these is a difference in *what the replica is*, not a benchmark.

@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 284 tests; the ones that need a database skip without one
+pytest -q                                                  # 288 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -242,23 +242,29 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   two schemas changes types legitimately and often, so flagging every
   difference is noise; a real widening rule needs a lattice nobody has asked
   for. Issue #50 is the narrower case that *is* a bug.
-* **A two-way pair is two `derivedFrom` maps pointing at each other**, and
-  each can pass `core/mapping.py` alone while the pair corrupts data.
-  `core/two_way.py` checks the pair: the maps must be inverses, and every
-  mapped column has exactly one side in `masteredHere`. Mastership decides
-  who *wins a conflict*, not who may write -- both sides edit the same rows,
-  which is why ADR 0008's row-disjointness proof was replaced rather than
-  built. The Siber/Zirve pair it was designed against is hypothetical and
-  lives in `tests/test_two_way.py`, not `contracts/`: a contract there is
-  windowed, scored and catalogued, and nothing serves this one.
+* **An integration between two systems is its own file**, one per direction,
+  in `contracts/flows/` (ADR 0019): `from`, `to`, `columns`, `values`,
+  `winsOnConflict`, `filledByTarget`. Siber's and Zirve's table contracts
+  describe their tables and know nothing about it. The subdirectory is
+  deliberate -- every contract reader and the CI lint glob
+  `contracts/*.odcs.yaml` non-recursively, so a flow is never windowed,
+  scored or catalogued. `derivedFrom` column detail is the *other* column
+  map: lineage inside our own pipeline (`dim.customer`). Both share
+  `core/mapping.py`'s refusals.
+* **Two flows in opposite directions are a pair**, and each can pass alone
+  while the pair corrupts data. `core/flows.py` checks the pair: the maps
+  are inverses, every value map is one-to-one and its way back is its
+  inverse, and every column is won by exactly one flow. `winsOnConflict`
+  decides who wins a conflict, not who may write -- both sides edit the same
+  rows, which is why ADR 0008's row-disjointness proof was replaced rather
+  than built. The Siber/Zirve pair is hypothetical and lives in
+  `tests/test_flows.py`: nothing serves it.
 * A column coded differently on the two sides (`'E'/'H'` against a `bit`)
-  gets a **value map**, `values:` beside `columns:` on the `derivedFrom`
-  entry -- never an expression. A map can be inverted, so `core/two_way.py`
-  refuses a pair whose map is not one-to-one or whose way back is not the
-  inverse of the way there; `upper(x)` or `qty * price` cannot be inverted
-  and a two-way pair built on one would corrupt its own round trip.
-  Expressions wait for a one-way case that needs them (issue #53). This is
-  not type checking -- the map *is* the legitimate type difference.
+  gets a **value map**, never an expression: a map can be inverted, and
+  `upper(x)` or `qty * price` cannot, so a pair built on one would corrupt
+  its own round trip. Expressions wait for a one-way case that needs them
+  (issue #53). This is not type checking -- the map *is* the legitimate type
+  difference.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why
