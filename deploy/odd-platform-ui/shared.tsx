@@ -46,13 +46,18 @@ export const fmt = (v: unknown) =>
 
 /** A timestamp as something a person reads at a glance. The API returns UTC
  * ISO strings; a run that happened today should not make anyone do date
- * arithmetic to notice that. */
+ * arithmetic to notice that. Minutes too: a daily check is fine at "3h ago",
+ * but "is my integration receiving anything" is not -- a change from a
+ * minute ago read "1h ago". */
 export const when = (iso: string | null | undefined) => {
   if (!iso) return tr('never');
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return iso;
-  const hours = (Date.now() - at.getTime()) / 3_600_000;
-  if (hours < 24) return tr('{{n}}h ago', { n: Math.max(1, Math.round(hours)) });
+  const minutes = (Date.now() - at.getTime()) / 60_000;
+  if (minutes < 1) return tr('just now');
+  if (minutes < 60) return tr('{{n}}m ago', { n: Math.round(minutes) });
+  const hours = minutes / 60;
+  if (hours < 24) return tr('{{n}}h ago', { n: Math.round(hours) });
   if (hours < 24 * 7) return tr('{{n}}d ago', { n: Math.round(hours / 24) });
   return at.toLocaleDateString(i18n.language);
 };

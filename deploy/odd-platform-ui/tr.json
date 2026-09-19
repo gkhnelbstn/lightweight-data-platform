@@ -248,5 +248,7 @@
   "Nothing deleted.": "Silinen bir şey yok.",
   "Deleted by": "Silen",
   "running": "çalışıyor",
-  "its value map does not know the value: the hub kept its own": "değer haritası bu değeri tanımıyor: merkez kendi değerini korudu"
+  "its value map does not know the value: the hub kept its own": "değer haritası bu değeri tanımıyor: merkez kendi değerini korudu",
+  "just now": "az önce",
+  "{{n}}m ago": "{{n}} dk önce"
 }
