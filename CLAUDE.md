@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 367 tests; the ones that need a database skip without one
+pytest -q                                                  # 369 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -338,6 +338,11 @@ trigger.
   none or when SQL Server's CDC retention ran out meanwhile: SeaTunnel does
   both wrong without a word. `--resnapshot` is the knowing way through. ADR
   0023.
+* A value its value map does not know lands as NULL and cannot raise, so an
+  in-flow carries `unmapped` -- the fields it happened to -- and the hub
+  keeps its own value and logs `unmapped` in `hub.conflict`. A NULL from a map
+  is not the system emptying the field; applying it would empty every other
+  system. #84.
 * `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
   needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
   generated upsert there loops for ever -- so it raises instead.

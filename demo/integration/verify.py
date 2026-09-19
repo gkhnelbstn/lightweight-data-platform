@@ -127,6 +127,15 @@ def main() -> None:
     wait("deleting the CRM address row empties billing's column, not the customer",
          lambda: billing_cities(tax) == (None, None) and billing_row(tax) is not None)
 
+    # A code the CRM's value map does not know: the flow lands it as NULL,
+    # and the hub keeps its own value rather than emptying billing's (#84).
+    sql(CRM, "update dbo.account set ACTIVE = 'X' where ACCOUNT_CODE = ?", code)
+    wait("a value outside the value map is logged, not written as empty",
+         lambda: hub("select 1 from hub.conflict where key = %s and field = 'active' "
+                     "and reason = 'unmapped'", f'{{"customer_id": {record}}}'))
+    assert billing_row(tax) == ("Yeni Müşteri", True), billing_row(tax)
+    sql(CRM, "update dbo.account set ACTIVE = 'Y' where ACCOUNT_CODE = ?", code)
+
     sql(BILLING, "update dbo.customer set IsActive = 0 where TaxId = ?", tax)
     wait("a billing edit reaches the CRM, recoded", lambda: crm_row(code) == ("Yeni Müşteri", "N"))
 

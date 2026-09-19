@@ -143,3 +143,15 @@ def test_a_record_billing_has_not_numbered_yet_is_found_by_its_rule(compiled):
     assert ("ON (t.[CustomerCode] = s.[CustomerCode] OR (s.[CustomerCode] IS NULL "
             "AND t.[TaxId] = s.[TaxId]))") in merge
     assert "[CustomerCode]" not in merge.split("THEN INSERT")[1]
+
+
+def test_a_value_outside_the_value_map_is_named_not_only_nulled(compiled):
+    """#84: the CASE of a value map has no ELSE, so an unknown value lands as
+    NULL. The flow also says which field it happened to, for the hub."""
+    sql = compiled["crm_to_hub"]["transform"][2]["query"]
+    assert ("CASE WHEN ACTIVE IS NOT NULL AND (CASE WHEN ACTIVE = 'Y' THEN true "
+            "WHEN ACTIVE = 'N' THEN false END) IS NULL THEN 'active,' ELSE '' END "
+            "AS unmapped") in sql
+    assert compiled["crm_to_hub"]["sink"][0]["query"].endswith(
+        "active, unmapped) values (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    assert "unmapped" not in compiled["billing_to_hub"]["transform"][2]["query"]

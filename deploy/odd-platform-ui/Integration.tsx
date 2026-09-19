@@ -292,6 +292,8 @@ const Conflicts: React.FC<{ hub: Hub }> = ({ hub }) => {
               <td>
                 {c.reason === 'seed'
                   ? t('first sync: the authority stands')
+                  : c.reason === 'unmapped'
+                  ? t('its value map does not know the value: the hub kept its own')
                   : t('both edited it: the later commit won')}
               </td>
             </tr>
