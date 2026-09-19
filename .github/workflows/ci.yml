@@ -80,6 +80,16 @@ jobs:
 
       - run: python seed/seed.py
 
+      # ADR 0021: the two-way hub's merge is plpgsql, so its tests need a real
+      # server and skip everywhere else. Here one exists, and a skip is a
+      # failure: a merge that silently stopped being tested looks like one
+      # that passes.
+      - name: the hub merge, against this postgres
+        run: |
+          set -o pipefail
+          python -m pytest -q -rs tests/test_hub.py | tee hub-tests.txt
+          ! grep -q skipped hub-tests.txt
+
       # The contracts point at `db` inside compose; in CI the service is
       # reachable on localhost.
       - name: point the contracts at the CI host
