@@ -51,3 +51,4 @@ upstream feature that would let it be deleted.
 | [0021](0021-a-hub-decides-two-way-changes.md) | Two-way changes meet in a hub, and the latest commit wins | a tool keeps per-row sync state for SQL Server |
 | [0022](0022-the-integration-has-its-own-tab.md) | The integration has a tab of its own in ODD's menu | ODD grows an extension point |
 | [0023](0023-a-flow-resumes-or-refuses.md) | A flow resumes from its checkpoint, or refuses to start | SeaTunnel keeps jobs across a restart and refuses a restore it cannot honour |
+| [0024](0024-aggregates-are-summed-where-they-land.md) | An aggregate is summed where its rows land, and goes one way | SeaTunnel's SQL gains aggregation |

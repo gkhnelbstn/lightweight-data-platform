@@ -279,5 +279,13 @@
   "matched by {{rule}}": "eşleştirme ölçütü: {{rule}}",
   "new row": "yeni satır",
   "no change": "değişiklik yok",
-  "nothing this flow carries changed": "bu akışın taşıdığı hiçbir alan değişmedi"
+  "nothing this flow carries changed": "bu akışın taşıdığı hiçbir alan değişmedi",
+  "One-way totals": "Tek yönlü toplamlar",
+  "Many rows of one system summed into one row per group in another. A total cannot come back as rows, so these only go one way.": "Bir sistemin birçok satırı, diğerinde grup başına tek satıra toplanır. Bir toplam satırlara geri dönemez, bu yüzden bunlar yalnızca tek yöne gider.",
+  "Flow": "Akış",
+  "Rows in": "Gelen satırlar",
+  "Totals out": "Giden toplamlar",
+  "per {{group}}: {{aggregates}}": "{{group}} başına: {{aggregates}}",
+  "{{n}} lines held": "{{n}} satır tutuluyor",
+  "{{n}} totals": "{{n}} toplam"
 }

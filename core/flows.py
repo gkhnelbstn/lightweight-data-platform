@@ -89,6 +89,9 @@ class Flow:
     match: dict = field(default_factory=dict)
     # Hub columns that identify a record under a key the hub has not seen.
     link_by: tuple[str, ...] = ()
+    # Target column: `sum(Amount)` and the like -- many rows into one, one way
+    # (core/flow_aggregate.py, #81). `columns` is then the group.
+    aggregates: dict = field(default_factory=dict)
 
 
 def parse(doc: dict) -> Flow:
@@ -99,7 +102,8 @@ def parse(doc: dict) -> Flow:
                         dict(doc.get("values") or {})),
         filled_by_target=frozenset(doc.get("filledByTarget") or []),
         match=dict(doc.get("match") or {}),
-        link_by=tuple(doc.get("linkBy") or ()))
+        link_by=tuple(doc.get("linkBy") or ()),
+        aggregates=dict(doc.get("aggregates") or {}))
 
 
 def load(directory: Path = FLOWS) -> list[Flow]:
@@ -325,6 +329,10 @@ def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
             out += column_problems(flow.id, here, flow.mapping, source,
                                    covered.setdefault(rows, set()))
             covered[rows] |= set(flow.match)
+            if flow.aggregates:
+                from core import flow_aggregate
+                out += flow_aggregate.problems(flow, flows, by_id)
+                covered[rows] |= set(flow.aggregates)
             if hub_of(source) is not None:
                 out += _match_problems(flow, target, source, into_hub=False)
 
@@ -337,6 +345,6 @@ def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
     for a in flows:
         for b in flows:
             if ((a.mapping.reference, a.target) == (b.target, b.mapping.reference)
-                    and a.match == b.match):
+                    and a.match == b.match and not (a.aggregates or b.aggregates)):
                 out += _pair_problems(a, b, by_id)
     return out + _hub_problems(flows, by_id)

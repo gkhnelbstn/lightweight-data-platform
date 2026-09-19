@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 383 tests; the ones that need a database skip without one
+pytest -q                                                  # 395 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -281,7 +281,7 @@ which is the default branch.
   for. Issue #50 is the narrower case that *is* a bug.
 * **An integration between two systems is its own file**, one per direction,
   in `contracts/flows/` (ADR 0019): `from`, `to`, `columns`, `values`,
-  `match`, `linkBy`, `filledByTarget`. The two systems' table contracts
+  `match`, `linkBy`, `aggregates`, `filledByTarget`. The two systems' table contracts
   describe their tables and know nothing about it. The subdirectory is
   deliberate -- every contract reader and the CI lint glob
   `contracts/*.odcs.yaml` non-recursively, so a flow is never windowed,
@@ -369,6 +369,13 @@ which is the default branch.
   expectation swallowed a later edit to that exact value (an address added
   then removed, a name changed and changed back). "Already had" is the before
   image, or nothing for a new row. #84.
+* **An aggregate is one way and is summed where its rows land** (ADR 0024,
+  #81): `aggregates` turns `columns` into the group. The lines land in the
+  hub's database (`flow.<id>_inbox` -> trigger -> `flow.<id>_lines`), every
+  group a line change touches is **recomputed** into `flow.<id>`, and a second
+  job, `<id>_out`, delivers it -- two jobs, both resumed like any other.
+  Recompute rather than add and subtract: a moved line or a changed key is
+  then just two groups. A flow back is refused: a total has no inverse.
 * **A Postgres target gets a guarded MERGE** (`core/flow_sql.py`, #83):
   `WHEN MATCHED AND (t.cols) IS DISTINCT FROM (new)`. SQL Server records no
   change for an update that writes what a row holds; Postgres does, and a

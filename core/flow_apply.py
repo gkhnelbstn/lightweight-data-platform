@@ -25,7 +25,7 @@ import urllib.request
 
 import psycopg
 
-from core import flow_resume, flow_schema
+from core import flow_aggregate, flow_resume, flow_schema
 from core import flows as flowmod
 from core import hub
 from core.bootstrap_db import admin_dsn, ensure_database
@@ -92,14 +92,34 @@ def register(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> None:
                 hub.register_system(cx, entity, system, fields, link_by)
         print(f"hub {cid}: {entity} on {server['host']}/{server['database']}, "
               f"systems {sorted(into & out)}")
+    for flow in flows:
+        if flow.aggregates:
+            server = flow_aggregate.landing(by_id)
+            with psycopg.connect(admin_dsn(server["host"], server.get("port", 5432),
+                                           server["database"]), autocommit=True) as cx:
+                flow_aggregate.install(cx, flow, by_id)
+            print(f"aggregate {flow.id}: summed in flow.{flow.id} on "
+                  f"{server['host']}/{server['database']}")
 
 
 def _hub_dsn(by_id: dict[str, dict], flow: flowmod.Flow) -> str:
-    """The database of the hub this flow goes into or comes out of."""
+    """The database of the hub this flow goes into or comes out of -- or,
+    for an aggregate, where it is summed."""
     into = flowmod.hub_of(by_id.get(flow.target)) is not None
-    contract = by_id[flow.target if into else flow.mapping.reference]
-    server = next(s for s in contract["servers"] if s["type"].startswith("postgres"))
+    out = flowmod.hub_of(by_id.get(flow.mapping.reference)) is not None
+    server = (next(s for s in by_id[flow.target if into else flow.mapping.reference]["servers"]
+                   if s["type"].startswith("postgres"))
+              if into or out else flow_aggregate.landing(by_id))
     return admin_dsn(server["host"], server.get("port", 5432), server["database"])
+
+
+def jobs_of(by_id: dict[str, dict], flow: flowmod.Flow) -> list[tuple[str, dict]]:
+    """Each job a flow runs, and the table it reads: one for most flows, two
+    for an aggregate -- the lines in, and its totals out of the hub."""
+    if flow.aggregates:
+        return [(flow.id, by_id[flow.mapping.reference]),
+                (f"{flow.id}_out", flow_aggregate.landing_contract(flow, by_id))]
+    return [(flow.id, by_id[flow.mapping.reference])]
 
 
 def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
@@ -108,37 +128,39 @@ def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
     already = running()
     refused = []
     for flow in flows:
-        if flow.id in already:
-            print(f"{flow.id}: already running")
+        for name in {n for n, _ in jobs_of(by_id, flow)} & already:
+            print(f"{name}: already running")
+        pending = [(n, source) for n, source in jobs_of(by_id, flow) if n not in already]
+        if not pending:
             continue
         # A table that changed under its flow is refused, never followed.
         drift = flow_schema.problems(flow, by_id)
         if drift:
             refused += drift
             continue
-        with psycopg.connect(_hub_dsn(by_id, flow), autocommit=True) as cx:
-            row = cx.execute("select job_id from hub.job where flow = %s",
-                             (flow.id,)).fetchone()
-            job_id = row[0] if row else None
-            checkpoint = flow_resume.last_checkpoint_ms(job_id) if job_id else None
-            source = by_id[flow.mapping.reference]
-            live = checkpoint and not resnapshot
-            oldest = flow_resume.oldest_change_ms(source) if live else None
-            gone = bool(live) and flow_resume.slot_missing(source, f"{flow.id}_slot")
-            action, why = flow_resume.plan(flow.id, job_id, checkpoint, oldest,
-                                           resnapshot, slot_missing=gone)
-            if action == "refuse":
-                refused.append(why)
-                continue
-            if why:
-                print(why)
-            query = f"/submit-job?jobName={flow.id}" + (
-                f"&jobId={job_id}&isStartWithSavePoint=true" if action == "resume" else "")
-            answer = _http("POST", query, _fill(configs[flow.id]))
-            cx.execute("insert into hub.job (flow, job_id) values (%s, %s) "
-                       "on conflict (flow) do update set job_id = excluded.job_id, "
-                       "submitted_at = now()", (flow.id, int(answer["jobId"])))
-        print(f"{flow.id}: {'resumed' if action == 'resume' else 'started'} {answer}")
+        for name, source in pending:
+            with psycopg.connect(_hub_dsn(by_id, flow), autocommit=True) as cx:
+                row = cx.execute("select job_id from hub.job where flow = %s",
+                                 (name,)).fetchone()
+                job_id = row[0] if row else None
+                checkpoint = flow_resume.last_checkpoint_ms(job_id) if job_id else None
+                live = checkpoint and not resnapshot
+                oldest = flow_resume.oldest_change_ms(source) if live else None
+                gone = bool(live) and flow_resume.slot_missing(source, f"{name}_slot")
+                action, why = flow_resume.plan(name, job_id, checkpoint, oldest,
+                                               resnapshot, slot_missing=gone)
+                if action == "refuse":
+                    refused.append(why)
+                    continue
+                if why:
+                    print(why)
+                query = f"/submit-job?jobName={name}" + (
+                    f"&jobId={job_id}&isStartWithSavePoint=true" if action == "resume" else "")
+                answer = _http("POST", query, _fill(configs[name]))
+                cx.execute("insert into hub.job (flow, job_id) values (%s, %s) "
+                           "on conflict (flow) do update set job_id = excluded.job_id, "
+                           "submitted_at = now()", (name, int(answer["jobId"])))
+            print(f"{name}: {'resumed' if action == 'resume' else 'started'} {answer}")
     if refused:
         raise SystemExit("\n".join(f"REFUSED: {r}" for r in refused))
 

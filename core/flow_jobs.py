@@ -258,6 +258,11 @@ def _rest(config: dict) -> dict:
 def jobs(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> dict[str, dict]:
     out = {}
     for flow in flows:
+        if flow.aggregates:
+            from core import flow_aggregate
+            out.update({name: _rest(config) for name, config
+                        in flow_aggregate.jobs(flow, by_id).items()})
+            continue
         into_hub = flowmod.hub_of(by_id.get(flow.target)) is not None
         pair = next((f for f in flows if (f.mapping.reference, f.target, f.match)
                      == (flow.target, flow.mapping.reference, flow.match)), None)

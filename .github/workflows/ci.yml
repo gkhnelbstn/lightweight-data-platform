@@ -87,7 +87,7 @@ jobs:
       - name: the hub merge, against this postgres
         run: |
           set -o pipefail
-          python -m pytest -q -rs tests/test_hub.py tests/test_hub_crosswalk.py | tee hub-tests.txt
+          python -m pytest -q -rs tests/test_hub.py tests/test_hub_crosswalk.py tests/test_flow_aggregate.py | tee hub-tests.txt
           ! grep -q skipped hub-tests.txt
 
       # The contracts point at `db` inside compose; in CI the service is

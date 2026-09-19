@@ -482,8 +482,23 @@ export interface Hub {
   deleted?: Tombstone[];
 }
 
+/** A one-way aggregate (#81): many rows summed into one, per group. */
+export interface Totals {
+  flow: string;
+  from: string;
+  to: string;
+  group: Record<string, string>;
+  aggregates: Record<string, string>;
+  jobs: { in: FlowJob | null; out: FlowJob | null };
+  lines?: number;
+  groups?: number;
+  landed_at?: string | null;
+  error?: string;
+}
+
 export interface IntegrationState {
   hubs: Hub[];
+  totals?: Totals[];
   problems: string[];
   seatunnel_error: string | null;
 }

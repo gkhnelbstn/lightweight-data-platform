@@ -1,0 +1,7 @@
+id: invoice_totals
+from: billing.invoice_line
+to: ledger.journal_entry
+# The group: one journal entry per invoice.
+columns: {EntryNo: InvoiceNo}
+aggregates: {Total: sum(Amount), LineCount: count(*), CustomerCode: max(CustomerCode)}
+filledByTarget: [PostedAt]
