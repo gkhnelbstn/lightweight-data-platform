@@ -82,8 +82,10 @@ once and a flow costs little after that.
    pgjdbc. Against Postgres 16 with `scram-sha-256` every connection fails
    with `Protocol error. Session setup failed.`. The message names neither
    the driver nor the cause, and the server logs a connection that never
-   authenticates. Removing that one jar fixes it. A derived image has to do
-   that until upstream does.
+   authenticates. Removing that one jar fixes it. Upstream already knows:
+   apache/seatunnel#10242 is open, and #11510 was closed as fixed in August
+   2026, after 2.3.13. A derived image removes the jar until a release
+   carries the fix.
 2. **A value outside the value map becomes NULL.** The demo's segments are
    `KEY/RETAIL/MID/SMB`, and the map written for the test covered `SMB`,
    `MID` and `ENT`. 1 000 rows landed with no tier and nothing complained,
@@ -106,17 +108,45 @@ change event.
 * **SQL Server target: the echo dies by itself.** A `MERGE` or `UPDATE` that
   sets every column to the value it already has adds no row to the CDC change
   table: 1 row before, 1 row after, for both.
-* **Postgres target: a plain upsert echoes.** A plain
+* **Postgres target: the generated upsert loops for ever.** By hand, a plain
   `insert ... on conflict do update` with identical values emits one change
-  to logical decoding. The same statement guarded with
-  `where t.v is distinct from excluded.v` emits none. Both were tested by
-  hand through `test_decoding`, not through SeaTunnel's sink, which
-  generates the unguarded form.
+  to logical decoding, and the same statement guarded with
+  `where (t.a, t.b) is distinct from (excluded.a, excluded.b)` emits none.
+  Through SeaTunnel it was a pair of Postgres tables and two flows in
+  opposite directions, each recoding a `'Y'/'N'` column as a boolean:
+
+  | sink | what happened |
+  |---|---|
+  | generated upsert (`generate_sink_sql`) | `n_tup_upd` went 25 → 45 in 30 s with **no** edit anywhere; the pair never settles |
+  | guarded upsert in `query`, alone | settled after the snapshot, then looped again after the first edit |
+  | guarded upsert **and** `FilterRowKind` dropping `UPDATE_BEFORE` | one edit on each side, exactly 2 updates per table, unchanged 30 s later |
+
+  The middle row is the subtle one. In `query` mode the sink runs the
+  statement for every row it receives, including an update's *before*
+  image, so it writes the old value and then the new one. Each is a real
+  change, and the pair oscillates. With `generate_sink_sql` the sink knows
+  row kinds; with a custom statement it does not.
+
+Two more costs of a Postgres *source*:
+
+* **`REPLICA IDENTITY FULL` is required.** SeaTunnel's Postgres CDC refuses to
+  start without it. On a table that belongs to another system that is an
+  `ALTER` on their table, and every update then logs the whole old row.
+* **It leaves things behind.** A job creates a replication slot and a
+  publication, `dbz_publication`, and neither goes when the job stops. A slot
+  nobody reads holds WAL for ever: the silent-resource shape issue #35 was
+  about.
+
+Deletes were excluded from the guarded runs. A custom `query` has one
+statement, so a delete needs its own branch: `FilterRowKind` keeping `DELETE`
+into a second sink whose statement deletes by key.
 
 Together with `core/flows.py`'s refusals, this is what makes a pair
 self-terminating. The inverse maps and one-to-one value maps guarantee the
 round trip reproduces the *identical* value. An identical value is then a
-no-op on SQL Server, and on Postgres a no-op only when the write is guarded.
+no-op on SQL Server natively. On Postgres it is a no-op only when the write
+is guarded and before images are dropped, which is what a flow compiler has
+to emit for a Postgres target in a pair.
 
 ## What this does not decide
 
