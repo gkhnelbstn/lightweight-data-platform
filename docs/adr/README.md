@@ -46,3 +46,4 @@ upstream feature that would let it be deleted.
 | [0016](0016-extension-points.md) | Rule kinds take plugins; engines and integrations stay code | datacontract-cli grows pluggable check kinds |
 | [0017](0017-a-view-instead-of-a-copy.md) | A view where a copy buys nothing: `stg`, `mart`, and `syncTo mode: view` | dbt owns the warehouse materialisation |
 | [0018](0018-debezium-without-kafka.md) | Debezium runs without Kafka now, and the CDC reader still stays ours | Debezium grows a native row filter |
+| [0019](0019-an-integration-is-its-own-file.md) | An integration between two systems is its own file, not a line in either system's contract | ODCS grows a flow or port model |

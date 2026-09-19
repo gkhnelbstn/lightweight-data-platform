@@ -16,10 +16,17 @@ does is refuse a mapping that would not work, which is the same thing
 `core/sync.py`'s `problems()` is for and the same argument ADR 0008 makes:
 *"Ours is the part neither engine does."*
 
-So the mapping is declared in the **target's** contract, next to its own key
-and its own checks, as column detail on the `derivedFrom` this repository
-already reads for lineage (ADR 0014). An entry stays a bare reference when
-there is nothing to say:
+This module is the column map and its refusals, and it has two users that
+say different things (ADR 0019). A `derivedFrom` entry with column detail is
+*lineage inside our own pipeline*: the target's contract says how our process
+built it. An integration flow (core/flows.py) is *rows moved between two
+systems we do not both own*, and lives in its own file so that neither
+system's contract has to know about it. A column map breaks the same ways in
+both, so the checks are shared.
+
+For lineage, the map is column detail on the `derivedFrom` this repository
+already reads (ADR 0014). An entry stays a bare reference when there is
+nothing to say:
 
     customProperties:
       - property: derivedFrom
@@ -44,13 +51,14 @@ A column whose *values* are coded differently on the two sides says how, as a
 sibling of `columns`, keyed by the target column -- what arrives, and what it
 becomes here:
 
-          - contract: zirve.hesap
-            columns: {AKTIF: Durum}
+          - contract: erp.customers
+            columns: {is_active: aktif}
             values:
-              AKTIF: {true: E, false: H}
+              is_active: {E: true, H: false}
 
 A value map rather than an expression, on purpose: a map can be inverted, so
-a two-way pair can check that the way back is the way there (core/two_way.py).
+a two-way flow pair can check that the way back is the way there
+(core/flows.py).
 `upper(country)` or `qty * price` cannot, and a pair built on one would
 corrupt its own round trip. Expressions wait for a one-way case that needs
 them; issue #53.
@@ -127,10 +135,75 @@ def filled_here(contract: dict) -> set[str]:
     return out
 
 
+def column_problems(label: str, here: dict[str, dict], mapping: Mapping,
+                    upstream: dict, covered: set[str]) -> list[str]:
+    """What is wrong with one column map into a target whose columns are `here`.
+
+    Shared by a `derivedFrom` entry and an integration flow (core/flows.py):
+    the two say different things -- lineage inside our pipeline, rows moved
+    between two systems -- but a column map breaks the same ways in both.
+    `covered` collects the target columns filled so far, across every map
+    into the same target, so a second source for one column is caught.
+    """
+    there = _properties(upstream)
+    out: list[str] = []
+    for target in mapping.values:
+        if target not in mapping.columns:
+            out.append(f"{label}: {target!r} has a value map but no "
+                       f"column mapping, so nothing it translates arrives")
+
+    for target, source in mapping.columns.items():
+        if target not in here:
+            out.append(f"{label}: the mapping fills {target!r}, which this "
+                       f"contract does not declare")
+        if source not in there:
+            out.append(f"{label}: the mapping reads {source!r} from "
+                       f"{mapping.reference}, which does not declare it")
+            continue
+        if target in covered:
+            out.append(f"{label}: {target!r} is filled twice; one of the "
+                       f"two sources would silently win")
+        covered.add(target)
+
+        # The column list in a syncTo rule is a privacy boundary (ADR 0008)
+        # because a column left out has no column in the target. A mapping
+        # has no such physics -- it names the target column explicitly --
+        # so the boundary has to be stated and checked instead.
+        classification = there[source].get("classification")
+        if classification and here.get(target, {}).get(
+                "classification") != classification:
+            out.append(
+                f"{label}: {source!r} is classified {classification!r} at "
+                f"{mapping.reference} and {target!r} here is not; a "
+                f"classified value may not lose its classification by "
+                f"being copied")
+    return out
+
+
+def gap_problems(label: str, here: dict[str, dict], covered: set[str],
+                 filled: set[str]) -> list[str]:
+    """Required and key columns of the target that nothing puts a value in."""
+    out: list[str] = []
+    required = {n for n, p in here.items()
+                if p.get("required") or p.get("primaryKey")}
+    gaps = sorted(required - covered - filled)
+    if gaps:
+        out.append(f"{label}: {', '.join(gaps)} is required here and no "
+                   f"mapping fills it; the contract promises a column "
+                   f"nothing puts a value in")
+    key = sorted({n for n, p in here.items() if p.get("primaryKey")}
+                 - covered - filled)
+    if key:
+        out.append(f"{label}: the primary key {', '.join(key)} is not "
+                   f"filled by any mapping, so a row arriving twice "
+                   f"cannot be matched to the one already here")
+    return out
+
+
 def problems(contract: dict, by_id: dict[str, dict]) -> list[str]:
     """Every reason a declared mapping would not hold, before anything moves.
 
-    Each rule below is a thing that fails *silently* otherwise: a column that
+    Each rule is a thing that fails *silently* otherwise: a column that
     nothing fills, a classified value that crosses, a key that cannot match a
     row. None of them raise on their own -- which is why they are checked here
     and not discovered in the target.
@@ -142,7 +215,6 @@ def problems(contract: dict, by_id: dict[str, dict]) -> list[str]:
     """
     here = _properties(contract)
     table = (contract.get("schema") or [{}])[0].get("name", contract.get("id", "?"))
-    generated = filled_here(contract)
     out: list[str] = []
     covered: set[str] = set()
 
@@ -153,56 +225,11 @@ def problems(contract: dict, by_id: dict[str, dict]) -> list[str]:
             # a graph missing an edge still looks complete.
             out.append(f"{table}: derivedFrom names {mapping.reference!r}, "
                        f"which is not a contract this platform loads")
-            continue
-        if not mapping.detailed:
-            continue
-        there = _properties(upstream)
-
-        for target in mapping.values:
-            if target not in mapping.columns:
-                out.append(f"{table}: {target!r} has a value map but no "
-                           f"column mapping, so nothing it translates arrives")
-
-        for target, source in mapping.columns.items():
-            if target not in here:
-                out.append(f"{table}: the mapping fills {target!r}, which this "
-                           f"contract does not declare")
-            if source not in there:
-                out.append(f"{table}: the mapping reads {source!r} from "
-                           f"{mapping.reference}, which does not declare it")
-                continue
-            if target in covered:
-                out.append(f"{table}: {target!r} is filled twice; one of the "
-                           f"two sources would silently win")
-            covered.add(target)
-
-            # The column list in a syncTo rule is a privacy boundary (ADR 0008)
-            # because a column left out has no column in the target. A mapping
-            # has no such physics -- it names the target column explicitly --
-            # so the boundary has to be stated and checked instead.
-            classification = there[source].get("classification")
-            if classification and here.get(target, {}).get(
-                    "classification") != classification:
-                out.append(
-                    f"{table}: {source!r} is classified {classification!r} at "
-                    f"{mapping.reference} and {target!r} here is not; a "
-                    f"classified value may not lose its classification by "
-                    f"being copied")
+        elif mapping.detailed:
+            out += column_problems(table, here, mapping, upstream, covered)
 
     if any(m.detailed for m in declared(contract)):
-        required = {n for n, p in here.items()
-                    if p.get("required") or p.get("primaryKey")}
-        gaps = sorted(required - covered - generated)
-        if gaps:
-            out.append(f"{table}: {', '.join(gaps)} is required here and no "
-                       f"mapping fills it; the contract promises a column "
-                       f"nothing puts a value in")
-        key = sorted({n for n, p in here.items() if p.get("primaryKey")}
-                     - covered - generated)
-        if key:
-            out.append(f"{table}: the primary key {', '.join(key)} is not "
-                       f"filled by any mapping, so a row arriving twice "
-                       f"cannot be matched to the one already here")
+        out += gap_problems(table, here, covered, filled_here(contract))
     return out
 
 
@@ -214,7 +241,7 @@ def main() -> None:
     """
     import argparse
 
-    from core import two_way
+    from core import flows
     from core.runner import load_contracts
 
     ap = argparse.ArgumentParser(description="Validate declared column mappings.")
@@ -227,7 +254,7 @@ def main() -> None:
     by_id = {c["id"]: c for c in contracts}
     bad = 0
     for contract in contracts:
-        found = problems(contract, by_id) + two_way.problems(contract, by_id)
+        found = problems(contract, by_id)
         detailed = [m for m in declared(contract) if m.detailed]
         if not found and not detailed:
             continue
@@ -238,6 +265,14 @@ def main() -> None:
         for line in found:
             print(f"  REFUSED: {line}")
         bad += len(found)
+    loaded = flows.load()
+    if loaded:
+        print(f"\nflows in {flows.FLOWS}")
+        for flow in loaded:
+            print(f"  {flow.id}: {flow.mapping.reference} -> {flow.target}")
+    for line in flows.problems(loaded, by_id):
+        print(f"  REFUSED: {line}")
+        bad += 1
     print(f"\n{bad} problem(s)")
     raise SystemExit(1 if bad else 0)
 
