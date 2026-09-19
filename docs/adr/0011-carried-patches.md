@@ -81,6 +81,23 @@ that use them when ODD ships a Turkish catalogue.** Offered upstream as
 [odd-platform#1904](https://github.com/opendatadiscovery/odd-platform/pull/1904),
 against `main` (746 keys, and the calendar's `BCP47` map as well).
 
+### `deploy/Dockerfile.seatunnel` — SourceTimestamp on 2.3.13
+
+The conflict rule for integration flows is "the latest edit wins", which needs
+each change's commit time. SeaTunnel 2.3.13 only exposes when it *read* the
+change (`EventTime`). The commit time is `SourceTimestamp`, added upstream in
+apache/seatunnel#10667 after the release. ADR 0020 has the measurements.
+
+This is the cheapest kind of carried patch there is: one upstream commit,
+already merged, cherry-picked onto the release tag. The Dockerfile clones
+`apache/seatunnel` at 2.3.13, applies it, and rebuilds only the two jars it
+changes. It fails the build if the pick stops applying. The same branch is in
+the fork, `gkhnelbstn/seatunnel`, as `ldp/2.3.13-source-timestamp`.
+
+**Delete the `src` and `build` stages when a SeaTunnel release contains
+#10667.** Nothing is reported, because nothing needs to be: it is already
+merged.
+
 ### Worked around without a patch
 
 odd-collector's `mssql` adapter enumerates every `BASE TABLE` it can see and
