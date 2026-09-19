@@ -47,6 +47,11 @@ filledByTarget: [CreatedAt]       # the target's own default fills these
 
 The table contracts it names describe their tables and nothing else.
 
+*Since ADR 0021* a two-way flow's other end is a hub, never the other system,
+and `winsOnConflict` is gone: the hub's latest commit decides. A flow into or
+out of a table with several rows per record also says `match` (#79), e.g.
+`match: {ADDR_TYPE: INV}`. `demo/integration/flows/` has the current shape.
+
 **Not ODCS, and not in the ODCS glob.** A flow has no schema, no server and no
 checks; it is a rule about two contracts, the way `syncTo` is. Every contract
 reader here uses `contracts/*.odcs.yaml` non-recursively: the runner, the API,

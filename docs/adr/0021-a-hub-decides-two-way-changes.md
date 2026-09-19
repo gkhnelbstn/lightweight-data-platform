@@ -204,7 +204,7 @@ customer's name as well, and landed over an edit made in the meantime. Hence
   delete branch of ADR 0020, and the compiler refuses them rather than emit
   a looping job.
 * **Many to one is partly built** (#53): several tables into one record is
-  (#79). A crosswalk for differing codes (#80), aggregation, which is one-way
+  done (#79). A crosswalk for differing codes (#80), aggregation, which is one-way
   only (#81), and a third system (#82) are not.
 * A part a system has no row for is still awaited as empty from it, and the
   awaited value lives out its hour. The cost is a no-op write back to that
