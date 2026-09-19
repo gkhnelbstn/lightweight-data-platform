@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 374 tests; the ones that need a database skip without one
+pytest -q                                                  # 377 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -349,6 +349,11 @@ trigger.
   keeps its own value and logs `unmapped` in `hub.conflict`. A NULL from a map
   is not the system emptying the field; applying it would empty every other
   system. #84.
+* **An awaited value the system already had is dropped**, not left for its
+  hour: a delivery that changed nothing there never echoes, and the stale
+  expectation swallowed a later edit to that exact value (an address added
+  then removed, a name changed and changed back). "Already had" is the before
+  image, or nothing for a new row. #84.
 * `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
   needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
   generated upsert there loops for ever -- so it raises instead.

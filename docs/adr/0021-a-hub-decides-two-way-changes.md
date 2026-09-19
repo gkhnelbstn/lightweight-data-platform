@@ -249,11 +249,18 @@ without it: they read the key's column in `_changed` like `*`.
 
 ### Known limits
 
-* A value awaited from a system can be superseded before the job that would
-  deliver it starts. At the first sync, the out-flow's snapshot reads the
-  final golden record, so the intermediate value is never sent. The awaited
-  value is then never consumed. It is harmless unless that system edits the
-  field to exactly that value within the hour it lives.
+* **An awaited value that never comes back** (#84). Measured after a first
+  sync and a `verify.py` run: eight were left. Seven were empty values
+  awaited from the CRM's address table for addresses it has no row for.
+  One was a value the CRM already held, where the out-flow's snapshot read
+  the final record and the delivery changed nothing. Either kind swallowed a
+  later edit to exactly that value, and both cases were reproduced in tests:
+  an address added and then removed, and a name changed and then changed back.
+  Now a value the system already had is dropped from what the hub awaits,
+  since delivering it there cannot produce a change. That value is its before
+  image, or nothing at all for a new row. The hour stays as garbage
+  collection, swept on every `expect_add` rather than only when the same
+  field is next consumed.
 * **A value outside a value map** lands as NULL (ADR 0020), and SeaTunnel's
   SQL cannot raise. So the in-flow also says which fields it happened to
   (`unmapped`, a `CASE` per mapped column). The hub keeps its own value, since a
@@ -273,10 +280,7 @@ without it: they read the key's column in `_changed` like `*`.
   that has one.
 * A system whose codes are typed by people cannot receive new records: there
   is nothing to put in `filledByTarget`. Its rows still link and sync.
-* A part a system has no row for is still awaited as empty from it, and the
-  awaited value lives out its hour. The cost is a no-op write back to that
-  system if it sets the field within the hour -- SQL Server records no change
-  for it, so nothing loops.
+
 
 ### What this record does not decide
 

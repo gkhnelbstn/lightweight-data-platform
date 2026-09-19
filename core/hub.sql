@@ -58,6 +58,7 @@ create table if not exists hub.expect (
     created_at timestamptz not null default now()
 );
 create index if not exists expect_lookup on hub.expect (system, entity, key, field, seq);
+create index if not exists expect_age on hub.expect (created_at);
 
 -- Every time two systems changed the same field without seeing each other's
 -- change. Nothing is lost silently: the losing value is here.
@@ -157,6 +158,10 @@ create or replace function hub.expect_add(p_system text, p_entity text, p_key js
                                           p_field text, p_value jsonb)
 returns void language plpgsql as $$
 begin
+    -- Anything awaited for over an hour is dropped here too, not only when
+    -- its own field is next consumed: a record nobody touches again would
+    -- keep its stale ones for ever (#84).
+    delete from hub.expect x where x.created_at < now() - interval '1 hour';
     if exists (select 1 from hub.expect x
                 where x.system = p_system and x.entity = p_entity and x.key = p_key
                   and x.field = p_field and x.value is not distinct from p_value
@@ -526,6 +531,13 @@ begin
         -- Our own write, on its way back.
         continue when hub.consume(p_system, p_entity, k, f, a);
         b := before -> f;
+        -- A value this system already had -- its before image, or nothing at
+        -- all for a new row -- can never come back as a change: delivering it
+        -- there changed nothing. Awaited anyway, it would swallow a later
+        -- edit to exactly that value, for up to its hour (#84).
+        delete from hub.expect x
+         where x.system = p_system and x.entity = p_entity and x.key = k
+           and x.field = f and x.value is not distinct from coalesce(b, 'null'::jsonb);
         -- A field this change did not touch.
         continue when before is not null and b is not distinct from a;
         gv := g -> f;
