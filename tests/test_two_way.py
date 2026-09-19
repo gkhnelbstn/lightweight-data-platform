@@ -119,3 +119,61 @@ def test_the_classification_still_has_to_match_both_ways():
     zirve["schema"][0]["properties"][2].pop("classification")
     found = _all(SIBER, zirve)
     assert any("may not lose its classification" in p for p in found)
+
+
+# --- values coded differently on the two sides ------------------------------
+
+E_H = {True: "E", False: "H"}      # Zirve's bit, as Siber spells it
+BIT = {"E": True, "H": False}      # Siber's 'E'/'H', as Zirve stores it
+
+
+def _with_status(siber_values=None, zirve_values=None):
+    """The pair plus AKTIF ('E'/'H', Siber) <-> Durum (bit, Zirve)."""
+    siber, zirve = copy.deepcopy(SIBER), copy.deepcopy(ZIRVE)
+    for c, col, other, values in ((siber, "AKTIF", "Durum", siber_values),
+                                  (zirve, "Durum", "AKTIF", zirve_values)):
+        c["schema"][0]["properties"].append({"name": col})
+        entry = c["customProperties"][0]["value"][0]
+        entry["columns"][col] = other
+        if values is not None:
+            entry["values"] = {col: values}
+    zirve["customProperties"][1]["value"].append("Durum")
+    return siber, zirve
+
+
+def test_a_value_map_is_read_beside_the_columns():
+    siber, _ = _with_status(E_H, BIT)
+    assert mapping.declared(siber)[0].values == {"AKTIF": E_H}
+
+
+def test_inverse_value_maps_are_silent():
+    assert _all(*_with_status(E_H, BIT)) == []
+
+
+def test_a_value_map_on_one_side_only():
+    """Zirve copies Siber's 'E' into a bit column: the round trip breaks."""
+    found = _all(*_with_status(E_H, None))
+    assert found == ["siber.cari: 'AKTIF' <-> zirve.hesap.Durum translates "
+                     "values in one direction only (zirve.hesap copies them), "
+                     "so a round trip writes a translated value back "
+                     "untranslated"]
+
+
+def test_a_value_map_that_sends_two_values_to_one():
+    found = _all(*_with_status(E_H, {"E": True, "H": False, "Y": True}))
+    assert any("sends two values to one" in p for p in found)
+
+
+def test_value_maps_that_are_not_inverses():
+    found = _all(*_with_status(E_H, {"E": False, "H": True}))
+    assert found == ["siber.cari: the value map for 'AKTIF' is not the "
+                     "inverse of zirve.hesap's for 'Durum', so a round trip "
+                     "changes the value"]
+
+
+def test_a_value_map_for_a_column_nothing_fills():
+    siber, zirve = _with_status(E_H, BIT)
+    siber["customProperties"][0]["value"][0]["values"]["UNVANI"] = {"a": "b"}
+    found = mapping.problems(siber, {"zirve.hesap": zirve})
+    assert found == ["CARI: 'UNVANI' has a value map but no column mapping, "
+                     "so nothing it translates arrives"]

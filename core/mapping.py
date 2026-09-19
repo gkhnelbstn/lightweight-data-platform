@@ -40,6 +40,21 @@ are not gaps, and the contract says so once:
 which is also the list a reader wants: exactly the columns this table invents
 rather than carries.
 
+A column whose *values* are coded differently on the two sides says how, as a
+sibling of `columns`, keyed by the target column -- what arrives, and what it
+becomes here:
+
+          - contract: zirve.hesap
+            columns: {AKTIF: Durum}
+            values:
+              AKTIF: {true: E, false: H}
+
+A value map rather than an expression, on purpose: a map can be inverted, so
+a two-way pair can check that the way back is the way there (core/two_way.py).
+`upper(country)` or `qty * price` cannot, and a pair built on one would
+corrupt its own round trip. Expressions wait for a one-way case that needs
+them; issue #53.
+
 Nothing here moves a row. `problems()` below is what refuses one.
 """
 from __future__ import annotations
@@ -52,6 +67,8 @@ class Mapping:
     """One upstream contract and, where stated, how its columns land here."""
     reference: str
     columns: dict[str, str] = field(default_factory=dict)
+    # target column -> {value as it arrives: value it becomes here}
+    values: dict[str, dict] = field(default_factory=dict)
 
     @property
     def detailed(self) -> bool:
@@ -74,7 +91,8 @@ def declared(contract: dict) -> list[Mapping]:
         for entry in (value if isinstance(value, list) else [value]):
             if isinstance(entry, dict):
                 out.append(Mapping(str(entry.get("contract", "")),
-                                   dict(entry.get("columns") or {})))
+                                   dict(entry.get("columns") or {}),
+                                   dict(entry.get("values") or {})))
             else:
                 out.append(Mapping(str(entry)))
     return out
@@ -139,6 +157,11 @@ def problems(contract: dict, by_id: dict[str, dict]) -> list[str]:
         if not mapping.detailed:
             continue
         there = _properties(upstream)
+
+        for target in mapping.values:
+            if target not in mapping.columns:
+                out.append(f"{table}: {target!r} has a value map but no "
+                           f"column mapping, so nothing it translates arrives")
 
         for target, source in mapping.columns.items():
             if target not in here:

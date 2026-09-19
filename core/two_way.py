@@ -27,8 +27,15 @@ sync, which is the one moment a pair has to choose. With no master that
 choice is made silently, by timing. With two masters the contracts
 contradict each other.
 
-Value and type transformations (`'E'/'H'` against a `bit`) are not in the
-vocabulary yet, and nothing executes a pair yet. See issue #53 and ADR 0008.
+**A value map has to survive the round trip too.** `AKTIF` coded `'E'/'H'`
+on one side and `Durum` a `bit` on the other is the same column in two
+spellings, and `values` says how to translate (core/mapping.py). Two ways
+that goes wrong silently. The map is not one-to-one: `'E'` and `'Y'` both
+become `1`, and `1` cannot come back as both. Or the way back is not the
+inverse of the way there: one side maps and the other copies, and `1` comes
+back as `'1'` into a `char(1)` that meant `'E'`.
+
+Nothing executes a pair yet. See issue #53 and ADR 0008.
 """
 from __future__ import annotations
 
@@ -45,11 +52,32 @@ def mastered_here(contract: dict) -> set[str]:
     return out
 
 
-def _columns_from(contract: dict, reference: str) -> dict[str, str] | None:
+def _mapping_from(contract: dict, reference: str):
     for mapping in declared(contract):
         if mapping.reference == reference and mapping.detailed:
-            return mapping.columns
+            return mapping
     return None
+
+
+def _value_problems(me: str, there: str, mine: str, theirs: str,
+                    forward: dict | None, back: dict | None) -> list[str]:
+    """`forward` turns their value into ours; `back` turns ours into theirs."""
+    if forward is None and back is None:
+        return []
+    if forward is None or back is None:
+        side = me if forward is None else there
+        return [f"{me}: {mine!r} <-> {there}.{theirs} translates values in one "
+                f"direction only ({side} copies them), so a round trip writes "
+                f"a translated value back untranslated"]
+    out = []
+    for name, m in ((me, forward), (there, back)):
+        if len(set(m.values())) != len(m):
+            out.append(f"{name}: the value map for {mine!r} <-> {theirs!r} "
+                       f"sends two values to one, which cannot come back")
+    if not out and back != {v: k for k, v in forward.items()}:
+        out.append(f"{me}: the value map for {mine!r} is not the inverse of "
+                   f"{there}'s for {theirs!r}, so a round trip changes the value")
+    return out
 
 
 def problems(contract: dict, by_id: dict[str, dict]) -> list[str]:
@@ -62,9 +90,10 @@ def problems(contract: dict, by_id: dict[str, dict]) -> list[str]:
     out: list[str] = []
     for mapping in declared(contract):
         other = by_id.get(mapping.reference)
-        back = _columns_from(other, me) if other and mapping.detailed else None
-        if back is None:
+        reverse = _mapping_from(other, me) if other and mapping.detailed else None
+        if reverse is None:
             continue
+        back = reverse.columns
         there = mapping.reference
 
         for mine, theirs in mapping.columns.items():
@@ -77,6 +106,11 @@ def problems(contract: dict, by_id: dict[str, dict]) -> list[str]:
                 out.append(f"{me}: {mine!r} is filled from {there}.{theirs}, "
                            f"which maps back into {returned!r}; the round "
                            f"trip moves the value into another column")
+            elif me < there:
+                # A fact about the pair, like the master rule below.
+                out += _value_problems(me, there, mine, theirs,
+                                       mapping.values.get(mine),
+                                       reverse.values.get(theirs))
 
         # The master rule is a fact about the pair, so only one side reports
         # it -- or a single problem is counted twice by `--check`.
