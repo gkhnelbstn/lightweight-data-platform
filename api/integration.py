@@ -189,5 +189,27 @@ def integration() -> dict:
         except Exception as exc:
             hub["hub_error"] = f"{exc.__class__.__name__}: {exc}"
         hubs.append(hub)
-    return {"hubs": hubs, "problems": flowmod.problems(flows, by_id),
-            "seatunnel_error": st_error}
+    return {"hubs": hubs, "totals": [totals(f, by_id, running) for f in flows if f.aggregates],
+            "problems": flowmod.problems(flows, by_id), "seatunnel_error": st_error}
+
+
+def totals(flow: flowmod.Flow, by_id: dict[str, dict], running: dict) -> dict:
+    """A one-way aggregate (#81): its two jobs, and how many lines and groups
+    are summed where they land (core/flow_aggregate.py)."""
+    from core import flow_aggregate
+    row = {"flow": flow.id, "from": flow.mapping.reference, "to": flow.target,
+           "group": flow.mapping.columns, "aggregates": flow.aggregates,
+           "jobs": {"in": running.get(flow.id), "out": running.get(f"{flow.id}_out")}}
+    server = flow_aggregate.landing(by_id)
+    try:
+        with psycopg.connect(admin_dsn(server["host"], server.get("port", 5432),
+                                       server["database"]), connect_timeout=3) as cx:
+            row["lines"], row["groups"], landed = cx.execute(sql.SQL(
+                "select (select count(*) from flow.{}), (select count(*) from flow.{}), "
+                "(select max(landed_at) from flow.{})").format(
+                    sql.Identifier(f"{flow.id}_lines"), sql.Identifier(flow.id),
+                    sql.Identifier(f"{flow.id}_inbox"))).fetchone()
+        row["landed_at"] = landed.isoformat() if landed else None
+    except Exception as exc:
+        row["error"] = f"{exc.__class__.__name__}: {exc}"
+    return row

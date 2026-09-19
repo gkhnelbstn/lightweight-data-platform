@@ -26,6 +26,16 @@ from core import flows as flowmod
 from core.flow_resume import mssql
 
 
+def sides(flow: flowmod.Flow, by_id: dict[str, dict]) -> list[tuple[dict, list[str], bool]]:
+    """Every system table a flow touches: one for a flow through a hub, both
+    ends for an aggregate, which reads its lines and writes its totals."""
+    if not flow.aggregates:
+        return [mapped(flow, by_id)]
+    from core import flow_aggregate
+    source, target, _, _, _, aggs, lines = flow_aggregate._shape(flow, by_id)
+    return [(source, lines, True), (target, sorted({*flow.mapping.columns, *aggs}), False)]
+
+
 def mapped(flow: flowmod.Flow, by_id: dict[str, dict]) -> tuple[dict, list[str], bool]:
     """The system-side table's contract, the columns the flow maps on it, and
     whether the flow reads it (in) or writes it (out)."""
@@ -79,8 +89,14 @@ def _postgres(flow: flowmod.Flow, contract: dict, server: dict, columns: list[st
 
 def problems(flow: flowmod.Flow, by_id: dict[str, dict],
              timeout: int = 30) -> list[str]:
-    contract, columns, reads = mapped(flow, by_id)
-    server = server_of(flow, by_id)
+    return [p for contract, columns, reads in sides(flow, by_id)
+            for p in _side(flow, contract, columns, reads, timeout)]
+
+
+def _side(flow: flowmod.Flow, contract: dict, columns: list[str], reads: bool,
+          timeout: int) -> list[str]:
+    server = next((s for s in contract.get("servers") or []
+                   if s.get("type") in ("sqlserver", "postgres", "postgresql")), None)
     if server is None:
         return []
     if server["type"] != "sqlserver":

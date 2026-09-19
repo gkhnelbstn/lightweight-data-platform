@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Typography } from '@mui/material';
 import { AppTabs, EmptyContentPlaceholder, Table } from 'components/shared/elements';
 import * as Layout from 'components/shared/styled-components/layout';
-import type { Arrival, FlowJob, Hub, IntegrationFlow, IntegrationState } from './api';
+import type { Arrival, FlowJob, Hub, IntegrationFlow, IntegrationState, Totals } from './api';
 import { getIntegration } from './api';
 import { Code, tr, useT, when } from './shared';
 import { HeldPanel, RecordPanel } from './RecordDetail';
@@ -80,9 +80,78 @@ const Integration: React.FC = () => {
             />
           )}
           {state?.hubs.map(hub => <HubCard key={hub.id} hub={hub} />)}
+          {!!state?.totals?.length && <TotalsCard rows={state.totals} />}
         </S.Shell>
       </Layout.Content>
     </Layout.LayoutContainer>
+  );
+};
+
+/** One-way aggregates (#81): many rows of one system become one row per
+ * group in another. No hub, no conflicts -- a total has no inverse -- so
+ * the question is only whether both of its jobs run and what they hold. */
+const TotalsCard: React.FC<{ rows: Totals[] }> = ({ rows }) => {
+  const t = useT();
+  return (
+    <S.Panel>
+      <div>
+        <Typography variant='h3'>{t('One-way totals')}</Typography>
+        <Typography variant='caption' color='texts.secondary'>
+          {t('Many rows of one system summed into one row per group in another. A total cannot come back as rows, so these only go one way.')}
+        </Typography>
+      </div>
+      <Table.HeaderContainer>
+        <Table.Cell $flex={1.6}>
+          <Typography variant='caption'>{t('Flow')}</Typography>
+        </Table.Cell>
+        <Table.Cell $flex={1.6}>
+          <Typography variant='caption'>{t('Rows in')}</Typography>
+        </Table.Cell>
+        <Table.Cell $flex={1.6}>
+          <Typography variant='caption'>{t('Totals out')}</Typography>
+        </Table.Cell>
+      </Table.HeaderContainer>
+      {rows.map(r => (
+        <Table.RowContainer key={r.flow}>
+          <Table.Cell $flex={1.6}>
+            <div>
+              <Typography variant='body1'>{r.flow}</Typography>
+              <Typography variant='caption' color='texts.secondary' component='div'>
+                {r.from} → {r.to}
+              </Typography>
+              <Typography variant='caption' color='texts.secondary' component='div'>
+                {t('per {{group}}: {{aggregates}}', {
+                  group: Object.values(r.group).join(', '),
+                  aggregates: Object.entries(r.aggregates).map(([c, e]) => `${c} = ${e}`).join(', '),
+                })}
+              </Typography>
+            </div>
+          </Table.Cell>
+          <Table.Cell $flex={1.6}>
+            <div>
+              <FlowLine flow={{ flow: r.flow, match: {}, job: r.jobs.in }} count='read' />
+              <Typography variant='caption' color='texts.secondary' component='div'>
+                {t('{{n}} lines held', { n: r.lines ?? '—' })}
+                {r.landed_at ? ` · ${when(r.landed_at)}` : ''}
+              </Typography>
+            </div>
+          </Table.Cell>
+          <Table.Cell $flex={1.6}>
+            <div>
+              <FlowLine flow={{ flow: `${r.flow}_out`, match: {}, job: r.jobs.out }} count='written' />
+              <Typography variant='caption' color='texts.secondary' component='div'>
+                {t('{{n}} totals', { n: r.groups ?? '—' })}
+              </Typography>
+              {r.error && (
+                <Typography variant='caption' color='error.main' component='div'>
+                  {r.error}
+                </Typography>
+              )}
+            </div>
+          </Table.Cell>
+        </Table.RowContainer>
+      ))}
+    </S.Panel>
   );
 };
 

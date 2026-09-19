@@ -61,6 +61,7 @@ GO
 USE billing;
 IF (SELECT is_cdc_enabled FROM sys.databases WHERE name = 'billing') = 1
     EXEC sys.sp_cdc_disable_db;
+IF OBJECT_ID('dbo.invoice_line') IS NOT NULL DROP TABLE dbo.invoice_line;
 IF OBJECT_ID('dbo.customer') IS NOT NULL DROP TABLE dbo.customer;
 IF OBJECT_ID('dbo.customer_no') IS NOT NULL DROP SEQUENCE dbo.customer_no;
 GO
@@ -85,4 +86,34 @@ IF (SELECT is_cdc_enabled FROM sys.databases WHERE name = 'billing') = 0
     EXEC sys.sp_cdc_enable_db;
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'customer',
      @role_name = NULL, @supports_net_changes = 1;
+
+-- Invoice lines, which the accounting package below receives as one journal
+-- entry per invoice (#81): many rows into one, one way.
+CREATE TABLE dbo.invoice_line (
+    InvoiceNo    varchar(20)   NOT NULL,
+    LineNumber   int           NOT NULL,
+    CustomerCode varchar(20)   NOT NULL,
+    Amount       decimal(14,2) NOT NULL,
+    PRIMARY KEY (InvoiceNo, LineNumber)
+);
+INSERT INTO dbo.invoice_line VALUES
+    ('F-1001', 1, '120.01.014', 1200.00), ('F-1001', 2, '120.01.014', 350.50),
+    ('F-1002', 1, '120.01.012', 980.00);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'invoice_line',
+     @role_name = NULL, @supports_net_changes = 1;
+GO
+
+-- The accounting package: written to, never read from, so no CDC.
+IF DB_ID('ledger') IS NULL CREATE DATABASE ledger;
+GO
+USE ledger;
+IF OBJECT_ID('dbo.journal_entry') IS NOT NULL DROP TABLE dbo.journal_entry;
+GO
+CREATE TABLE dbo.journal_entry (
+    EntryNo      varchar(20)   NOT NULL PRIMARY KEY,
+    CustomerCode varchar(20)   NULL,
+    Total        decimal(14,2) NOT NULL,
+    LineCount    int           NOT NULL,
+    PostedAt     datetime2     NOT NULL DEFAULT sysutcdatetime()
+);
 GO

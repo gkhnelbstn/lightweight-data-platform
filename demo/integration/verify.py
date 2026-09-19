@@ -25,6 +25,7 @@ HUB = os.getenv("HUB_DSN", "host=db dbname=hub user=postgres password=postgres")
 SHOP = os.getenv("SHOP_DSN", "host=db dbname=shop user=postgres password=postgres")
 CRM = {"host": "mssql", "database": "crm"}
 BILLING = {"host": "mssql", "database": "billing"}
+LEDGER = {"host": "mssql", "database": "ledger"}
 SEEDED = ("1234567890", "2345678901", "3456789012", "4567890123", "5678901234",
           "6789012345", "7890123456")
 
@@ -100,6 +101,39 @@ def linked(tax) -> bool:
     """One hub record holding all three systems' codes."""
     return bool(hub("select 1 from hub.customer where tax_id = %s and crm_code is not "
                     "null and billing_code is not null and shop_code is not null", tax))
+
+
+def entry(invoice):
+    rows = sql(LEDGER, "select Total, LineCount from dbo.journal_entry where EntryNo = ?",
+               invoice)
+    return (float(rows[0][0]), rows[0][1]) if rows else None
+
+
+def totals() -> None:
+    """Invoice lines in billing, one journal entry per invoice in the ledger
+    (#81): many rows into one, one way, kept right through every kind of
+    change to a line."""
+    a, b = (f"V-{random.randint(10_000, 99_999)}" for _ in range(2))
+    sql(BILLING, "set xact_abort on; begin tran; "
+                 "insert into dbo.invoice_line values (?, 1, '120.01.014', 100.00); "
+                 "insert into dbo.invoice_line values (?, 2, '120.01.014', 250.25); "
+                 "insert into dbo.invoice_line values (?, 3, '120.01.014', 49.75); "
+                 "insert into dbo.invoice_line values (?, 1, '120.01.012', 10.00); commit",
+        a, a, a, b)
+    wait("an invoice's lines become one journal entry",
+         lambda: entry(a) == (400.00, 3) and entry(b) == (10.00, 1))
+    sql(BILLING, "update dbo.invoice_line set Amount = 300.25 where InvoiceNo = ? "
+                 "and LineNumber = 2", a)
+    wait("a changed line changes the total", lambda: entry(a) == (450.00, 3))
+    sql(BILLING, "update dbo.invoice_line set InvoiceNo = ?, LineNumber = 2 where "
+                 "InvoiceNo = ? and LineNumber = 3", b, a)
+    wait("a line moved to another invoice leaves one total for the other",
+         lambda: entry(a) == (400.25, 2) and entry(b) == (59.75, 2))
+    sql(BILLING, "delete from dbo.invoice_line where InvoiceNo = ? and LineNumber = 1", a)
+    wait("a deleted line leaves its total", lambda: entry(a) == (300.25, 1))
+    sql(BILLING, "delete from dbo.invoice_line where InvoiceNo in (?, ?)", a, b)
+    wait("an invoice with no lines left has no journal entry",
+         lambda: entry(a) is None and entry(b) is None)
 
 
 def main() -> None:
@@ -194,6 +228,8 @@ def main() -> None:
     wait("a shop delete takes it out of billing and the CRM",
          lambda: billing_row(other) is None
          and not sql(CRM, "select 1 from dbo.account where TAX_NO = ?", other))
+
+    totals()
 
     # The last delivery's echo is still on its way; it is recognised, but it
     # lands. Let it, then watch: a loop keeps writing, a settled pair does not.

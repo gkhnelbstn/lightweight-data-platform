@@ -32,7 +32,8 @@ def test_every_demo_flow_compiles(compiled):
     assert sorted(compiled) == [
         "billing_to_hub", "crm_invoice_address_to_hub", "crm_shipping_address_to_hub",
         "crm_to_hub", "hub_to_billing", "hub_to_crm", "hub_to_crm_invoice_address",
-        "hub_to_crm_shipping_address", "hub_to_shop", "shop_to_hub"]
+        "hub_to_crm_shipping_address", "hub_to_shop", "invoice_totals", "invoice_totals_out",
+        "shop_to_hub"]
 
 
 def test_the_shop_is_written_with_the_guarded_postgres_merge(compiled):
