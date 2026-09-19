@@ -244,7 +244,7 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   for. Issue #50 is the narrower case that *is* a bug.
 * **An integration between two systems is its own file**, one per direction,
   in `contracts/flows/` (ADR 0019): `from`, `to`, `columns`, `values`,
-  `winsOnConflict`, `filledByTarget`. Siber's and Zirve's table contracts
+  `winsOnConflict`, `filledByTarget`. The two systems' table contracts
   describe their tables and know nothing about it. The subdirectory is
   deliberate -- every contract reader and the CI lint glob
   `contracts/*.odcs.yaml` non-recursively, so a flow is never windowed,
@@ -257,9 +257,10 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   inverse, and every column is won by exactly one flow. `winsOnConflict`
   decides who wins a conflict, not who may write -- both sides edit the same
   rows, which is why ADR 0008's row-disjointness proof was replaced rather
-  than built. The Siber/Zirve pair is hypothetical and lives in
-  `tests/test_flows.py`: nothing serves it.
-* A column coded differently on the two sides (`'E'/'H'` against a `bit`)
+  than built. The pair in `tests/test_flows.py` (a CRM and a billing
+  system) is a stand-in for any two systems neither of which is ours:
+  nothing serves it.
+* A column coded differently on the two sides (`'Y'/'N'` against a `bit`)
   gets a **value map**, never an expression: a map can be inverted, and
   `upper(x)` or `qty * price` cannot, so a pair built on one would corrupt
   its own round trip. Expressions wait for a one-way case that needs them

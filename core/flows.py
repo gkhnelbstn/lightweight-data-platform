@@ -1,37 +1,38 @@
 """Integration flows: rows moved between two systems neither of which is ours.
 
-Siber (ERP) and Zirve (accounting) each have a table contract that describes
-*their* table. The integration between them is ours, and it is its own file.
-It is not a line in either vendor's contract, which should not have to know
-that someone copies its rows elsewhere. One file per direction, under
+Two systems neither of which is ours -- an ERP and an accounting package, a
+CRM and a billing system -- each have a table contract that describes *their*
+table. The integration between them is ours, and it is its own file. It is
+not a line in either system's contract, which should not have to know that
+someone copies its rows elsewhere. One file per direction, under
 `contracts/flows/`. That directory is outside the glob every contract reader
 uses, so a flow is never windowed, scored or catalogued as if it were a
 table (ADR 0019):
 
-    # contracts/flows/siber_to_zirve.yaml
-    id: siber_to_zirve
-    from: siber.cari                  # the source table's contract
-    to: zirve.hesap                   # the target table's contract
-    columns: {HesapKodu: CARI_KOD, Ad: UNVAN, Durum: AKTIF}   # target: source
+    # contracts/flows/crm_to_billing.yaml
+    id: crm_to_billing
+    from: crm.account                 # the source table's contract
+    to: billing.customer              # the target table's contract
+    columns: {CustomerCode: ACCOUNT_CODE, Name: TITLE, IsActive: ACTIVE}  # target: source
     values:                           # target column: {arrives: lands}
-      Durum: {E: true, H: false}
-    winsOnConflict: [HesapKodu, Ad]   # target columns where this side wins
-    filledByTarget: [KayitTarihi]     # the target's own default fills these
+      IsActive: {Y: true, N: false}
+    winsOnConflict: [CustomerCode, Name]  # target columns where this side wins
+    filledByTarget: [CreatedAt]       # the target's own default fills these
 
 A column map breaks the same ways here as in a `derivedFrom` entry, so the
 one-way refusals are core/mapping.py's, shared. What only a flow has is a
 **pair**: two flows between the same tables in opposite directions, each able
 to pass alone while the pair corrupts data.
 
-* **The maps must be inverses.** `Ad <- UNVAN` needs `UNVAN <- Ad` the other
+* **The maps must be inverses.** `Name <- TITLE` needs `TITLE <- Name` the other
   way. Otherwise an edit is never propagated and is overwritten by the next
   change from the other side, or it comes back into a different column.
 * **A value map has to survive the round trip too.** It must be one-to-one,
-  and the way back must be its inverse. `'E'` and `'Y'` both becoming `1`
+  and the way back must be its inverse. `'Y'` and `'T'` both becoming `1`
   cannot come back as both, and a side that copies instead of translating
-  writes `1` into a `char(1)` that meant `'E'`.
+  writes `1` into a `char(1)` that meant `'Y'`.
 * **Every column of a pair has exactly one winner.** Both sides edit the same
-  customer card, so ADR 0008's escape hatch, row filters proven disjoint, is
+  customer, so ADR 0008's escape hatch, row filters proven disjoint, is
   false by construction. `winsOnConflict` does not restrict who may write. It
   decides whose value stands when both changed the same column since the last
   sync. With no winner that is settled by timing; with two, the flows
