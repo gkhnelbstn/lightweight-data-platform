@@ -22,10 +22,11 @@ import psycopg
 from core.sync_mssql import mssql_connect
 
 HUB = os.getenv("HUB_DSN", "host=db dbname=hub user=postgres password=postgres")
+SHOP = os.getenv("SHOP_DSN", "host=db dbname=shop user=postgres password=postgres")
 CRM = {"host": "mssql", "database": "crm"}
 BILLING = {"host": "mssql", "database": "billing"}
 SEEDED = ("1234567890", "2345678901", "3456789012", "4567890123", "5678901234",
-          "6789012345")
+          "6789012345", "7890123456")
 
 
 def sql(server: dict, statement: str, *args):
@@ -81,17 +82,32 @@ def inbox() -> int:
     return hub("select count(*) from hub.customer_inbox")[0][0]
 
 
+def shop_row(tax):
+    """The shop's row for a tax number: name, active, city (#82)."""
+    with psycopg.connect(SHOP) as cx:
+        rows = cx.execute("select full_name, is_active, city from customer "
+                          "where vat_number = %s", (tax,)).fetchall()
+    assert len(rows) <= 1, f"the shop has {len(rows)} rows for tax number {tax}"
+    return rows[0] if rows else None
+
+
+def shop_sql(statement: str, *args) -> None:
+    with psycopg.connect(SHOP, autocommit=True) as cx:
+        cx.execute(statement, args)
+
+
 def linked(tax) -> bool:
+    """One hub record holding all three systems' codes."""
     return bool(hub("select 1 from hub.customer where tax_id = %s and crm_code is not "
-                    "null and billing_code is not null", tax))
+                    "null and billing_code is not null and shop_code is not null", tax))
 
 
 def main() -> None:
     wait("the first sync settles", lambda: all(linked(t) for t in SEEDED))
     rows = hub("select count(*) from hub.customer where tax_id = any(%s)", list(SEEDED))
-    assert rows == [(6,)], f"{rows[0][0]} hub records for six seeded customers"
+    assert rows == [(7,)], f"{rows[0][0]} hub records for seven seeded customers"
     assert hub("select system, reason from hub.unmatched") == []
-    print("  ok  six customers linked across two numberings, not twelve")
+    print("  ok  seven customers linked across three numberings, not twenty-one")
 
     code, tax = random.randint(10_000, 99_999), str(random.randint(10**9, 10**10 - 1))
     print(f"customer {code}, tax number {tax}")
@@ -105,7 +121,10 @@ def main() -> None:
     wait("a CRM customer and its address arrive in billing as one row",
          lambda: billing_row(tax) == ("Yeni Müşteri", True)
          and billing_cities(tax) == ("Sivas", None))
-    wait("billing numbered it itself, and the hub linked both codes", lambda: linked(tax))
+    wait("the shop has it too, under a number of its own",
+         lambda: shop_row(tax) == ("Yeni Müşteri", True, "Sivas"))
+    wait("every system numbered it itself, and the hub linked all three codes",
+         lambda: linked(tax))
     record = hub("select customer_id from hub.customer where crm_code = %s", code)[0][0]
 
     sql(CRM, "update dbo.account_address set CITY = ? where ACCOUNT_CODE = ? "
@@ -137,30 +156,44 @@ def main() -> None:
     sql(CRM, "update dbo.account set ACTIVE = 'Y' where ACCOUNT_CODE = ?", code)
 
     sql(BILLING, "update dbo.customer set IsActive = 0 where TaxId = ?", tax)
-    wait("a billing edit reaches the CRM, recoded", lambda: crm_row(code) == ("Yeni Müşteri", "N"))
+    wait("a billing edit reaches the CRM, recoded, and the shop",
+         lambda: crm_row(code) == ("Yeni Müşteri", "N") and shop_row(tax)[1] is False)
 
+    # The third system (#82): an edit made in the shop reaches both others.
+    shop_sql("update customer set city = %s where vat_number = %s", "Adana", tax)
+    wait("a shop edit reaches billing's column and the CRM's address row",
+         lambda: billing_cities(tax) == ("Adana", None) and crm_address(code, "INV") == "Adana")
+
+    # Three systems edit one field a second apart: the latest commit wins
+    # everywhere, and both others' values are kept as losers.
     sql(CRM, "update dbo.account set TITLE = ? where ACCOUNT_CODE = ?", "From CRM", code)
     time.sleep(1)
+    shop_sql("update customer set full_name = %s where vat_number = %s", "From shop", tax)
+    time.sleep(1)
     sql(BILLING, "update dbo.customer set Name = ? where TaxId = ?", "From billing", tax)
-    wait("concurrent edits converge on the later commit",
+    wait("a three-way conflict converges on the latest commit in all three",
          lambda: crm_row(code) == ("From billing", "N")
-         and billing_row(tax) == ("From billing", False))
+         and billing_row(tax) == ("From billing", False)
+         and shop_row(tax)[0] == "From billing")
     lost = hub("select lost, lost_by from hub.conflict where key = %s and reason = 'edit' "
-               "order by id desc limit 1", f'{{"customer_id": {record}}}')
-    assert lost == [("From CRM", "crm.account")], lost
-    print("  ok  the losing value is kept in hub.conflict")
+               "and field = 'name' order by id desc limit 2", f'{{"customer_id": {record}}}')
+    assert sorted(lost) == [("From CRM", "crm.account"), ("From shop", "shop.customer")], lost
+    print("  ok  both losing values are kept in hub.conflict")
 
     sql(BILLING, "delete from dbo.customer where TaxId = ?", tax)
-    wait("a billing delete reaches the CRM", lambda: crm_row(code) is None)
+    wait("a billing delete reaches the CRM and the shop",
+         lambda: crm_row(code) is None and shop_row(tax) is None)
 
     # The other way round: billing numbers a new customer, the CRM its own.
     other = str(int(tax) + 1)
     sql(BILLING, "insert into dbo.customer (Name, TaxId, IsActive) values (?, ?, 1)",
         "Yeni Fatura Müşterisi", other)
-    wait("a billing customer reaches the CRM under a CRM code, linked in the hub",
-         lambda: linked(other))
-    sql(CRM, "delete from dbo.account where TAX_NO = ?", other)
-    wait("a CRM delete takes it out of billing", lambda: billing_row(other) is None)
+    wait("a billing customer reaches the CRM and the shop under their own codes, "
+         "linked in the hub", lambda: linked(other))
+    shop_sql("delete from customer where vat_number = %s", other)
+    wait("a shop delete takes it out of billing and the CRM",
+         lambda: billing_row(other) is None
+         and not sql(CRM, "select 1 from dbo.account where TAX_NO = ?", other))
 
     # The last delivery's echo is still on its way; it is recognised, but it
     # lands. Let it, then watch: a loop keeps writing, a settled pair does not.

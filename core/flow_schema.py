@@ -37,10 +37,44 @@ def mapped(flow: flowmod.Flow, by_id: dict[str, dict]) -> tuple[dict, list[str],
 
 
 def server_of(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict | None:
-    """The SQL Server a flow's system-side table lives on, if it is one."""
+    """The server a flow's system-side table lives on."""
     contract = mapped(flow, by_id)[0]
     return next((s for s in contract.get("servers") or []
-                 if s.get("type") == "sqlserver"), None)
+                 if s.get("type") in ("sqlserver", "postgres", "postgresql")), None)
+
+
+def _postgres(flow: flowmod.Flow, contract: dict, server: dict, columns: list[str],
+              reads: bool, timeout: int) -> list[str]:
+    """The same questions of a Postgres table, and one more: a table read by
+    CDC needs its whole old row in the WAL, or an update has no before image
+    and every field looks edited (ADR 0020). That is an ALTER on a table that
+    may not be ours, so it is reported, never done."""
+    import psycopg
+
+    from core.bootstrap_db import admin_dsn
+    table = contract["schema"][0]["physicalName"]
+    with psycopg.connect(admin_dsn(server["host"], server.get("port", 5432),
+                                   server["database"]), connect_timeout=timeout) as cx:
+        types = dict(cx.execute(
+            "select column_name, data_type from information_schema.columns "
+            "where table_schema = %s and table_name = %s",
+            (server.get("schema", "public"), table)).fetchall())
+        live = set(types)
+        identity = cx.execute(
+            "select relreplident from pg_class where oid = to_regclass(%s)",
+            (f"{server.get('schema', 'public')}.{table}",)).fetchone()
+    out = [f"{flow.id}: {contract['id']} has no column {c} any more"
+           for c in columns if c not in live]
+    # SeaTunnel 2.3.13's Postgres CDC will not start on a table with one,
+    # mapped or not: "Unsupported type: TIMESTAMP_TZ" behind a bare HTTP 500.
+    zoned = sorted(c for c, t in types.items() if t == "timestamp with time zone")
+    if reads and zoned:
+        out.append(f"{flow.id}: {contract['id']}.{', '.join(zoned)} is timestamptz, "
+                   f"which SeaTunnel's Postgres CDC cannot read; the job would not start")
+    if reads and identity and identity[0] != "f":
+        out.append(f"{flow.id}: {contract['id']} needs REPLICA IDENTITY FULL, or an "
+                   f"update reaches the hub with no before image")
+    return out
 
 
 def problems(flow: flowmod.Flow, by_id: dict[str, dict],
@@ -49,6 +83,8 @@ def problems(flow: flowmod.Flow, by_id: dict[str, dict],
     server = server_of(flow, by_id)
     if server is None:
         return []
+    if server["type"] != "sqlserver":
+        return _postgres(flow, contract, server, columns, reads, timeout)
     schema = server.get("schema", "dbo")
     table = contract["schema"][0]["physicalName"]
     with mssql(server, timeout) as cx:

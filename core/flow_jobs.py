@@ -30,6 +30,7 @@ from pathlib import Path
 
 import yaml
 
+from core import flow_sql
 from core import flows as flowmod
 from core.mapping import _properties
 
@@ -167,13 +168,13 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
     """
     target = by_id[flow.target]
     server = _server(target)
-    if server["type"] != "sqlserver":
-        raise NotImplementedError(
-            f"{flow.id}: only SQL Server targets are compiled yet; a Postgres "
-            f"target needs the guarded upsert of ADR 0020")
     props = _properties(target)
     key = [n for n, p in props.items() if p.get("primaryKey")]
-    table = f"{server.get('schema', 'dbo')}.{target['schema'][0]['physicalName']}"
+    engine = "sqlserver" if server["type"] == "sqlserver" else "postgres"
+    default_schema = "dbo" if engine == "sqlserver" else "public"
+    where = flow_sql.Target(
+        engine, f"{server.get('schema', default_schema)}.{target['schema'][0]['physicalName']}",
+        {n: p.get("physicalType") for n, p in props.items()} | {"_changed": "text"})
     cols = flow.mapping.columns                      # target column: hub column
     keyed = [(t, s) for t, s in cols.items() if t in key]
     carried = [(t, s) for t, s in cols.items() if t not in key]
@@ -194,31 +195,14 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
     # and deleting the target's row then deletes the address on its way in.
     named = "(" + " OR ".join(
         f"POSITION({_literal(',' + s + ',')}, _changed) > 0" for _, s in carried) + ")"
-    new = " OR ".join(["s._changed = '*'"] + [
-        f"CHARINDEX({_literal(',' + s + ',')}, s._changed) > 0" for _, s in keyed])
-
-    written = list(cols) + list(flow.match)
-    using = ", ".join(f"? AS [{c}]" for c in written) + ", ? AS _changed"
-    on = " AND ".join(f"t.[{c}] = s.[{c}]" for c in [t for t, _ in keyed] + list(flow.match))
+    # A missing record is created only by a revision that is new to everyone
+    # ('*'): otherwise it was deleted here and not yet in the hub. A kind of
+    # row is created when its value changes. The statements are the engine's
+    # (core/flow_sql.py).
     linked = [t for t, s in cols.items() if s in link_by]
-    if assigned and linked:
-        on = (f"({on} OR ({' AND '.join(f's.[{c}] IS NULL' for c in sorted(assigned))} AND "
-              + " AND ".join(f"t.[{c}] = s.[{c}]" for c in linked) + "))")
-    sets = ", ".join(
-        f"t.[{t}] = CASE WHEN {new} OR CHARINDEX({_literal(',' + s + ',')}, "
-        f"s._changed) > 0 THEN s.[{t}] ELSE t.[{t}] END" for t, s in carried)
-    inserted = [c for c in written if c not in assigned]
-    merge = (f"MERGE {table} WITH (HOLDLOCK) AS t USING (SELECT {using}) AS s ON {on} "
-             + (f"WHEN MATCHED THEN UPDATE SET {sets} " if sets else "")
-             # A missing record is created only by a revision that is new to
-             # everyone ('*'): otherwise it was deleted here and not yet in
-             # the hub. A kind of row is created when its value changes.
-             + ("WHEN NOT MATCHED " if flow.match else f"WHEN NOT MATCHED AND ({new}) ")
-             + f"THEN INSERT ({', '.join(f'[{c}]' for c in inserted)}) "
-               f"VALUES ({', '.join(f's.[{c}]' for c in inserted)});")
-    delete = (f"DELETE FROM {table} WHERE "
-              + " AND ".join([f"[{t}] = ?" for t, _ in keyed]
-                             + [f"[{c}] = {_literal(v)}" for c, v in flow.match.items()]))
+    merge = flow_sql.merge(where, keyed, carried, flow.match, assigned, linked,
+                           replace_only=bool(flow.match))
+    delete = flow_sql.delete(where, keyed, flow.match)
     keys_only = ", ".join(f"{s} AS {t}" for t, s in keyed)
     key_known = [f"{s} IS NOT NULL" for _, s in keyed]
 

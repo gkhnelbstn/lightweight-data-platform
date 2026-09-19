@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 379 tests; the ones that need a database skip without one
+pytest -q                                                  # 381 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -366,9 +366,14 @@ which is the default branch.
   expectation swallowed a later edit to that exact value (an address added
   then removed, a name changed and changed back). "Already had" is the before
   image, or nothing for a new row. #84.
-* `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
-  needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
-  generated upsert there loops for ever -- so it raises instead.
+* **A Postgres target gets a guarded MERGE** (`core/flow_sql.py`, #83):
+  `WHEN MATCHED AND (t.cols) IS DISTINCT FROM (new)`. SQL Server records no
+  change for an update that writes what a row holds; Postgres does, and a
+  pair looped on it (ADR 0020). Its parameters are `CAST(? AS type)` from the
+  target contract -- Postgres will not type a bare `?` in a `SELECT`. A
+  Postgres *source* needs `REPLICA IDENTITY FULL`, no `timestamptz` column
+  (SeaTunnel 2.3.13 refuses the whole table), and its slot: all three are
+  checked before a job is submitted, never done for it.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why

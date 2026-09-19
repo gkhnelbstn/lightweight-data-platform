@@ -1,0 +1,7 @@
+id: shop_to_hub
+from: shop.customer
+to: hub.customer
+columns: {shop_code: customer_no, name: full_name, tax_id: vat_number, active: is_active,
+          invoice_city: city}
+# A shop customer the hub has not seen is the customer with its tax number.
+linkBy: [tax_id]

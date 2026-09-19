@@ -168,6 +168,21 @@ no-op on SQL Server natively. On Postgres it is a no-op only when the write
 is guarded and before images are dropped, which is what a flow compiler has
 to emit for a Postgres target in a pair.
 
+**Built (#83).** `core/flow_sql.py` compiles the Postgres target as a `MERGE`
+(Postgres 15+) of the same shape as SQL Server's. Its `WHEN MATCHED` carries
+`(t.cols) IS DISTINCT FROM (new values)`, its parameters carry their types,
+and deletes are the separate branch described above. The demo's third
+system, a shop on Postgres, runs the whole of `verify.py` with no loop.
+Two things about a Postgres *source* were found on the way, and both are
+checked before a job is submitted (`core/flow_schema.py`, `core/flow_resume.py`):
+
+* SeaTunnel 2.3.13's Postgres CDC will not start on a table with a
+  `timestamptz` column, mapped or not ("Unsupported type: TIMESTAMP_TZ"
+  behind a bare HTTP 500).
+* A resumed job whose slot has gone makes a new one at the current position
+  and skips what changed since its checkpoint. That is refused like a purged
+  SQL Server change (ADR 0023).
+
 ## What this does not decide
 
 * **Conflicts.** Nothing here tested what happens when both sides change the

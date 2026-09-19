@@ -270,12 +270,13 @@ without it: they read the key's column in `_changed` like `*`.
   code someone typed on purpose would be just as silent. On the way out, a hub
   value the target's map lacks still lands as NULL. The maps are checked to be
   inverses, so only a third system's value could get there.
-* Postgres *targets* are not compiled yet. They need the guarded upsert and a
-  delete branch of ADR 0020, and the compiler refuses them rather than emit
-  a looping job.
-* **Many to one is partly built** (#53): several tables into one record
-  (#79) and differing codes (#80) are done. Aggregation, which is one-way only
-  (#81), and a third system (#82) are not.
+* **Many to one is partly built** (#53). Done: several tables into one record
+  (#79), differing codes (#80), and a third system (#82) on a third engine,
+  Postgres (#83). Aggregation, which is one-way only (#81), is not. With three
+  systems, every system has its own code. A conflict on one field between all
+  three converges on the latest commit, and both losers are logged. The first
+  sync took the authority's spelling of a name over two others. Measured by
+  `verify.py`.
 * A system's code is one column. A composite local key waits for a system
   that has one.
 * A system whose codes are typed by people cannot receive new records: there
