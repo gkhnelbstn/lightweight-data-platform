@@ -29,8 +29,10 @@ def _plugins(job, stage):
 
 
 def test_every_demo_flow_compiles(compiled):
-    assert sorted(compiled) == ["billing_to_hub", "crm_to_hub",
-                                "hub_to_billing", "hub_to_crm"]
+    assert sorted(compiled) == [
+        "billing_to_hub", "crm_invoice_address_to_hub", "crm_shipping_address_to_hub",
+        "crm_to_hub", "hub_to_billing", "hub_to_crm", "hub_to_crm_invoice_address",
+        "hub_to_crm_shipping_address"]
 
 
 def test_into_the_hub_keeps_commit_time_and_before_images(compiled):
@@ -49,18 +51,31 @@ def test_a_value_map_is_a_searched_case(compiled):
     assert ("CASE WHEN ACTIVE = 'Y' THEN true WHEN ACTIVE = 'N' THEN false END "
             "AS active") in sql
     assert "'crm.account' AS system" in sql
-    back = compiled["hub_to_crm"]["transform"][1]["query"]
+    assert "'code,name,tax_id,active' AS fields" in sql
+    back = compiled["hub_to_crm"]["transform"][3]["query"]
     assert "CASE WHEN active = true THEN 'Y' WHEN active = false THEN 'N' END AS ACTIVE" in back
 
 
-def test_out_of_the_hub_drops_before_images_and_merges(compiled):
+def test_out_of_the_hub_writes_only_what_a_revision_changed(compiled):
     job = compiled["hub_to_billing"]
     assert _plugins(job, "source") == ["Postgres-CDC"]
     assert job["source"][0]["slot.name"] == "hub_to_billing_slot"
-    assert job["transform"][0]["exclude_kinds"] == ["UPDATE_BEFORE"]
-    sink = job["sink"][0]
-    assert sink["generate_sink_sql"] is True
-    assert (sink["table"], sink["primary_keys"]) == ("dbo.customer", ["CustomerCode"])
+    assert _plugins(job, "transform") == ["FilterRowKind", "FilterRowKind",
+                                          "RowKindExtractor", "Sql", "Sql"]
+    assert job["transform"][0]["exclude_kinds"] == ["UPDATE_BEFORE", "DELETE"]
+    upserts = job["transform"][3]["query"]
+    # Not back to where the change came from, only when it touched a field
+    # billing receives, and not before the record has what billing requires.
+    assert "(_skip IS NULL OR _skip <> 'billing.customer')" in upserts
+    assert "POSITION(',name,', _changed) > 0" in upserts
+    assert upserts.endswith("code IS NOT NULL AND name IS NOT NULL AND active IS NOT NULL")
+    merge, delete = (sink["query"] for sink in job["sink"])
+    assert merge.startswith("MERGE dbo.customer WITH (HOLDLOCK) AS t")
+    assert ("t.[Name] = CASE WHEN s._changed = '*' OR CHARINDEX(',name,', s._changed) > 0 "
+            "THEN s.[Name] ELSE t.[Name] END") in merge
+    assert "WHEN NOT MATCHED AND s._changed = '*' THEN INSERT" in merge
+    assert delete == "DELETE FROM dbo.customer WHERE [CustomerCode] = ?"
+    assert not any(sink.get("generate_sink_sql") for sink in job["sink"])
 
 
 def test_credentials_are_placeholders(compiled):
@@ -86,3 +101,26 @@ def test_secrets_are_filled_on_the_way_out(monkeypatch):
     monkeypatch.setattr(flow_apply, "SECRETS", ("MSSQL_PASSWORD",))
     with pytest.raises(SystemExit, match="PG_USER"):
         flow_apply._fill({"username": "${PG_USER}"})
+
+
+def test_a_kind_of_row_is_merged_when_present_and_deleted_when_absent(compiled):
+    """#79: no invoice address in the hub means no INV row in the CRM -- but
+    only a revision that changed the invoice address may say so."""
+    job = compiled["hub_to_crm_invoice_address"]
+    present, emptied = job["transform"][3]["query"], job["transform"][5]["query"]
+    touched = "(_changed = '*' OR POSITION(',invoice_city,', _changed) > 0)"
+    assert touched in present and touched in emptied
+    assert ", 'INV' AS ADDR_TYPE" in present
+    assert present.endswith("code IS NOT NULL AND (invoice_city IS NOT NULL)")
+    assert emptied.endswith("code IS NOT NULL AND invoice_city IS NULL")
+    merge, deleted, gone = (sink["query"] for sink in job["sink"])
+    assert "ON t.[ACCOUNT_CODE] = s.[ACCOUNT_CODE] AND t.[ADDR_TYPE] = s.[ADDR_TYPE]" in merge
+    assert "WHEN NOT MATCHED THEN INSERT" in merge
+    assert deleted == gone == ("DELETE FROM dbo.account_address "
+                               "WHERE [ACCOUNT_CODE] = ? AND [ADDR_TYPE] = 'INV'")
+
+
+def test_a_kind_of_row_is_read_with_its_match(compiled):
+    sql = compiled["crm_invoice_address_to_hub"]["transform"][2]["query"]
+    assert sql.endswith("WHERE ADDR_TYPE = 'INV'")
+    assert "'code,invoice_city' AS fields" in sql

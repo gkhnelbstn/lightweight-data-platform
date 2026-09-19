@@ -19,11 +19,20 @@ create table if not exists hub.entity (
     authority text not null
 );
 
+-- The fields a record must have. A system that carries only some of a record
+-- -- an address table beside a customer table -- does not own its lifecycle:
+-- its rows going away empty its fields, they do not delete the customer.
+alter table hub.entity add column if not exists required text[] not null default '{}';
+
 create table if not exists hub.system (
     entity text not null references hub.entity(name),
     system text not null,
     primary key (entity, system)
 );
+-- The fields a system receives, and so the only ones it can echo back. Null
+-- is all of them. Awaiting a field from a system that never gets it would
+-- wait for ever.
+alter table hub.system add column if not exists fields text[];
 
 -- An update arrives as two rows, the before image first. It waits here for
 -- its after image.
@@ -125,6 +134,8 @@ create or replace function hub.merge(p_entity text, p_system text, p_kind text,
 returns void language plpgsql as $$
 declare
     keycols text[];
+    req     text[];
+    kind    text := p_kind;
     auth    text;
     k       jsonb;
     keyed   text;
@@ -145,8 +156,14 @@ declare
     f_at    jsonb := '{}';
     f_by    jsonb := '{}';
     lost    text[] := '{}';
+    -- Fields S won while a delivery of another value to S is still on its
+    -- way: that delivery lands after, so S must get its own value again.
+    back    text[] := '{}';
+    meta    text[] := array['_at', '_by', '_rev', '_changed', '_skip'];
+    clist   text;
 begin
-    select e.key, e.authority into keycols, auth from hub.entity e where e.name = p_entity;
+    select e.key, e.authority, e.required into keycols, auth, req
+      from hub.entity e where e.name = p_entity;
     if keycols is null then
         raise exception 'hub: % is not a registered entity', p_entity;
     end if;
@@ -154,18 +171,27 @@ begin
     -- Two systems' changes to one record are merged one at a time.
     perform pg_advisory_xact_lock(hashtextextended(p_entity || k::text, 0));
 
-    if p_kind = 'UPDATE_BEFORE' then
+    if kind = 'UPDATE_BEFORE' then
         insert into hub.pending_before values (p_system, p_entity, k, p_row)
             on conflict (system, entity, key) do update set row = excluded.row;
         return;
-    elsif p_kind = 'UPDATE_AFTER' then
+    elsif kind = 'UPDATE_AFTER' then
         delete from hub.pending_before p
          where p.system = p_system and p.entity = p_entity and p.key = k
         returning p.row into before;
         after := p_row;
-    elsif p_kind = 'INSERT' then
+    elsif kind = 'INSERT' then
         after := p_row;
-    elsif p_kind = 'DELETE' then
+    elsif kind = 'DELETE' and exists (select 1 from unnest(req) r where not p_row ? r) then
+        -- A flow carrying only part of the record: its row going away empties
+        -- its fields. The record itself belongs to a flow that carries all of
+        -- what the record requires.
+        before := p_row;
+        after := (select jsonb_object_agg(e.key, case when e.key = any(keycols)
+                                                      then e.value else 'null'::jsonb end)
+                    from jsonb_each(p_row) e);
+        kind := 'UPDATE_AFTER';
+    elsif kind = 'DELETE' then
         before := p_row;
     else
         raise exception 'hub: % is not a row kind', p_kind;
@@ -183,22 +209,31 @@ begin
         end if;
         gt := (select coalesce(max(v::bigint), 0) from jsonb_each_text(g -> '_at') t(n, v));
         if p_ms >= gt then
+            -- Name the deleter first, so the delete's before image carries it
+            -- and the delivery skips the system that already did it.
+            execute format('update hub.%I g set _skip = $2, _changed = '''' '
+                           'from jsonb_populate_record(null::hub.%I, $1) r where %s',
+                           p_entity, p_entity, keyed) using k, p_system;
             execute format('delete from hub.%I g using jsonb_populate_record(null::hub.%I, $1) r where %s',
                            p_entity, p_entity, keyed) using k;
             insert into hub.tombstone values (p_entity, k, p_ms, p_system)
                 on conflict (entity, key) do update
                 set deleted_ms = excluded.deleted_ms, deleted_by = excluded.deleted_by;
             perform hub.expect_add(s.system, p_entity, k, '*', null) from hub.system s
-             where s.entity = p_entity and s.system <> p_system;
+             where s.entity = p_entity and s.system <> p_system and s.fields is null;
         else
             insert into hub.conflict (entity, key, field, kept, kept_ms, lost, lost_by, lost_ms)
-            values (p_entity, k, '*', g - '_at' - '_by' - '_rev', gt, null, p_system, p_ms);
-            execute format('update hub.%I g set _rev = g._rev + 1 from jsonb_populate_record(null::hub.%I, $1) r where %s',
+            values (p_entity, k, '*', g - meta, gt, null, p_system, p_ms);
+            execute format('update hub.%I g set _rev = g._rev + 1, _changed = ''*'', _skip = null '
+                           'from jsonb_populate_record(null::hub.%I, $1) r where %s',
                            p_entity, p_entity, keyed) using k;
-            -- The system that deleted gets the row back, field by field.
+            -- The system that deleted gets the row back, field by field --
+            -- the fields it receives.
             perform hub.expect_add(p_system, p_entity, k, e.key, e.value)
-               from jsonb_each(g - '_at' - '_by' - '_rev') e
-              where not e.key = any(keycols);
+               from jsonb_each(g - meta) e
+               left join hub.system s on s.entity = p_entity and s.system = p_system
+              where not e.key = any(keycols)
+                and (s.fields is null or e.key = any(s.fields));
         end if;
         return;
     end if;
@@ -206,6 +241,11 @@ begin
     -- A record the hub does not have. First, is it our own write coming back?
     -- A delivery can arrive after the record was deleted.
     if g is null then
+        -- Part of a record emptying for a record the hub no longer has: there
+        -- is nothing left to empty.
+        if p_kind = 'DELETE' then
+            return;
+        end if;
         for f, a in select e.key, e.value from jsonb_each(after) e loop
             continue when f = any(keycols);
             continue when hub.consume(p_system, p_entity, k, f, a);
@@ -224,7 +264,7 @@ begin
             return;
         end if;
         if tdel is not null then
-            if p_kind = 'UPDATE_AFTER' then
+            if kind = 'UPDATE_AFTER' then
                 insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms)
                 values (p_entity, k, '*', after, p_system, p_ms, null, tby, tdel);
             end if;
@@ -239,10 +279,12 @@ begin
         end loop;
         execute format('insert into hub.%I select * from jsonb_populate_record(null::hub.%I, $1)',
                        p_entity, p_entity)
-            using after || jsonb_build_object('_at', f_at, '_by', f_by, '_rev', 0);
+            using after || jsonb_build_object('_at', f_at, '_by', f_by, '_rev', 0,
+                                              '_changed', '*', '_skip', p_system);
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(after) e
-          where s.entity = p_entity and s.system <> p_system and not e.key = any(keycols);
+          where s.entity = p_entity and s.system <> p_system and not e.key = any(keycols)
+            and (s.fields is null or e.key = any(s.fields));
         return;
     end if;
 
@@ -258,11 +300,24 @@ begin
         continue when a is not distinct from gv;
         gt := coalesce((g -> '_at' ->> f)::bigint, 0);
         gby := g -> '_by' ->> f;
-        -- A record the hub already has, arriving as new: a first sync, or two
-        -- systems creating one key. Neither is an edit, and commit times say
-        -- nothing about which value is right, so the authority's stands.
-        if p_kind = 'INSERT' then
-            if p_system = auth then
+        -- A field never set is filled: a table carrying part of a record
+        -- arrives as an INSERT, and a gap is not a dispute. A field that was
+        -- *emptied* has a commit time and is not a gap -- an older row
+        -- reappearing must not refill it (the loop the live demo ran).
+        if kind = 'INSERT' and g -> '_at' -> f is null then
+            changed := changed || jsonb_build_object(f, a);
+            f_at := f_at || jsonb_build_object(f, p_ms);
+            f_by := f_by || jsonb_build_object(f, p_system);
+            continue;
+        end if;
+        -- An empty value empties nothing when it arrives as a new row.
+        continue when kind = 'INSERT' and a = 'null'::jsonb;
+        -- A record the hub already has, arriving as new with a different
+        -- value: a first sync, or two systems creating one key. Commit times
+        -- say nothing about which value is right, so the authority's system
+        -- stands -- any table of it.
+        if kind = 'INSERT' and gv <> 'null'::jsonb then
+            if split_part(p_system, '.', 1) = split_part(auth, '.', 1) then
                 insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms, reason)
                 values (p_entity, k, f, a, p_system, p_ms, gv, gby, gt, 'seed');
                 changed := changed || jsonb_build_object(f, a);
@@ -280,7 +335,7 @@ begin
         -- commit wins; a tie goes to the system name, so every replay agrees.
         current := before is not null and b is not distinct from gv;
         if current or p_ms > gt or (p_ms = gt and p_system > coalesce(gby, '')) then
-            if not current then
+            if not current and gv <> 'null'::jsonb then
                 insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms)
                 values (p_entity, k, f, a, p_system, p_ms, gv, gby, gt);
             end if;
@@ -293,34 +348,68 @@ begin
             lost := lost || f;
         end if;
     end loop;
+    -- A field S won -- by any rule, a seed included -- while another value is
+    -- still on its way to S: that delivery lands after, so S gets its own back.
+    back := array(select c from jsonb_object_keys(changed) c
+                   where exists (select 1 from hub.expect x
+                                  where x.system = p_system and x.entity = p_entity
+                                    and x.key = k and x.field = c));
 
+    -- What a delivery writes: only the fields this revision changed, so it
+    -- never carries an unchanged field's value over an edit made in the
+    -- target meanwhile. It skips the system the change came from, which
+    -- already has it -- unless that system lost a field, or has another value
+    -- still on its way to it.
     if changed <> '{}' then
-        execute format('update hub.%I g set %s, _at = g._at || $2, _by = g._by || $3, _rev = g._rev + 1 '
+        clist := ',' || (select string_agg(c, ',' order by c) from
+                         (select jsonb_object_keys(changed) c union select unnest(lost)) x) || ',';
+        -- A revision that fills a required field the record was missing makes
+        -- it whole: to a target that never had it, that is a new record.
+        if exists (select 1 from jsonb_object_keys(changed) c
+                    where c = any(req) and g -> c = 'null'::jsonb) then
+            clist := '*';
+        end if;
+        execute format('update hub.%I g set %s, _at = g._at || $2, _by = g._by || $3, '
+                       '_rev = g._rev + 1, _changed = $4, _skip = $5 '
                        'from jsonb_populate_record(null::hub.%I, $1) r where %s',
                        p_entity,
                        (select string_agg(format('%I = r.%I', c, c), ', ') from jsonb_object_keys(changed) c),
                        p_entity, keyed)
-            using k || changed, f_at, f_by;
+            using k || changed, f_at, f_by, clist,
+                  case when cardinality(lost) > 0 or cardinality(back) > 0 then null else p_system end;
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(changed) e
-          where s.entity = p_entity and s.system <> p_system;
+          where s.entity = p_entity and s.system <> p_system
+            and (s.fields is null or e.key = any(s.fields));
+        perform hub.expect_add(p_system, p_entity, k, bf.name, changed -> bf.name)
+           from unnest(back) bf(name);
+    elsif cardinality(lost) > 0 then
+        -- The losing system is corrected by the next delivery; a revision bump
+        -- makes one happen even when nothing else changed.
+        execute format('update hub.%I g set _rev = g._rev + 1, _changed = $2, _skip = null '
+                       'from jsonb_populate_record(null::hub.%I, $1) r where %s',
+                       p_entity, p_entity, keyed)
+            using k, ',' || array_to_string(lost, ',') || ',';
     end if;
 
     if cardinality(lost) > 0 then
-        -- The losing system is corrected by the next delivery; a revision bump
-        -- makes one happen even when nothing else changed.
-        if changed = '{}' then
-            execute format('update hub.%I g set _rev = g._rev + 1 from jsonb_populate_record(null::hub.%I, $1) r where %s',
-                           p_entity, p_entity, keyed) using k;
-        end if;
         perform hub.expect_add(p_system, p_entity, k, l.name, g -> l.name)
            from unnest(lost) l(name);
     end if;
 end $$;
 
+-- `fields` is the flow's own list, comma-separated. A flow carrying part of a
+-- record leaves the inbox's other columns null, and those nulls are not
+-- values: only the fields the flow declares are merged.
 create or replace function hub.on_inbox() returns trigger language plpgsql as $$
+declare
+    r jsonb := to_jsonb(new) - 'id' - 'system' - 'row_kind' - 'source_ms'
+                             - 'landed_at' - 'fields';
 begin
-    perform hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms,
-                      to_jsonb(new) - 'id' - 'system' - 'row_kind' - 'source_ms' - 'landed_at');
+    if new.fields is not null then
+        r := (select jsonb_object_agg(f, r -> f)
+                from unnest(string_to_array(new.fields, ',')) f);
+    end if;
+    perform hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r);
     return null;
 end $$;

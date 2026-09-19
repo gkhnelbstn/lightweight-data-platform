@@ -52,6 +52,18 @@ def billing_row(code):
     return (rows[0][0], bool(rows[0][1])) if rows else None
 
 
+def billing_cities(code):
+    rows = sql(BILLING, "select InvoiceCity, ShippingCity from dbo.customer "
+                        "where CustomerCode = ?", code)
+    return tuple(rows[0]) if rows else None
+
+
+def crm_address(code, kind):
+    rows = sql(CRM, "select CITY from dbo.account_address "
+                    "where ACCOUNT_CODE = ? and ADDR_TYPE = ?", code, kind)
+    return rows[0][0] if rows else None
+
+
 def inbox() -> int:
     with psycopg.connect(HUB) as cx:
         return cx.execute("select count(*) from hub.customer_inbox").fetchone()[0]
@@ -61,9 +73,34 @@ def main() -> None:
     code = random.randint(10_000, 99_999)
     print(f"customer {code}")
 
-    sql(CRM, "insert into dbo.account (ACCOUNT_CODE, TITLE, ACTIVE) values (?, ?, 'Y')",
-        code, "Yeni Müşteri")
-    wait("a CRM insert reaches billing", lambda: billing_row(code) == ("Yeni Müşteri", True))
+    # One CRM transaction, two tables: two flows, and either may land first.
+    sql(CRM, "set xact_abort on; begin tran; "
+             "insert into dbo.account (ACCOUNT_CODE, TITLE, ACTIVE) values (?, ?, 'Y'); "
+             "insert into dbo.account_address values (?, 'INV', ?); commit",
+        code, "Yeni Müşteri", code, "Sivas")
+    wait("a CRM customer and its address arrive in billing as one row",
+         lambda: billing_row(code) == ("Yeni Müşteri", True)
+         and billing_cities(code) == ("Sivas", None))
+
+    sql(CRM, "update dbo.account_address set CITY = ? where ACCOUNT_CODE = ? "
+             "and ADDR_TYPE = 'INV'", "Kayseri", code)
+    wait("a CRM address row edit reaches billing's column",
+         lambda: billing_cities(code) == ("Kayseri", None))
+
+    sql(BILLING, "update dbo.customer set ShippingCity = ? where CustomerCode = ?",
+        "Mersin", code)
+    wait("a billing column becomes a CRM address row",
+         lambda: crm_address(code, "SHP") == "Mersin")
+
+    sql(BILLING, "update dbo.customer set ShippingCity = null where CustomerCode = ?", code)
+    wait("clearing it in billing deletes the CRM row, rather than emptying it",
+         lambda: crm_address(code, "SHP") is None
+         and not sql(CRM, "select 1 from dbo.account_address where ACCOUNT_CODE = ? "
+                          "and ADDR_TYPE = 'SHP'", code))
+
+    sql(CRM, "delete from dbo.account_address where ACCOUNT_CODE = ? and ADDR_TYPE = 'INV'", code)
+    wait("deleting the CRM address row empties billing's column, not the customer",
+         lambda: billing_cities(code) == (None, None) and billing_row(code) is not None)
 
     sql(BILLING, "update dbo.customer set IsActive = 0 where CustomerCode = ?", code)
     wait("a billing edit reaches the CRM, recoded", lambda: crm_row(code) == ("Yeni Müşteri", "N"))

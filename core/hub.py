@@ -32,7 +32,7 @@ HUB_SQL = Path(__file__).with_name("hub.sql")
 
 # The golden record's bookkeeping. Not part of any system's shape, never
 # delivered, and never a column name a contract may use.
-META = ("_at", "_by", "_rev")
+META = ("_at", "_by", "_rev", "_changed", "_skip")
 
 
 def init(cx: psycopg.Connection) -> None:
@@ -40,7 +40,8 @@ def init(cx: psycopg.Connection) -> None:
 
 
 def register_entity(cx: psycopg.Connection, name: str, key: list[str],
-                    columns: dict[str, str], authority: str) -> None:
+                    columns: dict[str, str], authority: str,
+                    required: list[str] | None = None) -> None:
     """The golden table, its inbox, and the trigger between them.
 
     `columns` is the canonical shape -- column name to Postgres type -- that
@@ -49,7 +50,7 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
     SeaTunnel's Postgres CDC needs to carry it back out.
     """
     clash = sorted(set(columns) & {*META, "id", "system", "row_kind",
-                                   "source_ms", "landed_at"})
+                                   "source_ms", "landed_at", "fields"})
     if clash:
         raise ValueError(f"{name}: {', '.join(clash)} is reserved in the hub")
     if not set(key) <= set(columns):
@@ -60,27 +61,42 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
     cx.execute(sql.SQL(
         "create table if not exists hub.{} ({}, _at jsonb not null default '{{}}', "
         "_by jsonb not null default '{{}}', _rev bigint not null default 0, "
+        "_changed text not null default '*', _skip text, "
         "primary key ({}))").format(
             golden, cols, sql.SQL(", ").join(map(sql.Identifier, key))))
+    # What each revision changed and where it came from: a delivery writes
+    # only those fields, and not back to their source (ADR 0021).
+    cx.execute(sql.SQL("alter table hub.{} add column if not exists _changed text "
+                       "not null default '*', add column if not exists _skip text"
+                       ).format(golden))
     cx.execute(sql.SQL("alter table hub.{} replica identity full").format(golden))
     cx.execute(sql.SQL(
         "create table if not exists hub.{} (id bigserial primary key, "
         "system text not null, row_kind text not null, source_ms bigint not null, "
-        "{}, landed_at timestamptz not null default clock_timestamp())").format(
-            inbox, cols))
+        "fields text, {}, landed_at timestamptz not null default clock_timestamp())"
+    ).format(inbox, cols))
+    cx.execute(sql.SQL("alter table hub.{} add column if not exists fields text").format(inbox))
     cx.execute(sql.SQL("drop trigger if exists merge on hub.{}").format(inbox))
     cx.execute(sql.SQL(
         "create trigger merge after insert on hub.{} for each row "
         "execute function hub.on_inbox({})").format(inbox, sql.Literal(name)))
-    cx.execute("insert into hub.entity values (%s, %s, %s) on conflict (name) "
-               "do update set key = excluded.key, authority = excluded.authority",
-               (name, key, authority))
+    cx.execute("insert into hub.entity (name, key, authority, required) "
+               "values (%s, %s, %s, %s) on conflict (name) do update set "
+               "key = excluded.key, authority = excluded.authority, "
+               "required = excluded.required",
+               (name, key, authority, list(required or key)))
 
 
-def register_system(cx: psycopg.Connection, entity: str, system: str) -> None:
-    """A system that receives the golden record, and so will echo it back."""
-    cx.execute("insert into hub.system values (%s, %s) on conflict do nothing",
-               (entity, system))
+def register_system(cx: psycopg.Connection, entity: str, system: str,
+                    fields: list[str] | None = None) -> None:
+    """A system that receives the golden record, and so will echo it back.
+
+    `fields` is what it receives, when that is only part of the record: a
+    table of addresses beside a table of customers. None is all of it.
+    """
+    cx.execute("insert into hub.system (entity, system, fields) values (%s, %s, %s) "
+               "on conflict (entity, system) do update set fields = excluded.fields",
+               (entity, system, fields))
 
 
 def main() -> None:
