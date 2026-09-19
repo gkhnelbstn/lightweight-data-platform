@@ -57,6 +57,27 @@ The page is read-only. What connects to what is the flow files' to say (ADR
 0019). Linking a held row to a record is `hub.link` on the hub database; a
 button for it waits for someone to need it from the page.
 
+### A log line opens its record
+
+A conflict line says a value lost, but not what the record is now or how it
+got there. Every line of the conflicts, waiting and deleted lists opens in
+place (`deploy/odd-platform-ui/RecordDetail.tsx`,
+`api/integration_detail.py`):
+
+* **a record** shows each field's value, the system that set it and when,
+  and its code in every system. Its history lists what each system sent,
+  with an update as `from → to` rather than a before row and an after row,
+  and **what the hub did with it**;
+* **a held row** shows why the hub could not place it, the records its rule
+  matched, and the `hub.link` call that settles each choice, filled in.
+
+"What the hub did" had not been recorded. `hub.merge` now returns it, and the
+inbox keeps it in `outcome`: `applied`, `created`, `deleted`, `lost` to a later
+edit, `held`, `unchanged`, or `echo`. `echo` is the one that mattered: the hub's
+own delivery coming back through a system's CDC reads exactly like that system
+editing the field, and on the first sync the history of a disputed name was
+four such lines.
+
 ## Consequences
 
 * The fork now touches three of ODD's files instead of one, still by anchor,

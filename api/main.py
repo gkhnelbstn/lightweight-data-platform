@@ -35,6 +35,7 @@ from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
 from core.scoring import DIMENSION_WEIGHT
 
 from api.integration import router as integration_router
+from api.integration_detail import router as integration_detail_router
 
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -75,6 +76,7 @@ app.add_middleware(
 
 # The Integration tab's one route, in a module of its own (#78).
 app.include_router(integration_router)
+app.include_router(integration_detail_router)
 
 DIMENSIONS = sorted(DIMENSION_WEIGHT)
 

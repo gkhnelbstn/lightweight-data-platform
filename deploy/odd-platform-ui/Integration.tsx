@@ -5,6 +5,7 @@ import * as Layout from 'components/shared/styled-components/layout';
 import type { Arrival, FlowJob, Hub, IntegrationFlow, IntegrationState } from './api';
 import { getIntegration } from './api';
 import { Code, tr, useT, when } from './shared';
+import { HeldPanel, RecordPanel } from './RecordDetail';
 import * as S from './Contracts.styles';
 
 /**
@@ -263,12 +264,63 @@ const fields = (row: Record<string, unknown>) =>
     .map(([k, v]) => `${k}: ${value(v)}`)
     .join(' · ');
 
+/** A log line that opens into its record, or its held row, on a click or
+ * Enter (RecordDetail.tsx): the line says what happened, the opened record
+ * says what it is now and how it got there. */
+const Line: React.FC<{
+  id: string;
+  open: string | null;
+  setOpen: (id: string | null) => void;
+  span: number;
+  detail: () => React.ReactNode;
+  children: React.ReactNode;
+}> = ({ id, open, setOpen, span, detail, children }) => {
+  const toggle = () => setOpen(open === id ? null : id);
+  return (
+    <>
+      <tr
+        role='button'
+        tabIndex={0}
+        aria-expanded={open === id}
+        onClick={toggle}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        style={{ cursor: 'pointer' }}
+      >
+        {children}
+      </tr>
+      {open === id && (
+        <tr>
+          <td colSpan={span} style={{ whiteSpace: 'normal' }}>
+            {detail()}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+};
+
+const Opens: React.FC = () => {
+  const t = useT();
+  return (
+    <Typography variant='caption' color='texts.secondary'>
+      {t('Open a line to see its record: every field, who set it, and what each system sent.')}
+    </Typography>
+  );
+};
+
 const Conflicts: React.FC<{ hub: Hub }> = ({ hub }) => {
   const t = useT();
+  const [open, setOpen] = useState<string | null>(null);
   const rows = hub.conflicts ?? [];
   if (!rows.length) return <Quiet text={t('No value has lost a conflict.')} />;
   return (
     <S.Scroll>
+      <Opens />
       <S.Cells>
         <thead>
           <tr>
@@ -282,7 +334,14 @@ const Conflicts: React.FC<{ hub: Hub }> = ({ hub }) => {
         </thead>
         <tbody>
           {rows.map(c => (
-            <tr key={`${c.at}-${c.field}-${JSON.stringify(c.key)}`}>
+            <Line
+              key={`${c.at}-${c.field}-${JSON.stringify(c.key)}`}
+              id={`${c.at}-${c.field}-${JSON.stringify(c.key)}`}
+              open={open}
+              setOpen={setOpen}
+              span={6}
+              detail={() => <RecordPanel hub={hub.id} recordKey={c.key} />}
+            >
               <td>{when(c.at)}</td>
               <td>{record(c.key, c.codes)}</td>
               <td>{c.field === '*' ? t('the whole record') : c.field}</td>
@@ -301,7 +360,7 @@ const Conflicts: React.FC<{ hub: Hub }> = ({ hub }) => {
                   ? t('its value map does not know the value: the hub kept its own')
                   : t('both edited it: the later commit won')}
               </td>
-            </tr>
+            </Line>
           ))}
         </tbody>
       </S.Cells>
@@ -317,6 +376,7 @@ const Side: React.FC<{ system: string | null; at: string | null }> = ({ system, 
 
 const Waiting: React.FC<{ hub: Hub }> = ({ hub }) => {
   const t = useT();
+  const [open, setOpen] = useState<string | null>(null);
   const rows = hub.held ?? [];
   if (!rows.length) return <Quiet text={t('Every row found its record.')} />;
   return (
@@ -339,13 +399,20 @@ const Waiting: React.FC<{ hub: Hub }> = ({ hub }) => {
           </thead>
           <tbody>
             {rows.map(h => (
-              <tr key={`${h.system}-${JSON.stringify(h.local)}`}>
+              <Line
+                key={`${h.system}-${JSON.stringify(h.local)}`}
+                id={`${h.system}-${JSON.stringify(h.local)}`}
+                open={open}
+                setOpen={setOpen}
+                span={5}
+                detail={() => <HeldPanel hub={hub.id} system={h.system} local={h.local} />}
+              >
                 <td>{when(h.at)}</td>
                 <td>{h.system}</td>
                 <td>{Object.values(h.local).join(', ')}</td>
                 <td>{held(h.reason)}</td>
                 <td>{fields(h.row)}</td>
-              </tr>
+              </Line>
             ))}
           </tbody>
         </S.Cells>
@@ -367,10 +434,12 @@ const held = (reason: string) => {
 
 const Deleted: React.FC<{ hub: Hub }> = ({ hub }) => {
   const t = useT();
+  const [open, setOpen] = useState<string | null>(null);
   const rows = hub.deleted ?? [];
   if (!rows.length) return <Quiet text={t('Nothing deleted.')} />;
   return (
     <S.Scroll>
+      <Opens />
       <S.Cells>
         <thead>
           <tr>
@@ -381,11 +450,18 @@ const Deleted: React.FC<{ hub: Hub }> = ({ hub }) => {
         </thead>
         <tbody>
           {rows.map(d => (
-            <tr key={JSON.stringify(d.key)}>
+            <Line
+              key={JSON.stringify(d.key)}
+              id={JSON.stringify(d.key)}
+              open={open}
+              setOpen={setOpen}
+              span={3}
+              detail={() => <RecordPanel hub={hub.id} recordKey={d.key} />}
+            >
               <td>{d.deleted_at ? when(d.deleted_at) : '—'}</td>
               <td>{record(d.key, d.codes)}</td>
               <td>{d.deleted_by}</td>
-            </tr>
+            </Line>
           ))}
         </tbody>
       </S.Cells>
