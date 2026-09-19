@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Typography } from '@mui/material';
-import { AppTabs, EmptyContentPlaceholder, Table } from 'components/shared/elements';
+import { AppTabs, Button, EmptyContentPlaceholder, Table } from 'components/shared/elements';
 import * as Layout from 'components/shared/styled-components/layout';
 import type { Arrival, FlowJob, Hub, IntegrationFlow, IntegrationState, Totals } from './api';
-import { getIntegration } from './api';
+import { getIntegration, runJobs, seatunnelUrl } from './api';
 import { Code, tr, useT, when } from './shared';
 import { HeldPanel, RecordPanel } from './RecordDetail';
+import { FlowPanel } from './FlowEditor';
 import * as S from './Contracts.styles';
 
 /**
@@ -18,7 +19,10 @@ import * as S from './Contracts.styles';
  * conflict, what is waiting for a person, and what was deleted. A rule whose
  * losses nobody can see is the muted channel core/alerts.py exists to avoid.
  *
- * Read-only: what connects to what is the flow files' to say (ADR 0019).
+ * What connects to what is the flow files' to say (ADR 0019) -- and since
+ * #109 a flow is edited here too: opening one shows its map, its value maps
+ * and its two SeaTunnel settings, and saving rewrites its file. The refusals
+ * are the same ones `--check` makes, because it is the same code.
  */
 const TABS = ['Flows', 'Conflicts', 'Waiting for a decision', 'Deleted'];
 const REFRESH_MS = 10_000;
@@ -79,11 +83,52 @@ const Integration: React.FC = () => {
               text={t('No hub contract with flows yet.')}
             />
           )}
+          {state && <Everything />}
           {state?.hubs.map(hub => <HubCard key={hub.id} hub={hub} />)}
           {!!state?.totals?.length && <TotalsCard rows={state.totals} />}
         </S.Shell>
       </Layout.Content>
     </Layout.LayoutContainer>
+  );
+};
+
+/** Everything at once: start the flows that are not running -- which is what
+ * `--apply` does, resuming each from its checkpoint (ADR 0023) -- and the way
+ * to SeaTunnel's own console, where the engine's detail lives. */
+const Everything: React.FC = () => {
+  const t = useT();
+  const [said, setSaid] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    setBusy(true);
+    try {
+      const result = await runJobs(null, 'apply');
+      setSaid([...result.said, ...result.refused.map(r => `${tr('refused')}: ${r}`)]);
+    } catch (e) {
+      setSaid([(e as Error).message]);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <S.Actions>
+      <Button
+        buttonType='secondary-m'
+        text={t('Start every flow that is not running')}
+        isLoading={busy}
+        onClick={start}
+      />
+      <Typography variant='body2'>
+        <a href={seatunnelUrl()} target='_blank' rel='noreferrer'>
+          {t('SeaTunnel console')}
+        </a>
+      </Typography>
+      {said.map(line => (
+        <Typography key={line} variant='caption' color='texts.secondary' component='div'>
+          {line}
+        </Typography>
+      ))}
+    </S.Actions>
   );
 };
 
@@ -199,8 +244,13 @@ const HubCard: React.FC<{ hub: Hub }> = ({ hub }) => {
 
 const Flows: React.FC<{ hub: Hub }> = ({ hub }) => {
   const t = useT();
+  const [open, setOpen] = useState<string | null>(null);
+  const toggle = (flow: string) => setOpen(open === flow ? null : flow);
   return (
     <div>
+      <Typography variant='caption' color='texts.secondary'>
+        {t('Open a flow to see and change what it carries: its map, its value maps, and how often SeaTunnel checkpoints it.')}
+      </Typography>
       <Table.HeaderContainer>
         <Table.Cell $flex={1.4}>
           <Typography variant='caption'>{t('System')}</Typography>
@@ -216,47 +266,81 @@ const Flows: React.FC<{ hub: Hub }> = ({ hub }) => {
         </Table.Cell>
       </Table.HeaderContainer>
       {hub.systems.map(s => (
-        <Table.RowContainer key={s.table}>
-          <Table.Cell $flex={1.4}>
-            <div>
-              <Typography variant='body1'>{s.title}</Typography>
-              <Typography variant='caption' color='texts.secondary'>
-                {s.table}
-              </Typography>
-              {s.drift.map(d => (
-                <Typography key={d} variant='caption' color='error.main' component='div'>
-                  {d}
+        <React.Fragment key={s.table}>
+          <Table.RowContainer>
+            <Table.Cell $flex={1.4}>
+              <div>
+                <Typography variant='body1'>{s.title}</Typography>
+                <Typography variant='caption' color='texts.secondary'>
+                  {s.table}
                 </Typography>
-              ))}
-            </div>
-          </Table.Cell>
-          <Table.Cell $flex={1.6}>
-            <div>{s.in.map(f => <FlowLine key={f.flow} flow={f} count='read' />)}</div>
-          </Table.Cell>
-          <Table.Cell $flex={1.6}>
-            <div>{s.out.map(f => <FlowLine key={f.flow} flow={f} count='written' />)}</div>
-          </Table.Cell>
-          <Table.Cell $flex={1.4}>
-            <Arrived arrival={hub.arriving?.[s.table]} />
-          </Table.Cell>
-        </Table.RowContainer>
+                {s.drift.map(d => (
+                  <Typography key={d} variant='caption' color='error.main' component='div'>
+                    {d}
+                  </Typography>
+                ))}
+              </div>
+            </Table.Cell>
+            <Table.Cell $flex={1.6}>
+              <div>
+                {s.in.map(f => (
+                  <FlowLine key={f.flow} flow={f} count='read' open={open} onOpen={toggle} />
+                ))}
+              </div>
+            </Table.Cell>
+            <Table.Cell $flex={1.6}>
+              <div>
+                {s.out.map(f => (
+                  <FlowLine key={f.flow} flow={f} count='written' open={open} onOpen={toggle} />
+                ))}
+              </div>
+            </Table.Cell>
+            <Table.Cell $flex={1.4}>
+              <Arrived arrival={hub.arriving?.[s.table]} />
+            </Table.Cell>
+          </Table.RowContainer>
+          {open && [...s.in, ...s.out].some(f => f.flow === open) && (
+            <FlowPanel id={open} />
+          )}
+        </React.Fragment>
       ))}
     </div>
   );
 };
 
 /** A flow by its own name, and whether its job runs. A stopped job and a
- * running idle one differ here; whether anything arrives is the next column. */
-const FlowLine: React.FC<{ flow: IntegrationFlow; count: 'read' | 'written' }> = ({
-  flow,
-  count,
-}) => {
+ * running idle one differ here; whether anything arrives is the next column.
+ * Its name opens the flow's own settings (FlowEditor.tsx) when there is
+ * somewhere to open them -- the totals card passes no handler. */
+const FlowLine: React.FC<{
+  flow: IntegrationFlow;
+  count: 'read' | 'written';
+  open?: string | null;
+  onOpen?: (flow: string) => void;
+}> = ({ flow, count, open, onOpen }) => {
   const t = useT();
   const job = flow.job;
   const match = Object.entries(flow.match).map(([c, v]) => `${c} = ${v}`).join(', ');
   return (
     <div>
-      <Typography variant='body2'>
+      <Typography
+        variant='body2'
+        role={onOpen ? 'button' : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+        aria-expanded={onOpen ? open === flow.flow : undefined}
+        style={onOpen ? { cursor: 'pointer' } : undefined}
+        onClick={onOpen ? () => onOpen(flow.flow) : undefined}
+        onKeyDown={
+          onOpen
+            ? e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onOpen(flow.flow);
+                }
+              }
+            : undefined
+        }
+      >
         {flow.flow}
         {match && (
           <Typography component='span' variant='caption' color='texts.secondary'>

@@ -92,6 +92,11 @@ class Flow:
     # Target column: `sum(Amount)` and the like -- many rows into one, one way
     # (core/flow_aggregate.py, #81). `columns` is then the group.
     aggregates: dict = field(default_factory=dict)
+    # What SeaTunnel is told about running this flow, and nothing else: how
+    # often it checkpoints, and how fast it may read. Not parallelism -- a
+    # second reader reorders one key's changes, and the hub's rule is the
+    # order they were committed in (ADR 0021).
+    job: dict = field(default_factory=dict)
 
 
 def parse(doc: dict) -> Flow:
@@ -103,7 +108,8 @@ def parse(doc: dict) -> Flow:
         filled_by_target=frozenset(doc.get("filledByTarget") or []),
         match=dict(doc.get("match") or {}),
         link_by=tuple(doc.get("linkBy") or ()),
-        aggregates=dict(doc.get("aggregates") or {}))
+        aggregates=dict(doc.get("aggregates") or {}),
+        job=dict(doc.get("job") or {}))
 
 
 def load(directory: Path = FLOWS) -> list[Flow]:
@@ -296,9 +302,29 @@ def _crosswalk_problems(cid: str, keys: dict, required: set[str], key: set[str],
     return out
 
 
+# The SeaTunnel settings a flow may state, and what each one must be.
+JOB_SETTINGS = {"checkpointInterval": (1_000, 600_000), "rowsPerSecond": (1, 1_000_000)}
+
+
+def _job_problems(flow: Flow) -> list[str]:
+    out = []
+    for name, value in flow.job.items():
+        if name not in JOB_SETTINGS:
+            out.append(f"{flow.id}: {name!r} is not a job setting; a flow sets "
+                       f"{' or '.join(sorted(JOB_SETTINGS))}")
+            continue
+        low, high = JOB_SETTINGS[name]
+        if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
+            out.append(f"{flow.id}: {name} is {value!r}; it is a whole number "
+                       f"between {low} and {high}")
+    return out
+
+
 def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
     """Every reason these flows would not hold, before anything moves."""
     out: list[str] = []
+    for flow in flows:
+        out += _job_problems(flow)
     # A system table is filled per match: two flows writing different rows of
     # one table do not fill anything twice.
     covered: dict[tuple, set[str]] = {}

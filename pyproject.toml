@@ -22,6 +22,10 @@ dependencies = [
   # but we import it directly, so it is declared directly. A transitive
   # dependency that disappears takes the sample rows with it.
   "sqlglot>=25",
+  # api/integration_edit.py round-trips a flow file rather than dumping a
+  # fresh one, so the comments in it survive an edit made on the screen.
+  # datacontract-cli already pulls ruamel in; we import it, so we declare it.
+  "ruamel.yaml>=0.17,<0.20",
 ]
 
 [build-system]

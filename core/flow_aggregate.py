@@ -158,8 +158,7 @@ def jobs(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict[str, dict]:
     from core import flow_jobs as fj
     source, target, theirs, ours, key, aggs, lines = _shape(flow, by_id)
     home = landing(by_id)
-    env = lambda name: {"job.mode": "STREAMING", "checkpoint.interval": fj.CHECKPOINT_MS,  # noqa: E731
-                        "parallelism": 1, "job.name": name}
+    env = lambda name: fj.env(flow, name)  # noqa: E731
     quoted = ", ".join(f'"{c}"' for c in lines)
     land = {
         "env": env(flow.id),

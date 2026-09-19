@@ -6,3 +6,6 @@ values:
   active: {Y: true, N: false}
 # A CRM account the hub has not seen is the customer with its tax number.
 linkBy: [tax_id]
+# What SeaTunnel is told about running it (#109). Five seconds here rather
+# than the default three, to show the setting; nothing in the demo needs it.
+job: {checkpointInterval: 5000}

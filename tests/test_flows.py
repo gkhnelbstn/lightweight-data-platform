@@ -353,3 +353,22 @@ def test_a_rule_on_part_of_a_record_is_reported():
 def test_a_rule_without_codes_to_link_is_reported():
     got = _check(_with(CRM_IN, linkBy=["tax_id"]), CRM_OUT, BILLING_IN, BILLING_OUT)
     assert any("linkBy only matters" in p for p in got), got
+
+
+# --- what a flow says about running (ADR 0026, #109) ------------------------
+
+def test_a_flow_states_two_seatunnel_settings_and_no_others():
+    """Parallelism is the one that matters: a second reader reorders one
+    record's changes, and the hub decides by the order they were committed
+    in (ADR 0021). So it is not a setting a flow may state."""
+    got = _check(_with(CRM_IN, job={"parallelism": 4}), CRM_OUT, BILLING_IN, BILLING_OUT)
+    assert any("'parallelism' is not a job setting" in p for p in got), got
+    assert _check(_with(CRM_IN, job={"checkpointInterval": 5000, "rowsPerSecond": 400}),
+                  CRM_OUT, BILLING_IN, BILLING_OUT) == []
+
+
+def test_a_setting_outside_its_range_is_refused():
+    for value in (10, "3000", True, 10_000_000):
+        got = _check(_with(CRM_IN, job={"checkpointInterval": value}),
+                     CRM_OUT, BILLING_IN, BILLING_OUT)
+        assert any("checkpointInterval is" in p for p in got), (value, got)

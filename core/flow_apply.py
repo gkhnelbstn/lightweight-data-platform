@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.request
 
 import psycopg
@@ -37,6 +38,12 @@ SECRETS = ("PG_USER", "PG_PASSWORD", "MSSQL_USER", "MSSQL_PASSWORD")
 
 def _fill(config: dict) -> dict:
     text = json.dumps(config)
+    # Empty is as unset as unset. An empty username reaches SeaTunnel as a
+    # valid config and comes back as "Factory initialize failed - Unable to
+    # create a source", which says nothing about a missing password.
+    missing = [n for n in SECRETS if "${" + n + "}" in text and not os.getenv(n)]
+    if missing:
+        raise SystemExit(f"unset in the environment: {', '.join(sorted(missing))}")
     for name in SECRETS:
         text = text.replace("${" + name + "}", os.getenv(name, ""))
     left = re.findall(r"\$\{[A-Z_]+\}", text)
@@ -123,14 +130,24 @@ def jobs_of(by_id: dict[str, dict], flow: flowmod.Flow) -> list[tuple[str, dict]
 
 
 def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
-          configs: dict[str, dict], resnapshot: bool = False) -> None:
+          configs: dict[str, dict], resnapshot: bool = False,
+          only: set[str] | None = None) -> tuple[list[str], list[str]]:
+    """Start what is not running, and say what happened: the lines a person
+    reads, and the refusals. The CLI prints both; the Integration tab shows
+    them beside the flow (#109).
+
+    `only` names the jobs to start. Every flow is still registered, because
+    which systems echo the hub's writes is a property of the whole set
+    (ADR 0021) -- starting one flow must not make its system look one-way."""
     register(by_id, flows)
     already = running()
-    refused = []
+    said, refused = [], []
     for flow in flows:
         for name in {n for n, _ in jobs_of(by_id, flow)} & already:
-            print(f"{name}: already running")
-        pending = [(n, source) for n, source in jobs_of(by_id, flow) if n not in already]
+            if only is None or name in only:
+                said.append(f"{name}: already running")
+        pending = [(n, source) for n, source in jobs_of(by_id, flow)
+                   if n not in already and (only is None or n in only)]
         if not pending:
             continue
         # A table that changed under its flow is refused, never followed.
@@ -153,23 +170,37 @@ def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
                     refused.append(why)
                     continue
                 if why:
-                    print(why)
+                    said.append(why)
                 query = f"/submit-job?jobName={name}" + (
                     f"&jobId={job_id}&isStartWithSavePoint=true" if action == "resume" else "")
                 answer = _http("POST", query, _fill(configs[name]))
                 cx.execute("insert into hub.job (flow, job_id) values (%s, %s) "
                            "on conflict (flow) do update set job_id = excluded.job_id, "
                            "submitted_at = now()", (name, int(answer["jobId"])))
-            print(f"{name}: {'resumed' if action == 'resume' else 'started'} {answer}")
-    if refused:
-        raise SystemExit("\n".join(f"REFUSED: {r}" for r in refused))
+            said.append(f"{name}: {'resumed' if action == 'resume' else 'started'} "
+                        f"{answer}")
+    return said, refused
 
 
-def stop(names: set[str] | None = None) -> None:
+def stop(names: set[str] | None = None, wait: int = 60) -> list[str]:
     """Stop the running jobs with these names, or every running job -- with a
-    savepoint, so the next --apply resumes exactly there."""
+    savepoint, so the next --apply resumes exactly there.
+
+    Then wait for them to be gone. Taking the savepoint takes seconds, and
+    SeaTunnel keeps reporting the job as running while it does: an --apply
+    that followed immediately read "already running" and started nothing,
+    leaving the flow stopped."""
+    stopping = set()
+    said = []
     for job in _http("GET", "/running-jobs") or []:
         if names is None or job.get("jobName") in names:
             _http("POST", "/stop-job", {"jobId": int(job["jobId"]),
                                         "isStopWithSavePoint": True})
-            print(f"{job.get('jobName')}: stopped")
+            stopping.add(job.get("jobName"))
+            said.append(f"{job.get('jobName')}: stopped")
+    for _ in range(wait):
+        left = stopping & running()
+        if not left:
+            return said
+        time.sleep(1)
+    return said + [f"{n}: still stopping after {wait}s" for n in sorted(stopping & running())]

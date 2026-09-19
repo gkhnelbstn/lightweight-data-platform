@@ -180,3 +180,19 @@ def test_a_value_outside_the_value_map_is_named_not_only_nulled(compiled):
     assert compiled["crm_to_hub"]["sink"][0]["query"].endswith(
         "active, unmapped) values (?, ?, ?, ?, ?, ?, ?, ?, ?)")
     assert "unmapped" not in compiled["billing_to_hub"]["transform"][2]["query"]
+
+
+def test_a_flows_settings_reach_seatunnels_env(compiled):
+    """`job:` in the flow file is the job's env: the checkpoint interval, and
+    SeaTunnel's own read limit when the flow asks for one (ADR 0026)."""
+    from core import flow_jobs, flows as flowmod
+    flow = flowmod.parse({"id": "x", "from": "a", "to": "b", "columns": {},
+                          "job": {"checkpointInterval": 5000, "rowsPerSecond": 400}})
+    assert flow_jobs.env(flow, "x") == {
+        "job.mode": "STREAMING", "parallelism": 1, "job.name": "x",
+        "checkpoint.interval": 5000, "read_limit.rows_per_second": 400}
+    # A flow that says nothing gets the platform's default and no limit.
+    plain = flowmod.parse({"id": "y", "from": "a", "to": "b", "columns": {}})
+    assert flow_jobs.env(plain, "y") == {
+        "job.mode": "STREAMING", "parallelism": 1, "job.name": "y",
+        "checkpoint.interval": flow_jobs.CHECKPOINT_MS}

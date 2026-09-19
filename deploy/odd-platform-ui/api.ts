@@ -13,6 +13,7 @@
 declare global {
   interface Window {
     __DQ_API__?: string;
+    __SEATUNNEL_UI__?: string;
   }
 }
 
@@ -551,3 +552,89 @@ export const getHeld = (hub: string, system: string, local: Record<string, unkno
     `/api/integration/held?hub=${encodeURIComponent(hub)}&system=${encodeURIComponent(system)}` +
       `&local=${encodeURIComponent(JSON.stringify(local))}`
   );
+
+/** A flow as the Integration tab edits it: api/integration_edit.py, #109.
+ * The file is what changes -- the UI is an editor for the contract of the
+ * integration (invariant 1), and SeaTunnel is told by the same code the CLI
+ * runs. */
+export interface FlowDoc {
+  id?: string;
+  from?: string;
+  to?: string;
+  columns?: Record<string, string>;
+  values?: Record<string, Record<string, unknown>>;
+  match?: Record<string, unknown>;
+  linkBy?: string[];
+  filledByTarget?: string[];
+  aggregates?: Record<string, string>;
+  job?: Record<string, number>;
+}
+
+export interface FlowColumn {
+  name: string;
+  type: string | null;
+  required: boolean;
+  key: boolean;
+  classification: string | null;
+  description: string | null;
+}
+
+export interface FlowSide {
+  id: string;
+  name: string | null;
+  hub: boolean;
+  keys: Record<string, string>;
+  columns: FlowColumn[];
+}
+
+export interface FlowDetail {
+  id: string;
+  file: string;
+  doc: FlowDoc;
+  yaml: string;
+  sides: { from: FlowSide | null; to: FlowSide | null };
+  /** What this flow becomes in SeaTunnel's words: one job, two for an
+   * aggregate. */
+  jobs: Record<string, unknown>;
+  /** The job settings a flow may state, and the range each one takes. */
+  settings: Record<string, [number, number]>;
+  state: Record<string, FlowJob | null>;
+  problems: string[];
+  drift: string[];
+}
+
+export const getFlow = (id: string) =>
+  json<FlowDetail>(`/api/integration/flow?id=${encodeURIComponent(id)}`);
+
+export interface SaveResult {
+  saved: boolean;
+  problems: string[];
+  jobs: Record<string, unknown>;
+  yaml?: string;
+}
+
+/** Checking refuses without writing; saving writes the flow file once it
+ * passes. Neither carries a token: nothing here is SQL somebody typed -- the
+ * columns are the contracts' and the values are literals (ADR 0010). */
+export const saveFlow = (id: string, doc: FlowDoc, check: boolean) =>
+  json<SaveResult>('/api/integration/flow', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id, doc, check }),
+  });
+
+export const runJobs = (flow: string | null, action: 'apply' | 'stop' | 'restart' | 'resnapshot') =>
+  json<{ said: string[]; refused: string[] }>('/api/integration/jobs', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ flow, action }),
+  });
+
+/** SeaTunnel's own console. It names jobs by id and draws their vertices,
+ * which is why this tab exists (ADR 0022) -- but it is where the engine's own
+ * detail lives, so the tab links to it rather than pretending it is not
+ * there. Same host, port 8081, unless the deployment says otherwise. */
+export function seatunnelUrl(): string {
+  if (window.__SEATUNNEL_UI__) return window.__SEATUNNEL_UI__.replace(/\/$/, '');
+  return `${window.location.protocol}//${window.location.hostname}:8081`;
+}

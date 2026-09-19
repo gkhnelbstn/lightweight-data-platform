@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 405 tests; the ones that need a database skip without one
+pytest -q                                                  # 414 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -41,6 +41,7 @@ python core/flow_jobs.py --apply --contracts demo/integration  # hub + SeaTunnel
 python demo/integration/verify.py                          # drive the two-way demo and assert it
 python demo/integration/outage.py before|after             # the restart drill, ADR 0023
 python core/flow_jobs.py --apply --resnapshot ...          # start flows from scratch, knowingly
+# ...or the same four buttons on ODD's Integration tab, which edits the flow files (ADR 0026)
 ```
 
 Both databases come from the environment; nothing hardcodes a DSN:
@@ -392,6 +393,18 @@ which is the default branch.
   which job made it. ODD 0.29.0 answers 500 for any table whose columns ever
   changed; the one-line fix is compiled in `deploy/Dockerfile.odd-platform`'s
   `api` stage (ADR 0011).
+* **A flow is edited on the screen, and the file is what changes** (ADR 0026,
+  `api/integration_edit.py`, #109): Check runs `core/flows.py`'s refusals
+  against the edit without writing, Save round-trips the file with `ruamel` so
+  its comments survive, and Apply/Stop/Restart call `core/flow_apply.py` --
+  the same functions the CLI calls. A flow states two SeaTunnel settings and
+  no more: `job: {checkpointInterval, rowsPerSecond}`. Not parallelism -- a
+  second reader reorders one record's changes and the hub decides by commit
+  order. The app service now needs `PG_USER`/`MSSQL_USER` and their passwords,
+  since it is the process that fills them; `_fill` refuses an empty one,
+  because SeaTunnel answers an empty username with "Unable to create a
+  source". `stop()` waits for the job to be gone, or the apply after it reads
+  "already running" and starts nothing.
 * **ODD's Master Data page is the hub's golden record, one way** (ADR 0025,
   `integrations/odd/master_data.py`): a lookup table per hub entity plus
   `value_maps`, matched by key, classified columns left out. An edit made in
