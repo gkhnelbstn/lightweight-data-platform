@@ -1,6 +1,6 @@
 [project]
 name = "lightweight-data-platform"
-version = "0.1.0"
+version = "0.3.0"
 description = "Contract-driven data quality on OpenDataDiscovery: ODCS contracts, results as a time series, no Elasticsearch"
 readme = "README.md"
 requires-python = ">=3.10"

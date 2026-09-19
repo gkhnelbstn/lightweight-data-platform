@@ -1,0 +1,44 @@
+name: release-please
+
+# Every merge to main is a release. release-please reads the Conventional
+# Commit titles since the last tag (squash merges, so a PR title is the
+# commit), opens a release PR with the version bump and the CHANGELOG, and
+# when that PR is merged tags the release and publishes it here.
+#
+# The tag it creates is made with GITHUB_TOKEN, and a tag pushed that way
+# starts no workflow -- so release.yml is called from here rather than left
+# to fire on the tag.
+#
+# Needs the repository setting "Allow GitHub Actions to create and approve
+# pull requests" (Settings -> Actions -> General).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+    permissions:
+      contents: write
+      packages: write
