@@ -86,13 +86,14 @@ proof gets designed against that real pair, not a hypothetical one.
 
 ### Amended: a two-way integration pair, designed against a stand-in
 
-The case came, and one condition above had to give. The pair is Siber (ERP)
-and Zirve (accounting) on SQL Server, issue #53. It is two different
-products, so it is integration, not replication (see *On upgrade*). Their
-real schemas are not available, so it was decided to **design against a
-hypothetical pair** built to have the same problems. The fixture in
+The case came, and one condition above had to give. The pair is two
+different products on one engine -- the example given was an ERP and an
+accounting package, both on SQL Server, issue #53 -- so it is integration, not
+replication (see *On upgrade*). No real schemas are available, so it was
+decided to **design against a hypothetical pair** built to have the same
+problems as any such pair. The fixture in
 `tests/test_flows.py` has different column names, a classified identifier
-on both sides, and both sides editing the same customer card.
+on both sides, and both sides editing the same customer.
 
 That last property rules out the disjointness proof entirely. It is not merely
 expensive: the rows are *the same* rows by construction. What replaces it is
@@ -158,8 +159,8 @@ Scope of this amendment:
 * **A new engine:** add replication only if it already has its own. Do not
   write one.
 * **Two different products on the same engine are not this record's case.**
-  Siber and Zirve, both on SQL Server, have different schemas, so this is
-  integration rather than replication. Every engine's own replication needs
+  An ERP and an accounting package, both on SQL Server, have different
+  schemas, so this is integration rather than replication. Every engine's own replication needs
   identical schemas on both ends: SQL Server peer-to-peer says so outright,
   and merge replication publishes the same articles everywhere. "Use the
   engine's own" therefore cannot decide it. That case is issue #53, and the

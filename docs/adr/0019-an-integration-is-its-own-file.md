@@ -2,25 +2,27 @@
 
 ## Context
 
-Issue #53's case is two products on SQL Server, Siber (ERP) and Zirve
-(accounting), integrated in both directions. Their schemas differ, their codes
-differ (`AKTIF 'E'/'H'` against `Durum bit`), and both sides edit the same
-customer card.
+Issue #53's case is two products neither of which is ours, integrated in
+both directions. The example given was an ERP and an accounting package on
+SQL Server; the same shape is a CRM and a billing system, or any two systems
+of record. Their schemas differ, their codes differ (`ACTIVE 'Y'/'N'` against
+`IsActive bit`), and both sides edit the same customer.
 
 The first shape put each direction in the **target's table contract**, as
 column detail on `derivedFrom`, with a `masteredHere` list beside it (#55, #64,
-#68). It worked, and the refusals were right. But it made Siber's contract say
-"this table is derived from Zirve's", and Zirve's say the reverse:
+#68). It worked, and the refusals were right. But it made one system's
+contract say "this table is derived from the other's", and the other say the
+reverse:
 
-* **A vendor's contract carried our integration policy.** Siber's table
-  contract should describe Siber's table: its columns, its classification, its
-  checks. That someone copies it into Zirve, and which side wins a conflict, is
-  a fact about the integration, owned by whoever runs it. It is not a fact
-  about the table. Invariant 1 says the contract is the source of truth; it
+* **A vendor's contract carried our integration policy.** A system's table
+  contract should describe that table: its columns, its classification, its
+  checks. That someone copies it into another system, and which side wins a
+  conflict, is a fact about the integration, owned by whoever runs it. It is
+  not a fact about the table. Invariant 1 says the contract is the source of truth; it
   does not say every truth belongs in the same contract.
 * **`derivedFrom` means lineage.** On `dim.customer` it says how our own
-  process built a table. On Siber↔Zirve it said something else, "rows move here
-  from there", in the same words, and a cycle of `derivedFrom` edges is what
+  process built a table. On a two-way pair it said something else, "rows
+  move here from there", in the same words, and a cycle of `derivedFrom` edges is what
   ODD would have drawn from it.
 
 Decided in conversation: treat the two directions as **two separate
@@ -32,15 +34,15 @@ integration contracts**.
 `contracts/flows/`.** `core/flows.py` reads it:
 
 ```yaml
-# contracts/flows/siber_to_zirve.yaml
-id: siber_to_zirve
-from: siber.cari                  # the source table's contract
-to: zirve.hesap                   # the target table's contract
-columns: {HesapKodu: CARI_KOD, Ad: UNVAN, Durum: AKTIF}   # target: source
+# contracts/flows/crm_to_billing.yaml
+id: crm_to_billing
+from: crm.account                 # the source table's contract
+to: billing.customer              # the target table's contract
+columns: {CustomerCode: ACCOUNT_CODE, Name: TITLE, IsActive: ACTIVE}  # target: source
 values:                           # target column: {arrives: lands}
-  Durum: {E: true, H: false}
-winsOnConflict: [HesapKodu, Ad]   # target columns where this side wins
-filledByTarget: [KayitTarihi]     # the target's own default fills these
+  IsActive: {Y: true, N: false}
+winsOnConflict: [CustomerCode, Name]  # target columns where this side wins
+filledByTarget: [CreatedAt]       # the target's own default fills these
 ```
 
 The table contracts it names describe their tables and nothing else.
@@ -59,7 +61,7 @@ to change. It still ships with the contracts (`release.yml` tars
 |---|---|---|
 | says | how our pipeline built this table | rows move between two systems |
 | lives in | the target's own contract | its own file |
-| example | `dim.customer` from `erp.customers` | Siber → Zirve |
+| example | `dim.customer` from `erp.customers` | CRM → billing |
 | moves rows | no, our process already did | yes, once an executor exists |
 
 A column map breaks the same ways in both, so the refusals are shared:
@@ -87,8 +89,8 @@ its own round trip. Expressions wait for a one-way case that needs them.
 
 * `python core/mapping.py --check` checks the flows as well, so CI refuses a
   bad flow the same way it refuses a bad mapping.
-* The Siber/Zirve pair is still hypothetical and lives in
-  `tests/test_flows.py`. `contracts/flows/` does not exist until a real flow
+* The pair is still hypothetical -- a CRM and a billing system standing in
+  for any two systems -- and lives in `tests/test_flows.py`. `contracts/flows/` does not exist until a real flow
   does; `flows.load()` returns nothing without it.
 * Nothing executes a flow yet. The executor reads the landing log (#56,
   filtered on write) and applies one flow per target; that is the next record.
