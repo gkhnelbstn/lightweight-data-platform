@@ -22,6 +22,8 @@ schema:
       - {name: name, physicalType: text, required: true, description: "Name, whichever system set it last."}
       - {name: tax_id, physicalType: text, classification: pii, description: "Tax identifier."}
       - {name: active, physicalType: boolean, required: true, description: "Whether the customer is active."}
+      - {name: invoice_city, physicalType: text, description: "Invoice address city: a column in billing, a row in the CRM."}
+      - {name: shipping_city, physicalType: text, description: "Shipping address city: a column in billing, a row in the CRM."}
 customProperties:
   - property: hub
     value:

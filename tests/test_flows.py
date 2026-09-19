@@ -131,11 +131,19 @@ def test_several_systems_filling_one_hub_column_is_the_point():
     assert not any("filled twice" in p for p in _check(CRM_IN, BILLING_IN))
 
 
-def test_each_flow_into_a_hub_must_fill_its_required_columns():
+def test_some_flow_of_each_system_must_carry_the_whole_record():
     doc = copy.deepcopy(BILLING_IN)
     del doc["columns"]["name"]
-    assert ("billing_to_hub: name is required here and no mapping fills it; "
-            "the contract promises a column nothing puts a value in") in _check(doc)
+    assert ("hub.customer: no flow from billing carries everything the record "
+            "requires (code, name), so nothing from billing can create or delete "
+            "one") in _check(CRM_IN, doc)
+
+
+def test_every_flow_into_a_hub_carries_its_key():
+    doc = copy.deepcopy(BILLING_IN)
+    del doc["columns"]["code"]
+    assert ("billing_to_hub: the hub key code is not filled, so a row cannot "
+            "find its record") in _check(doc)
 
 
 def test_a_required_system_column_nothing_fills():
@@ -213,3 +221,57 @@ def test_the_authority_must_be_a_system_with_a_flow_in():
     assert found == ["hub.customer: authority 'erp.customers' is not a system "
                      "with a flow into this hub, so the first sync has no system "
                      "to take disputed values from"]
+
+
+# --- one system, several tables (#79) ---------------------------------------
+
+ADDRESS = _table("crm.account_address", "account_address", [
+    {"name": "ACCOUNT_CODE", "primaryKey": True, "required": True},
+    {"name": "ADDR_TYPE", "primaryKey": True, "required": True},
+    {"name": "CITY"}])
+HUB_WITH_CITIES = copy.deepcopy(HUB)
+HUB_WITH_CITIES["schema"][0]["properties"] += [{"name": "invoice_city"},
+                                               {"name": "shipping_city"}]
+WIDE = {**BY_ID, "crm.account_address": ADDRESS, "hub.customer": HUB_WITH_CITIES}
+
+
+def _address(kind, field, *, match=True):
+    m = {"match": {"ADDR_TYPE": kind}} if match else {}
+    return ({"id": f"crm_{kind}_to_hub", "from": "crm.account_address",
+             "to": "hub.customer", **m,
+             "columns": {"code": "ACCOUNT_CODE", field: "CITY"}},
+            {"id": f"hub_to_crm_{kind}", "from": "hub.customer",
+             "to": "crm.account_address", **m,
+             "columns": {"ACCOUNT_CODE": "code", "CITY": field}})
+
+
+def test_two_tables_of_one_system_through_a_hub_are_silent():
+    docs = (*ALL, *_address("INV", "invoice_city"), *_address("SHP", "shipping_city"))
+    assert _check(*docs, by_id=WIDE) == []
+
+
+def test_a_table_with_several_rows_per_record_needs_a_match():
+    found = _check(*_address("INV", "invoice_city", match=False), by_id=WIDE)
+    assert ("crm_INV_to_hub: crm.account_address has several rows per record "
+            "(its key ADDR_TYPE is not the hub's); pin it with match, or every "
+            "row overwrites the same record") in found
+
+
+def test_a_match_on_an_undeclared_column():
+    inbound, _ = _address("INV", "invoice_city")
+    inbound["match"] = {"KIND": "INV"}
+    assert any("match names 'KIND'" in p for p in _check(inbound, by_id=WIDE))
+
+
+def test_two_tables_of_one_system_may_not_fill_one_field():
+    inbound, _ = _address("INV", "name")
+    found = _check(CRM_IN, inbound, by_id=WIDE)
+    assert any("'name' is filled by both" in p and "two tables of crm" in p
+               for p in found)
+
+
+def test_read_with_one_match_and_written_back_with_another():
+    inbound, _ = _address("INV", "invoice_city")
+    _, outbound = _address("SHP", "invoice_city")
+    found = _check(CRM_IN, inbound, outbound, by_id=WIDE)
+    assert any("read with match" in p and "written back with" in p for p in found)

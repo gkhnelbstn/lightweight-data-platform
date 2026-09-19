@@ -1,0 +1,23 @@
+# The CRM's addresses: one row per customer and kind. The integration takes
+# each kind as part of the customer record (#79); see flows/.
+apiVersion: v3.0.2
+kind: DataContract
+id: crm.account_address
+name: CRM account addresses
+version: 1.0.0
+status: active
+servers:
+  - server: crm
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: crm
+    schema: dbo
+schema:
+  - name: account_address
+    physicalName: account_address
+    physicalType: table
+    properties:
+      - {name: ACCOUNT_CODE, physicalType: int, primaryKey: true, required: true, description: "The customer."}
+      - {name: ADDR_TYPE, physicalType: char, primaryKey: true, required: true, description: "INV invoice, SHP shipping."}
+      - {name: CITY, physicalType: nvarchar, description: "City."}

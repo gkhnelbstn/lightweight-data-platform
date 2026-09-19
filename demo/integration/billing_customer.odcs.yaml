@@ -21,4 +21,6 @@ schema:
       - {name: Name, physicalType: nvarchar, required: true, description: "Customer name."}
       - {name: TaxId, physicalType: varchar, classification: pii, description: "Tax identifier."}
       - {name: IsActive, physicalType: bit, required: true, description: "Active flag."}
+      - {name: InvoiceCity, physicalType: nvarchar, description: "Invoice address city."}
+      - {name: ShippingCity, physicalType: nvarchar, description: "Shipping address city."}
       - {name: CreatedAt, physicalType: datetime2, required: true, description: "Set by billing."}

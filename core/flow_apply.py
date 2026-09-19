@@ -70,11 +70,17 @@ def register(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> None:
             hub.init(cx)
             hub.register_entity(
                 cx, entity, [n for n, p in props.items() if p.get("primaryKey")],
-                {n: p["physicalType"] for n, p in props.items()}, spec["authority"])
+                {n: p["physicalType"] for n, p in props.items()}, spec["authority"],
+                required=[n for n, p in props.items()
+                          if p.get("required") or p.get("primaryKey")])
             into = {f.mapping.reference for f in flows if f.target == cid}
             out = {f.target for f in flows if f.mapping.reference == cid}
             for system in sorted(into & out):
-                hub.register_system(cx, entity, system)
+                # What it receives: the hub columns its flows back read.
+                fields = sorted({src for f in flows
+                                 if f.mapping.reference == cid and f.target == system
+                                 for src in f.mapping.columns.values()})
+                hub.register_system(cx, entity, system, fields)
         print(f"hub {cid}: {entity} on {server['host']}/{server['database']}, "
               f"systems {sorted(into & out)}")
 
@@ -89,3 +95,12 @@ def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
             continue
         answer = _http("POST", f"/submit-job?jobName={name}", _fill(config))
         print(f"{name}: submitted {answer}")
+
+
+def stop(names: set[str] | None = None) -> None:
+    """Stop the running jobs with these names, or every running job."""
+    for job in _http("GET", "/running-jobs") or []:
+        if names is None or job.get("jobName") in names:
+            _http("POST", "/stop-job", {"jobId": int(job["jobId"]),
+                                        "isStopWithSavePoint": False})
+            print(f"{job.get('jobName')}: stopped")

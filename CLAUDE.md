@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 316 tests; the ones that need a database skip without one
+pytest -q                                                  # 335 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -248,7 +248,7 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   for. Issue #50 is the narrower case that *is* a bug.
 * **An integration between two systems is its own file**, one per direction,
   in `contracts/flows/` (ADR 0019): `from`, `to`, `columns`, `values`,
-  `winsOnConflict`, `filledByTarget`. The two systems' table contracts
+  `match`, `filledByTarget`. The two systems' table contracts
   describe their tables and know nothing about it. The subdirectory is
   deliberate -- every contract reader and the CI lint glob
   `contracts/*.odcs.yaml` non-recursively, so a flow is never windowed,
@@ -258,10 +258,9 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 * **Two flows in opposite directions are a pair**, and each can pass alone
   while the pair corrupts data. `core/flows.py` checks the pair: the maps
   are inverses, every value map is one-to-one and its way back is its
-  inverse, and every column is won by exactly one flow. `winsOnConflict`
-  decides who wins a conflict, not who may write -- both sides edit the same
-  rows, which is why ADR 0008's row-disjointness proof was replaced rather
-  than built. The pair in `tests/test_flows.py` (a CRM and a billing
+  inverse, and the two sides use the same `match`. Both systems edit the
+  same rows and the hub's latest commit decides (ADR 0021), which is why ADR
+  0008's row-disjointness proof was replaced rather than built. The pair in `tests/test_flows.py` (a CRM and a billing
   system) is a stand-in for any two systems neither of which is ours:
   nothing serves it.
 * A column coded differently on the two sides (`'Y'/'N'` against a `bit`)
@@ -286,6 +285,21 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   is checked for being our own echo *before* it may create anything -- a late
   delivery once resurrected a deleted customer. Two systems may not pair
   directly: `core/flows.py` refuses it.
+* **A delivery writes what its revision changed, not the row.** Each golden
+  record change sets `_changed` (`,name,` or `*`) and `_skip` (its origin),
+  and the compiled `MERGE` is `CASE WHEN` changed per column -- the
+  sink's generated one wrote every column and, once several flows filled one
+  record, put stale values over fresh edits in a loop. Only `*` creates a
+  row. A system that wins a field while another value is still on its way to
+  it gets its own again (`back` in `hub.merge`); the first live run swapped a
+  disputed name without it. #79.
+* **`match` pins rows of a table with several per record** (an address per
+  type): a filter on the way in, a constant on the way out, and both
+  directions must agree. A field never set is filled without dispute, but an
+  *emptied* one has a commit time and is not a gap -- confusing the two is the
+  loop the live demo ran. A flow short of the hub's `required` fields owns
+  only its part: its delete empties the part, and an empty part goes out as a
+  delete of that row.
 * `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
   needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
   generated upsert there loops for ever -- so it raises instead.

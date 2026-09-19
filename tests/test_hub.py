@@ -20,7 +20,7 @@ psycopg = pytest.importorskip("psycopg")
 HOST = os.getenv("DWH_HOST", "localhost")
 PORT = int(os.getenv("DWH_PORT", "5432"))
 SCRATCH = "hub_test"
-COLUMNS = {"code": "int", "name": "text", "active": "boolean"}
+COLUMNS = {"code": "int", "name": "text", "active": "boolean", "city": "text"}
 
 
 @pytest.fixture()
@@ -36,9 +36,12 @@ def hub():
     ensure_database(HOST, PORT, SCRATCH)
     cx = psycopg.connect(admin_dsn(HOST, PORT, SCRATCH), autocommit=True)
     h.init(cx)
-    h.register_entity(cx, "customer", ["code"], COLUMNS, authority="crm")
-    for system in ("crm", "billing"):
-        h.register_system(cx, "customer", system)
+    h.register_entity(cx, "customer", ["code"], COLUMNS, authority="crm",
+                      required=["code", "name"])
+    # crm keeps the customer and its address in two tables (#79).
+    h.register_system(cx, "customer", "crm", ["code", "name", "active"])
+    h.register_system(cx, "customer", "crm_address", ["code", "city"])
+    h.register_system(cx, "customer", "billing")
     try:
         yield cx
     finally:
@@ -48,9 +51,11 @@ def hub():
 
 
 def send(cx, system, kind, ms, **row):
-    cx.execute("insert into hub.customer_inbox (system, row_kind, source_ms, code, name, active) "
-               "values (%s, %s, %s, %s, %s, %s)",
-               (system, kind, ms, row["code"], row["name"], row["active"]))
+    """One inbox row, carrying exactly the fields its flow declares."""
+    cols = list(row)
+    cx.execute(f"insert into hub.customer_inbox (system, row_kind, source_ms, fields, "
+               f"{', '.join(cols)}) values (%s, %s, %s, %s, {', '.join(['%s'] * len(cols))})",
+               (system, kind, ms, ",".join(cols), *row.values()))
 
 
 def update(cx, system, ms, old, new):
@@ -237,6 +242,125 @@ def test_first_sync_of_identical_records_is_silent(hub):
     send(hub, "crm", "INSERT", 800, **ACME)
     assert conflicts(hub) == []
     assert expected(hub, "crm") == []
+
+
+# --- one system, several tables (#79) ---------------------------------------
+
+def city(cx, code=1):
+    return cx.execute("select name, city from hub.customer where code = %s",
+                      (code,)).fetchone()
+
+
+def test_a_table_carrying_part_of_a_record_touches_only_its_fields(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "crm_address", "INSERT", 101, code=1, city="Ankara")
+    assert city(hub) == ("Acme", "Ankara")
+    update(hub, "crm_address", 200, {"code": 1, "city": "Ankara"}, {"code": 1, "city": "İzmir"})
+    assert city(hub) == ("Acme", "İzmir")
+
+
+def test_part_of_a_record_is_awaited_only_from_systems_that_receive_it(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    send(hub, "crm_address", "INSERT", 110, code=1, city="Ankara")
+    assert expected(hub, "crm") == []
+    assert expected(hub, "billing") == [("city", "Ankara")]
+    update(hub, "billing", 200, {**ACME, "city": "Ankara"}, {**ACME, "city": "Bursa"})
+    assert expected(hub, "crm_address") == [("city", "Bursa")]
+    assert expected(hub, "crm") == []
+
+
+def test_the_part_arriving_before_the_record_starts_it(hub):
+    send(hub, "crm_address", "INSERT", 100, code=1, city="Ankara")
+    send(hub, "crm", "INSERT", 101, **ACME)
+    assert city(hub) == ("Acme", "Ankara")
+
+
+def test_deleting_part_of_a_record_empties_only_that_part(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "crm_address", "INSERT", 101, code=1, city="Ankara")
+    send(hub, "crm_address", "DELETE", 200, code=1, city="Ankara")
+    assert city(hub) == ("Acme", None)
+
+
+def test_deleting_the_record_takes_its_parts_quietly(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "crm_address", "INSERT", 101, code=1, city="Ankara")
+    send(hub, "crm", "DELETE", 300, **ACME)
+    assert golden(hub) is None
+    # The address row going away with it neither resurrects nor complains.
+    send(hub, "crm_address", "DELETE", 310, code=1, city="Ankara")
+    assert golden(hub) is None
+    assert [c for c in conflicts(hub) if c[0] == "*"] == []
+
+
+# --- what a revision tells the deliveries (found live, #79) -----------------
+
+def revision(cx, code=1):
+    return cx.execute("select _changed, _skip from hub.customer where code = %s",
+                      (code,)).fetchone()
+
+
+def test_an_emptied_part_is_not_refilled_by_an_older_row(hub):
+    """A deleted address row emptied the field at t=200; the same row
+    reappearing from before that (a stale delivery) must not refill it --
+    that is the loop the live demo ran."""
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "crm_address", "INSERT", 101, code=1, city="Ankara")
+    send(hub, "crm_address", "DELETE", 200, code=1, city="Ankara")
+    send(hub, "crm_address", "INSERT", 150, code=1, city="Ankara")
+    assert city(hub) == ("Acme", None)
+    send(hub, "crm_address", "INSERT", 250, code=1, city="İzmir")
+    assert city(hub) == ("Acme", "İzmir")
+
+
+def test_a_revision_names_its_origin_and_what_changed(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    assert revision(hub) == ("*", "crm")
+    send(hub, "billing", "INSERT", 105, **ACME)
+    update(hub, "billing", 200, ACME, {**ACME, "name": "Acme Ltd"})
+    # Delivered to everyone but billing, and only the name is written.
+    assert revision(hub) == (",name,", "billing")
+
+
+def test_a_loser_is_delivered_to(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    update(hub, "crm", 200, ACME, {**ACME, "name": "From CRM"})
+    update(hub, "billing", 190, ACME, {**ACME, "name": "From billing"})
+    assert revision(hub) == (",name,", None)
+
+
+def test_a_winner_with_a_delivery_still_on_its_way_gets_its_value_again(hub):
+    """billing's B is on its way to crm when crm, not having seen it, commits
+    C later. C wins -- but B will land on crm after, so crm must get C again,
+    or it keeps B while the hub says C."""
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    update(hub, "billing", 200, ACME, {**ACME, "name": "B"})
+    update(hub, "crm", 300, ACME, {**ACME, "name": "C"})
+    assert golden(hub)[0] == "C"
+    assert revision(hub) == (",name,", None)
+    assert expected(hub, "crm") == [("name", "B"), ("name", "C")]
+    assert expected(hub, "billing") == [("name", "C")]
+
+
+def test_an_authority_seeding_second_gets_its_value_again(hub):
+    """billing's snapshot created the record and is on its way to crm; crm's
+    own snapshot, the authority's, wins the seed -- but billing's value lands
+    on crm after, so crm must get its own again. Found live: the two swapped."""
+    send(hub, "billing", "INSERT", 900, **{**ACME, "name": "Acme (billing)"})
+    send(hub, "crm", "INSERT", 800, **ACME)
+    assert revision(hub) == (",name,", None)
+    assert expected(hub, "crm") == [("name", "Acme (billing)"), ("name", "Acme")]
+
+
+def test_the_revision_that_completes_a_record_is_new_to_everyone(hub):
+    """The address arrived first and the record waited for its name; the
+    revision that brings the name is the first a target can create."""
+    send(hub, "crm_address", "INSERT", 100, code=1, city="Ankara")
+    send(hub, "crm", "INSERT", 101, **ACME)
+    assert revision(hub)[0] == "*"
 
 
 def test_an_unknown_entity_is_refused(hub):
