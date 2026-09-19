@@ -11,8 +11,12 @@
 create schema if not exists hub;
 
 create table if not exists hub.entity (
-    name text primary key,
-    key  text[] not null
+    name      text primary key,
+    key       text[] not null,
+    -- Whose values stand when two systems already hold the same record: the
+    -- first sync, or two systems creating one key. After that, the later
+    -- commit wins.
+    authority text not null
 );
 
 create table if not exists hub.system (
@@ -55,7 +59,21 @@ create table if not exists hub.conflict (
     key     jsonb not null,
     field   text  not null,
     kept    jsonb, kept_by text, kept_ms bigint,
-    lost    jsonb, lost_by text, lost_ms bigint
+    lost    jsonb, lost_by text, lost_ms bigint,
+    -- 'edit': both changed it without seeing each other; the later commit won.
+    -- 'seed': both already held it; the authority's value won.
+    reason  text  not null default 'edit'
+);
+
+-- A record deleted in the hub, and when. Without it, a change arriving for a
+-- record the hub no longer has looks like a new record -- which is how a late
+-- delivery once resurrected a deleted customer.
+create table if not exists hub.tombstone (
+    entity     text   not null,
+    key        jsonb  not null,
+    deleted_ms bigint not null,
+    deleted_by text   not null,
+    primary key (entity, key)
 );
 
 -- True, and forgotten, when this value is one the hub sent and is waiting to
@@ -107,6 +125,7 @@ create or replace function hub.merge(p_entity text, p_system text, p_kind text,
 returns void language plpgsql as $$
 declare
     keycols text[];
+    auth    text;
     k       jsonb;
     keyed   text;
     before  jsonb;
@@ -119,12 +138,15 @@ declare
     gt      bigint;
     gby     text;
     current boolean;
+    genuine boolean := false;
+    tdel    bigint;
+    tby     text;
     changed jsonb := '{}';
     f_at    jsonb := '{}';
     f_by    jsonb := '{}';
     lost    text[] := '{}';
 begin
-    select e.key into keycols from hub.entity e where e.name = p_entity;
+    select e.key, e.authority into keycols, auth from hub.entity e where e.name = p_entity;
     if keycols is null then
         raise exception 'hub: % is not a registered entity', p_entity;
     end if;
@@ -163,6 +185,9 @@ begin
         if p_ms >= gt then
             execute format('delete from hub.%I g using jsonb_populate_record(null::hub.%I, $1) r where %s',
                            p_entity, p_entity, keyed) using k;
+            insert into hub.tombstone values (p_entity, k, p_ms, p_system)
+                on conflict (entity, key) do update
+                set deleted_ms = excluded.deleted_ms, deleted_by = excluded.deleted_by;
             perform hub.expect_add(s.system, p_entity, k, '*', null) from hub.system s
              where s.entity = p_entity and s.system <> p_system;
         else
@@ -178,8 +203,34 @@ begin
         return;
     end if;
 
-    -- A record the hub has not seen: it is new everywhere else.
+    -- A record the hub does not have. First, is it our own write coming back?
+    -- A delivery can arrive after the record was deleted.
     if g is null then
+        for f, a in select e.key, e.value from jsonb_each(after) e loop
+            continue when f = any(keycols);
+            continue when hub.consume(p_system, p_entity, k, f, a);
+            continue when before is not null and (before -> f) is not distinct from a;
+            genuine := true;
+        end loop;
+        if not genuine then
+            return;
+        end if;
+        -- Then, was it deleted? The later commit wins against the delete too.
+        select t.deleted_ms, t.deleted_by into tdel, tby
+          from hub.tombstone t where t.entity = p_entity and t.key = k;
+        if tdel is not null and p_ms <= tdel then
+            insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms)
+            values (p_entity, k, '*', null, tby, tdel, after, p_system, p_ms);
+            return;
+        end if;
+        if tdel is not null then
+            if p_kind = 'UPDATE_AFTER' then
+                insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms)
+                values (p_entity, k, '*', after, p_system, p_ms, null, tby, tdel);
+            end if;
+            delete from hub.tombstone t where t.entity = p_entity and t.key = k;
+        end if;
+        -- New everywhere else.
         for f in select jsonb_object_keys(after) loop
             if not f = any(keycols) then
                 f_at := f_at || jsonb_build_object(f, p_ms);
@@ -207,6 +258,23 @@ begin
         continue when a is not distinct from gv;
         gt := coalesce((g -> '_at' ->> f)::bigint, 0);
         gby := g -> '_by' ->> f;
+        -- A record the hub already has, arriving as new: a first sync, or two
+        -- systems creating one key. Neither is an edit, and commit times say
+        -- nothing about which value is right, so the authority's stands.
+        if p_kind = 'INSERT' then
+            if p_system = auth then
+                insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms, reason)
+                values (p_entity, k, f, a, p_system, p_ms, gv, gby, gt, 'seed');
+                changed := changed || jsonb_build_object(f, a);
+                f_at := f_at || jsonb_build_object(f, p_ms);
+                f_by := f_by || jsonb_build_object(f, p_system);
+            else
+                insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms, reason)
+                values (p_entity, k, f, gv, gby, gt, a, p_system, p_ms, 'seed');
+                lost := lost || f;
+            end if;
+            continue;
+        end if;
         -- The system edited the value everyone has: no conflict, whatever the
         -- clocks say. Otherwise it edited something stale, and the later
         -- commit wins; a tie goes to the system name, so every replay agrees.

@@ -67,6 +67,27 @@ services:
     ports: !reset []
     profiles: ["demo"]
 
+  # The runtime of the integration flows (ADR 0020, 0021): one SeaTunnel
+  # cluster, the jobs submitted by `core/flow_jobs.py --apply`. Its own web UI
+  # is on 8081 (ODD has 8080). Opt-in, because an idle cluster is ~450 MiB:
+  #   docker compose -f compose.yaml -f compose.demo.yaml --profile demo --profile flows up -d
+  seatunnel:
+    build:
+      context: deploy
+      dockerfile: Dockerfile.seatunnel
+    image: lightweight-data-platform/seatunnel:2.3.13
+    command: ["./bin/seatunnel-cluster.sh"]
+    depends_on:
+      db: { condition: service_healthy }
+      mssql: { condition: service_healthy }
+    ports: ["8081:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    profiles: ["flows"]
+
   mongo:
     image: mongo:7
     environment:

@@ -1,0 +1,6 @@
+id: hub_to_crm
+from: hub.customer
+to: crm.account
+columns: {ACCOUNT_CODE: code, TITLE: name, TAX_NO: tax_id, ACTIVE: active}
+values:
+  ACTIVE: {true: Y, false: N}
