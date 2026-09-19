@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 357 tests; the ones that need a database skip without one
+pytest -q                                                  # 359 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -155,7 +155,12 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   jar on the platform's classpath, so only the UI is rebuilt and the backend is
   untouched. The patch is two anchors in `DataQualityContent.tsx` and it
   **fails the build** when they move — do not soften that into a warning, and
-  do not vendor their file.
+  do not vendor their file. The integration's page is the one exception to
+  "inside Data Quality": it has its own entry in ODD's menu
+  (`deploy/odd-platform-integration-tab.mjs`, four anchors in `ToolbarTabs.tsx`
+  and `App.tsx`, ADR 0022), and reads `GET /api/integration`, which asks
+  SeaTunnel and the hub server-side. `INTEGRATION_DIR` says where the hub
+  contracts are; the demo compose sets it to `demo/integration`.
 * The UI's language is **ODD's own picker**, and Turkish is a carried patch
   (`deploy/odd-platform-tr.mjs`, ADR 0011). The panel shares ODD's i18n
   instance through `shared.tsx`'s `useT`, in its own `ldp` namespace, with

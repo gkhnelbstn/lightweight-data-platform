@@ -57,7 +57,9 @@ COPY odd-platform-lineage-icon.mjs /tmp/lineage-icon.mjs
 # ships a Turkish catalogue (ADR 0011); the script says what to delete.
 COPY odd-platform-tr.mjs /tmp/tr.mjs
 COPY odd-platform-locale-tr.json /src/odd-platform-ui/src/locales/translations/tr.json
-RUN node /tmp/patch.mjs /src && node /tmp/lineage-icon.mjs /src && node /tmp/tr.mjs /src
+# The integration's own tab in ODD's menu, #78 (ADR 0022).
+COPY odd-platform-integration-tab.mjs /tmp/integration-tab.mjs
+RUN node /tmp/patch.mjs /src && node /tmp/lineage-icon.mjs /src && node /tmp/tr.mjs /src     && node /tmp/integration-tab.mjs /src
 WORKDIR /src/odd-platform-ui
 # pnpm is pinned rather than taken from corepack: the lockfile is version 9.0
 # and corepack hands out whatever is current, which rejects it under
