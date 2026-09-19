@@ -1,0 +1,23 @@
+name: pr-title
+
+# A PR into dev is squash-merged, so its title becomes the commit, and the
+# release PR from dev to main carries those commits to release-please. A title
+# with no Conventional Commit type would be left out of the release notes and
+# the version bump without a word -- so it fails here, where it can be fixed.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [dev]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional:
+    name: title is a conventional commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

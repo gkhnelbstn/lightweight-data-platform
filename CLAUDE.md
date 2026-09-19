@@ -52,14 +52,23 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 
 ## Releasing
 
-Everything reaches `main` by PR, squash-merged, and **the PR title is a
-Conventional Commit** (`feat:`, `fix:`, `docs:`, `ci:`...): with a squash
-merge the title is the commit release-please reads, and a title without a type
-releases nothing. `.github/workflows/release-please.yml` then opens a release
-PR (version bump, `CHANGELOG.md`); merging it tags the release and calls
-`release.yml`, which publishes the images and attaches the contracts. A
-GITHUB_TOKEN tag starts no workflow, which is why it is a call and not a tag
-trigger.
+Work goes to **`dev`**, not `main`. A branch opens its PR into `dev` and is
+squash-merged, and **the PR title is a Conventional Commit** (`feat:`,
+`fix:`, `docs:`, `ci:`...). With a squash merge the title is the commit, and
+`pr-title.yml` fails a PR whose title has no type, since such a commit would
+drop out of the release without a word.
+
+A release is a PR from `dev` into `main`, **merged with a merge commit, never
+squashed**. Squashing would fold every commit into one title, and release-please
+reads the commits one by one. `.github/workflows/release-please.yml` then
+opens a release PR on `main` (version bump, `CHANGELOG.md`); merging that tags
+the release and calls `release.yml`, which publishes the images and attaches
+the contracts. A GITHUB_TOKEN tag starts no workflow, which is why it is a
+call and not a tag trigger. After a release, merge `main` back into `dev`, so
+the version and the changelog are the same on both.
+
+`Closes #n` in a PR into `dev` closes nothing until that commit reaches `main`,
+which is the default branch.
 
 ## Invariants — break these and the design stops making sense
 
