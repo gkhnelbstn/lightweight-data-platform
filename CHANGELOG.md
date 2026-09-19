@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.6.0...v0.6.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* an awaited value the system already had can no longer swallow an edit ([#96](https://github.com/gkhnelbstn/lightweight-data-platform/issues/96)) ([dc37c2c](https://github.com/gkhnelbstn/lightweight-data-platform/commit/dc37c2c444f29e0bfcab7e3db7ac66661d4c9e76))
+
 ## [0.6.0](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.5.0...v0.6.0) (2026-09-19)
 
 
