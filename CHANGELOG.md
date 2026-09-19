@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.5.0...v0.6.0) (2026-09-19)
+
+
+### Features
+
+* a table that changed under its flow is refused and shown, not followed ([#94](https://github.com/gkhnelbstn/lightweight-data-platform/issues/94)) ([9b23ec0](https://github.com/gkhnelbstn/lightweight-data-platform/commit/9b23ec03036757e1e8a611b32d9f0e63a11cc894))
+
 ## [0.5.0](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.4.1...v0.5.0) (2026-09-19)
 
 
