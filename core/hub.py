@@ -82,6 +82,12 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
         "system text not null, row_kind text not null, source_ms bigint not null, "
         "fields text, {}, landed_at timestamptz not null default clock_timestamp())"
     ).format(inbox, cols))
+    # A system joining a hub that already runs brings its code column (#82):
+    # `create table if not exists` would leave both tables without it.
+    for column, kind in columns.items():
+        for table in (golden, inbox):
+            cx.execute(sql.SQL("alter table hub.{} add column if not exists {} {}").format(
+                table, sql.Identifier(column), sql.SQL(kind)))
     cx.execute(sql.SQL("alter table hub.{} add column if not exists fields text").format(inbox))
     # The fields whose value the flow's value map did not know (#84).
     cx.execute(sql.SQL("alter table hub.{} add column if not exists unmapped text").format(inbox))

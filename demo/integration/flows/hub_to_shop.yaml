@@ -1,0 +1,7 @@
+id: hub_to_shop
+from: hub.customer
+to: shop.customer
+columns: {customer_no: shop_code, full_name: name, vat_number: tax_id, is_active: active,
+          city: invoice_city}
+# The shop numbers a customer it receives itself.
+filledByTarget: [customer_no, created_at]

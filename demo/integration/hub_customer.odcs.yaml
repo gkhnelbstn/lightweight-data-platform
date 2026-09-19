@@ -23,6 +23,7 @@ schema:
       - {name: customer_id, physicalType: bigint, primaryKey: true, required: true, description: "The hub's own number for the customer, neither system's."}
       - {name: crm_code, physicalType: int, description: "The CRM's account code for this customer."}
       - {name: billing_code, physicalType: text, description: "Billing's customer code for this customer."}
+      - {name: shop_code, physicalType: bigint, description: "The shop's customer number for this customer."}
       - {name: name, physicalType: text, required: true, description: "Name, whichever system set it last."}
       - {name: tax_id, physicalType: text, classification: pii, description: "Tax identifier."}
       - {name: active, physicalType: boolean, required: true, description: "Whether the customer is active."}
@@ -32,4 +33,4 @@ customProperties:
   - property: hub
     value:
       authority: crm.account
-      keys: {crm: crm_code, billing: billing_code}
+      keys: {crm: crm_code, billing: billing_code, shop: shop_code}

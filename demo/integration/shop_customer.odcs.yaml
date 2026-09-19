@@ -1,0 +1,26 @@
+# The shop's customer table, as the shop holds it (#82, #83): Postgres, so the
+# hub writes it with a guarded MERGE rather than SQL Server's (ADR 0020).
+apiVersion: v3.0.2
+kind: DataContract
+id: shop.customer
+name: Shop customers
+version: 1.0.0
+status: active
+servers:
+  - server: shop
+    type: postgres
+    host: db
+    port: 5432
+    database: shop
+    schema: public
+schema:
+  - name: customer
+    physicalName: customer
+    physicalType: table
+    properties:
+      - {name: customer_no, physicalType: bigint, primaryKey: true, required: true, description: "The shop's own customer number, assigned by the shop."}
+      - {name: full_name, physicalType: text, required: true, description: "Customer name."}
+      - {name: vat_number, physicalType: text, classification: pii, description: "Tax identifier."}
+      - {name: is_active, physicalType: boolean, required: true, description: "Whether the customer can order."}
+      - {name: city, physicalType: text, description: "Invoice city."}
+      - {name: created_at, physicalType: timestamp, required: true, description: "Set by the shop."}

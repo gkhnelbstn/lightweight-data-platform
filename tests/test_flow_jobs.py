@@ -32,7 +32,22 @@ def test_every_demo_flow_compiles(compiled):
     assert sorted(compiled) == [
         "billing_to_hub", "crm_invoice_address_to_hub", "crm_shipping_address_to_hub",
         "crm_to_hub", "hub_to_billing", "hub_to_crm", "hub_to_crm_invoice_address",
-        "hub_to_crm_shipping_address"]
+        "hub_to_crm_shipping_address", "hub_to_shop", "shop_to_hub"]
+
+
+def test_the_shop_is_written_with_the_guarded_postgres_merge(compiled):
+    """#83: the third system is Postgres, so its out-flow is the MERGE that
+    updates only what differs; its own numbering is left to it."""
+    merge, delete = (sink["query"] for sink in compiled["hub_to_shop"]["sink"])
+    assert merge.startswith('MERGE INTO "public"."customer" AS t USING (SELECT '
+                            'CAST(? AS bigint) AS "customer_no"')
+    assert ('ON (t."customer_no" = s."customer_no" OR (s."customer_no" IS NULL AND '
+            't."vat_number" = s."vat_number"))') in merge
+    assert "IS DISTINCT FROM" in merge
+    assert 'THEN INSERT ("full_name", "vat_number", "is_active", "city")' in merge
+    assert delete == 'DELETE FROM "public"."customer" WHERE "customer_no" = CAST(? AS bigint)'
+    source = compiled["shop_to_hub"]["source"][0]
+    assert source["plugin_name"] == "Postgres-CDC" and source["slot.name"] == "shop_to_hub_slot"
 
 
 def test_into_the_hub_keeps_commit_time_and_before_images(compiled):
@@ -71,12 +86,12 @@ def test_out_of_the_hub_writes_only_what_a_revision_changed(compiled):
     # billing numbers a customer it receives itself (#80): no code to wait for.
     assert upserts.endswith("name IS NOT NULL AND active IS NOT NULL")
     merge, delete = (sink["query"] for sink in job["sink"])
-    assert merge.startswith("MERGE dbo.customer WITH (HOLDLOCK) AS t")
+    assert merge.startswith("MERGE [dbo].[customer] WITH (HOLDLOCK) AS t")
     new = "s._changed = '*' OR CHARINDEX(',billing_code,', s._changed) > 0"
     assert (f"t.[Name] = CASE WHEN {new} OR CHARINDEX(',name,', s._changed) > 0 "
             "THEN s.[Name] ELSE t.[Name] END") in merge
     assert f"WHEN NOT MATCHED AND ({new}) THEN INSERT ([Name], " in merge
-    assert delete == "DELETE FROM dbo.customer WHERE [CustomerCode] = ?"
+    assert delete == "DELETE FROM [dbo].[customer] WHERE [CustomerCode] = ?"
     assert not any(sink.get("generate_sink_sql") for sink in job["sink"])
 
 
@@ -86,11 +101,20 @@ def test_credentials_are_placeholders(compiled):
     assert "Str0ng" not in text
 
 
-def test_a_postgres_target_is_refused_until_it_has_a_guarded_upsert():
+def test_a_postgres_target_updates_only_what_actually_differs():
+    """#83, ADR 0020: an update that writes unchanged values is a change to
+    Postgres's logical decoding, and a two-way pair loops on it. The MERGE
+    there is guarded, and its parameters are typed."""
     by_id, loaded = flow_jobs.load(DEMO)
-    by_id["billing.customer"]["servers"][0]["type"] = "postgres"
-    with pytest.raises(NotImplementedError, match="guarded upsert"):
-        flow_jobs.jobs(by_id, loaded)
+    by_id["billing.customer"]["servers"][0].update(type="postgres", schema="public")
+    merge, delete = (sink["query"] for sink in flow_jobs.jobs(by_id, loaded)
+                     ["hub_to_billing"]["sink"])
+    assert merge.startswith('MERGE INTO "public"."customer" AS t USING (SELECT '
+                            'CAST(? AS varchar) AS "CustomerCode", CAST(? AS nvarchar) AS "Name"')
+    assert ('WHEN MATCHED AND (t."Name", t."TaxId", t."IsActive", t."InvoiceCity", '
+            't."ShippingCity") IS DISTINCT FROM (CASE WHEN') in merge
+    assert "strpos(s._changed, ',name,') > 0" in merge and "CHARINDEX" not in merge
+    assert delete == 'DELETE FROM "public"."customer" WHERE "CustomerCode" = CAST(? AS varchar)'
 
 
 def test_secrets_are_filled_on_the_way_out(monkeypatch):
@@ -124,7 +148,7 @@ def test_a_kind_of_row_is_merged_when_present_and_deleted_when_absent(compiled):
     merge, deleted, gone = (sink["query"] for sink in job["sink"])
     assert "ON t.[ACCOUNT_CODE] = s.[ACCOUNT_CODE] AND t.[ADDR_TYPE] = s.[ADDR_TYPE]" in merge
     assert "WHEN NOT MATCHED THEN INSERT" in merge
-    assert deleted == gone == ("DELETE FROM dbo.account_address "
+    assert deleted == gone == ("DELETE FROM [dbo].[account_address] "
                                "WHERE [ACCOUNT_CODE] = ? AND [ADDR_TYPE] = 'INV'")
 
 

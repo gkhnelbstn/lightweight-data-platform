@@ -121,9 +121,12 @@ def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
                              (flow.id,)).fetchone()
             job_id = row[0] if row else None
             checkpoint = flow_resume.last_checkpoint_ms(job_id) if job_id else None
-            oldest = (flow_resume.oldest_change_ms(by_id[flow.mapping.reference])
-                      if checkpoint and not resnapshot else None)
-            action, why = flow_resume.plan(flow.id, job_id, checkpoint, oldest, resnapshot)
+            source = by_id[flow.mapping.reference]
+            live = checkpoint and not resnapshot
+            oldest = flow_resume.oldest_change_ms(source) if live else None
+            gone = bool(live) and flow_resume.slot_missing(source, f"{flow.id}_slot")
+            action, why = flow_resume.plan(flow.id, job_id, checkpoint, oldest,
+                                           resnapshot, slot_missing=gone)
             if action == "refuse":
                 refused.append(why)
                 continue

@@ -46,3 +46,10 @@ def test_the_last_checkpoint_is_read_from_the_file_names(tmp_path):
 def test_only_a_sql_server_source_has_a_retention_to_check():
     hub = {"servers": [{"type": "postgres"}], "schema": [{"physicalName": "customer"}]}
     assert flow_resume.oldest_change_ms(hub) is None
+
+
+def test_a_postgres_source_whose_slot_is_gone_is_refused():
+    """A resumed job makes a fresh slot at the current position: what changed
+    since its checkpoint would be skipped."""
+    action, why = flow_resume.plan("shop_to_hub", 7, 10 * HOUR, None, False, slot_missing=True)
+    assert action == "refuse" and "replication slot is gone" in why

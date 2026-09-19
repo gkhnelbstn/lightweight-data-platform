@@ -29,14 +29,15 @@ def test_flows_are_grouped_by_system_table_even_with_everything_down(monkeypatch
     assert got["seatunnel_error"]
     [hub] = got["hubs"]
     assert hub["hub_error"] == "OSError: down"
-    assert hub["codes"] == {"crm": "crm_code", "billing": "billing_code"}
+    assert hub["codes"] == {"crm": "crm_code", "billing": "billing_code", "shop": "shop_code"}
     address = next(s for s in hub["systems"] if s["table"] == "crm.account_address")
     assert sorted(f["flow"] for f in address["in"]) == [
         "crm_invoice_address_to_hub", "crm_shipping_address_to_hub"]
     assert {f["match"]["ADDR_TYPE"] for f in address["out"]} == {"INV", "SHP"}
     assert all(f["job"] is None for s in hub["systems"] for f in s["in"] + s["out"])
-    # One SQL Server for both systems: asked once, not once per flow.
-    assert len(asked) == 1
+    # Two servers -- SQL Server for the CRM and billing, Postgres for the
+    # shop -- each asked once, not once per flow.
+    assert len(asked) == 2
     assert any("schema not readable" in d for s in hub["systems"] for d in s["drift"])
 
 
