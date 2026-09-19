@@ -42,7 +42,10 @@ browser:
   tombstones.
 
 Each source can be down without the others. The page then says which one is
-down, rather than failing as a whole.
+down, rather than failing as a whole. A column the hub contract classifies is
+masked in conflicts and held rows, as it is in failing rows
+(`core/sample.py`): a conflict over a tax number shows that there was one, not
+the number.
 
 The menu label is in our `ldp` namespace, so it switches language with ODD's
 picker like the panel does. That needs the catalogue registered before the menu
@@ -61,7 +64,8 @@ button for it waits for someone to need it from the page.
 * `INTEGRATION_DIR` tells the API where the hub contracts are. It defaults to
   `contracts/`, and the demo compose points it at `demo/integration/`.
 * `tests/test_integration_api.py` covers the route with SeaTunnel and the hub
-  both down, and the choice of each flow's newest job.
+  both down, the choice of each flow's newest job, and the masking. CI builds
+  the ODD image on every pull request, so a moved anchor fails there.
 
 ## On upgrade
 

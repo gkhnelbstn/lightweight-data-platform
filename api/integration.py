@@ -25,7 +25,7 @@ from fastapi import APIRouter
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from core import flow_jobs
+from core import flow_jobs, sample
 from core import flows as flowmod
 from core.bootstrap_db import admin_dsn
 from core.mapping import _properties
@@ -72,6 +72,15 @@ def _ms(ms: int | None) -> str | None:
     return None if ms is None else datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat()
 
 
+def _masked(value, field: str, hidden: set[str]):
+    """A classified value is never shown, here as in failing rows
+    (core/sample.py): a conflict over a tax number shows that there was one."""
+    if isinstance(value, dict):
+        return {k: sample.MASK if k in hidden and v is not None else v
+                for k, v in value.items()}
+    return sample.MASK if field in hidden and value is not None else value
+
+
 def hub_state(contract: dict) -> dict:
     """What the hub database says about one entity."""
     entity = contract["schema"][0]["name"]
@@ -105,6 +114,9 @@ def hub_state(contract: dict) -> dict:
                 golden, sql.Identifier(key)), (ids,)).fetchall()} if codes else {}
         records = cx.execute(sql.SQL("select count(*) as n from hub.{}").format(golden)
                              ).fetchone()["n"]
+    hidden = sample.classified(contract)
+    for h in held:
+        h["row"] = _masked(h["row"], "", hidden)
     for row in arriving:
         row["committed_at"] = _ms(row.pop("source_ms"))
     for d in deleted:
@@ -116,6 +128,8 @@ def hub_state(contract: dict) -> dict:
         k = c["key"].get(key)
         c["codes"] = labels.get(k) or gone.get(k)
         c["kept_at"], c["lost_at"] = _ms(c.pop("kept_ms")), _ms(c.pop("lost_ms"))
+        c["kept"], c["lost"] = (_masked(c["kept"], c["field"], hidden),
+                                _masked(c["lost"], c["field"], hidden))
     return {"records": records, "arriving": {r["system"]: r for r in arriving},
             "conflicts": conflicts, "held": held, "deleted": deleted}
 

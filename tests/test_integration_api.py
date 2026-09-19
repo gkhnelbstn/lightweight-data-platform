@@ -34,6 +34,17 @@ def test_flows_are_grouped_by_system_table_even_with_everything_down(monkeypatch
     assert all(f["job"] is None for s in hub["systems"] for f in s["in"] + s["out"])
 
 
+def test_a_classified_value_is_never_shown():
+    """tax_id is pii in the hub contract: a conflict over it, or a held row
+    carrying it, says so without the value -- as failing rows do."""
+    hidden = {"tax_id"}
+    assert api._masked("111", "tax_id", hidden) == api.sample.MASK
+    assert api._masked("Acme", "name", hidden) == "Acme"
+    assert api._masked({"name": "Acme", "tax_id": "111"}, "*", hidden) == {
+        "name": "Acme", "tax_id": api.sample.MASK}
+    assert api._masked(None, "tax_id", hidden) is None
+
+
 def test_a_flow_shows_its_newest_job(monkeypatch):
     finished = [{"jobName": "crm_to_hub", "jobStatus": "FAILED", "finishTime": "2026-09-19 10:00:00",
                  "errorMsg": "boom"},
