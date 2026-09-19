@@ -405,3 +405,85 @@ export const previewRule = (draft: RuleDraft, token: string) =>
 
 export const saveRule = (draft: RuleDraft, token: string) =>
   json<{ saved: string; file: string }>('/api/rules', authoring(draft, token));
+
+/** The two-way integration (#78, ADR 0021): api/integration.py. */
+export interface FlowJob {
+  status: string | null;
+  id: string | null;
+  started: string | null;
+  finished: string | null;
+  error: string | null;
+  read: number;
+  written: number;
+}
+
+export interface IntegrationFlow {
+  flow: string;
+  match: Record<string, string>;
+  job: FlowJob | null;
+}
+
+export interface IntegrationSystem {
+  table: string;
+  system: string;
+  title: string;
+  in: IntegrationFlow[];
+  out: IntegrationFlow[];
+}
+
+export interface Arrival {
+  last_hour: number;
+  committed_at: string | null;
+  landed_at: string | null;
+}
+
+export interface HubConflict {
+  at: string;
+  key: Record<string, unknown>;
+  codes: Record<string, unknown> | null;
+  field: string;
+  kept: unknown;
+  kept_by: string | null;
+  kept_at: string | null;
+  lost: unknown;
+  lost_by: string | null;
+  lost_at: string | null;
+  reason: string;
+}
+
+export interface HeldRow {
+  system: string;
+  local: Record<string, unknown>;
+  reason: string;
+  row: Record<string, unknown>;
+  at: string;
+}
+
+export interface Tombstone {
+  key: Record<string, unknown>;
+  deleted_by: string;
+  deleted_at: string | null;
+  codes: Record<string, unknown> | null;
+}
+
+export interface Hub {
+  id: string;
+  title: string;
+  authority: string;
+  codes: Record<string, string>;
+  systems: IntegrationSystem[];
+  hub_error?: string;
+  records?: number;
+  arriving?: Record<string, Arrival>;
+  conflicts?: HubConflict[];
+  held?: HeldRow[];
+  deleted?: Tombstone[];
+}
+
+export interface IntegrationState {
+  hubs: Hub[];
+  problems: string[];
+  seatunnel_error: string | null;
+}
+
+export const getIntegration = () => json<IntegrationState>('/api/integration');

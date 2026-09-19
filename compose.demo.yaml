@@ -56,6 +56,12 @@ services:
   # `!reset` rather than `[]`, because an empty list *merges* with what was
   # extended and leaves the port there, which fails the whole service with
   # "Bind for 0.0.0.0:8077 failed: port is already allocated".
+  # The Integration tab in ODD reads the demo's hub and flows (#78); a
+  # deployment keeps them in contracts/, the default.
+  app:
+    environment:
+      INTEGRATION_DIR: demo/integration
+
   sync-mssql:
     extends:
       file: compose.yaml

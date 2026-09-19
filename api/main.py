@@ -34,6 +34,8 @@ from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
                          TABLE_SCOPED_TYPES, load_contracts, run)
 from core.scoring import DIMENSION_WEIGHT
 
+from api.integration import router as integration_router
+
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Print the token once. A generated secret nobody can find is no better
@@ -70,6 +72,9 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["authorization", "content-type"],
 )
+
+# The Integration tab's one route, in a module of its own (#78).
+app.include_router(integration_router)
 
 DIMENSIONS = sorted(DIMENSION_WEIGHT)
 

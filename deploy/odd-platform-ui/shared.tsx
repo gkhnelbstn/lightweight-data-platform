@@ -3,8 +3,8 @@ import { Trans, useTranslation } from 'react-i18next';
 import { Typography } from '@mui/material';
 import { DataEntityRunStatus } from 'generated-sources';
 import i18n from 'locales/i18n';
-import turkish from './tr.json';
 import type { Sample } from './api';
+import { LDP } from './nav';
 import * as S from './Contracts.styles';
 
 /** The few things every tab in this panel needs. */
@@ -16,12 +16,10 @@ import * as S from './Contracts.styles';
  * instance (issue #44). The namespace is ours so that a phrase both of us use,
  * such as 'All' or 'Result', never changes their wording or ours. Keys are the
  * English phrases, which is upstream's convention, so English needs no
- * catalogue: a key with no translation renders as itself. Imported from
- * `locales/i18n` rather than `i18next` so the instance is initialised before
- * the bundle is added, whatever order the page loads modules in.
+ * catalogue: a key with no translation renders as itself. The catalogue is
+ * registered in ./nav, which ODD's menu loads on every page.
  */
-const NS = 'ldp';
-i18n.addResourceBundle('tr', NS, turkish, true, true);
+const NS = LDP;
 
 type Vars = Record<string, unknown>;
 // React escapes what it renders; i18next escaping as well would show a
