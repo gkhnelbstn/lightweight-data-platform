@@ -37,6 +37,19 @@ from core.mapping import _properties
 CHECKPOINT_MS = int(os.getenv("FLOW_CHECKPOINT_MS", "3000"))
 
 
+def env(flow: flowmod.Flow, name: str) -> dict:
+    """SeaTunnel's job settings: the two a flow may state, and the rest fixed.
+
+    `parallelism` is deliberately not one of them -- a second reader reorders
+    one key's changes, and the hub decides by the order they were committed
+    in (ADR 0021). `read_limit.rows_per_second` is SeaTunnel's own throttle,
+    and it is what keeps a first snapshot from taking the source's disk."""
+    rows = flow.job.get("rowsPerSecond")
+    return {"job.mode": "STREAMING", "parallelism": 1, "job.name": name,
+            "checkpoint.interval": flow.job.get("checkpointInterval", CHECKPOINT_MS),
+            **({"read_limit.rows_per_second": rows} if rows else {})}
+
+
 def _literal(v) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
@@ -127,8 +140,7 @@ def inbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
               f"{', '.join(cols + extra)}) values "
               f"({', '.join('?' * (len(cols) + len(extra) + 4))})")
     return {
-        "env": {"job.mode": "STREAMING", "checkpoint.interval": CHECKPOINT_MS,
-                "parallelism": 1, "job.name": flow.id},
+        "env": env(flow, flow.id),
         "source": [_cdc_source(by_id[flow.mapping.reference], f"{flow.id}_slot")],
         "transform": [
             {"Metadata": {"plugin_input": "src", "plugin_output": "meta",
@@ -231,8 +243,7 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
                                        + [f"{s} IS NULL" for _, s in carried])}})
         sink.append({"Jdbc": {"plugin_input": "emptied", **jdbc, "query": delete}})
     return {
-        "env": {"job.mode": "STREAMING", "checkpoint.interval": CHECKPOINT_MS,
-                "parallelism": 1, "job.name": flow.id},
+        "env": env(flow, flow.id),
         "source": [_cdc_source(by_id[flow.mapping.reference], f"{flow.id}_slot")],
         "transform": transform,
         "sink": sink}
@@ -289,7 +300,8 @@ def main() -> None:
     by_id, flows = load(args.contracts)
     if args.stop:
         from core import flow_apply
-        flow_apply.stop({f.id for f in flows})
+        for line in flow_apply.stop({f.id for f in flows}):
+            print(line)
         return
     found = flowmod.problems(flows, by_id)
     for line in found:
@@ -302,7 +314,12 @@ def main() -> None:
         print(json.dumps(jobs(by_id, flows), indent=2))
     else:
         from core import flow_apply
-        flow_apply.apply(by_id, flows, jobs(by_id, flows), resnapshot=args.resnapshot)
+        said, refused = flow_apply.apply(by_id, flows, jobs(by_id, flows),
+                                         resnapshot=args.resnapshot)
+        for line in said:
+            print(line)
+        if refused:
+            raise SystemExit("\n".join(f"REFUSED: {r}" for r in refused))
 
 
 if __name__ == "__main__":

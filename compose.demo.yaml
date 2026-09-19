@@ -61,6 +61,15 @@ services:
   app:
     environment:
       INTEGRATION_DIR: demo/integration
+      # What a flow's job is given to reach the two systems and the hub. The
+      # job files never carry a credential -- they carry ${PG_USER} and
+      # friends, filled on the way to SeaTunnel (core/flow_apply.py) -- but
+      # the process doing the filling needs them, and since #109 that is this
+      # service as well as the CLI. Demo passwords, in the demo's file.
+      PG_USER: postgres
+      PG_PASSWORD: postgres
+      MSSQL_USER: sa
+      MSSQL_PASSWORD: "Str0ng!Passw0rd"
     # SeaTunnel's checkpoints, read to decide whether a flow can resume where
     # it stopped (core/flow_resume.py, ADR 0023). Read-only: they are its.
     volumes:
