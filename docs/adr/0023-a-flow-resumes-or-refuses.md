@@ -50,6 +50,29 @@ Two cases make resuming unsafe, and SeaTunnel reports neither:
 * `--resnapshot` is the deliberate way through a refusal. It starts from
   scratch and says what that costs.
 
+### A table that changed under its flow
+
+The flow and its contract are the source of truth (invariant 1), so a schema
+change is refused and reported, never followed. What each change does was
+measured, with the flows running:
+
+* **A column added** is invisible. A CDC capture instance keeps the columns it
+  was created with, so nothing breaks, and only the contract is out of date.
+* **A mapped column dropped** empties nothing on the way in. CDC keeps it as
+  NULL in both the before and the after image, and an unchanged field is not
+  an edit. On the way out, though, the `MERGE` fails with `Invalid column
+  name`, and the job's error is four kilobytes of stack trace.
+* **The column added back** looks captured by name and is not. The capture
+  instance lists the old column's id, so the new one is never read, silently.
+
+`core/flow_schema.py` compares each flow's mapped columns with the live table,
+and for a flow reading CDC with the capture instance, **by column id**.
+`--apply` refuses a flow that fails the comparison. The Integration tab lists
+the same problems under the system while the flow runs, and gives a failed job's
+last `Caused by` instead of its stack. Following a real schema change means
+changing the contract and the flow, then a new capture instance, and that
+comes to a re-read, which is `--resnapshot`.
+
 ## Consequences
 
 * The outage drill is `demo/integration/outage.py`: create two customers,

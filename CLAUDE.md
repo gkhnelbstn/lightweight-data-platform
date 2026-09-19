@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 369 tests; the ones that need a database skip without one
+pytest -q                                                  # 374 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -338,6 +338,12 @@ trigger.
   none or when SQL Server's CDC retention ran out meanwhile: SeaTunnel does
   both wrong without a word. `--resnapshot` is the knowing way through. ADR
   0023.
+* **A table that changed under its flow is refused, never followed**
+  (`core/flow_schema.py`): a mapped column missing from the live table, or not
+  in its CDC capture instance. Compare captured columns **by id** -- a dropped
+  and re-added column keeps its name in `cdc.captured_columns` under the old
+  id and is never read. A dropped column empties nothing on the way in (NULL
+  in both images is no edit) but fails the out-flow's `MERGE`.
 * A value its value map does not know lands as NULL and cannot raise, so an
   in-flow carries `unmapped` -- the fields it happened to -- and the hub
   keeps its own value and logs `unmapped` in `hub.conflict`. A NULL from a map

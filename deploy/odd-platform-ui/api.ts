@@ -429,6 +429,8 @@ export interface IntegrationSystem {
   title: string;
   in: IntegrationFlow[];
   out: IntegrationFlow[];
+  /** Mapped columns the live table or its CDC capture no longer has. */
+  drift: string[];
 }
 
 export interface Arrival {

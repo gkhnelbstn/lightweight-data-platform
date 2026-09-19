@@ -65,6 +65,20 @@ def plan(flow: str, job_id: int | None, checkpoint_ms: int | None,
     return "resume", None
 
 
+def mssql(server: dict, timeout: int = 30):
+    """A connection to a system's SQL Server: as the flows' own user when
+    applying them, as the platform's reporting user from the API."""
+    import pyodbc
+    driver = os.getenv("DATACONTRACT_SQLSERVER_DRIVER", "ODBC Driver 18 for SQL Server")
+    user = os.getenv("MSSQL_USER") or os.getenv("DATACONTRACT_SQLSERVER_USERNAME", "sa")
+    password = (os.getenv("MSSQL_PASSWORD")
+                or os.getenv("DATACONTRACT_SQLSERVER_PASSWORD", ""))
+    return pyodbc.connect(
+        f"DRIVER={{{driver}}};SERVER={server['host']},{server.get('port', 1433)};"
+        f"DATABASE={server['database']};UID={user};PWD={password};"
+        "TrustServerCertificate=yes;Encrypt=no", timeout=timeout)
+
+
 def oldest_change_ms(contract: dict) -> int | None:
     """For a SQL Server source, when the oldest change its CDC still keeps was
     committed: anything earlier was purged by retention. None for any other
@@ -73,14 +87,8 @@ def oldest_change_ms(contract: dict) -> int | None:
                    if s.get("type") == "sqlserver"), None)
     if server is None:
         return None
-    import pyodbc
-    driver = os.getenv("DATACONTRACT_SQLSERVER_DRIVER", "ODBC Driver 18 for SQL Server")
     instance = f"{server.get('schema', 'dbo')}_{contract['schema'][0]['physicalName']}"
-    with pyodbc.connect(
-            f"DRIVER={{{driver}}};SERVER={server['host']},{server.get('port', 1433)};"
-            f"DATABASE={server['database']};UID={os.getenv('MSSQL_USER', 'sa')};"
-            f"PWD={os.getenv('MSSQL_PASSWORD', '')};TrustServerCertificate=yes;Encrypt=no",
-            timeout=30) as cx:
+    with mssql(server) as cx:
         # The mapping table is in the server's local time; shift it to UTC.
         row = cx.cursor().execute(
             "select datediff_big(ms, '1970-01-01', dateadd(minute, "

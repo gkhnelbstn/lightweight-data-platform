@@ -25,7 +25,7 @@ import urllib.request
 
 import psycopg
 
-from core import flow_resume
+from core import flow_resume, flow_schema
 from core import flows as flowmod
 from core import hub
 from core.bootstrap_db import admin_dsn, ensure_database
@@ -110,6 +110,11 @@ def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
     for flow in flows:
         if flow.id in already:
             print(f"{flow.id}: already running")
+            continue
+        # A table that changed under its flow is refused, never followed.
+        drift = flow_schema.problems(flow, by_id)
+        if drift:
+            refused += drift
             continue
         with psycopg.connect(_hub_dsn(by_id, flow), autocommit=True) as cx:
             row = cx.execute("select job_id from hub.job where flow = %s",

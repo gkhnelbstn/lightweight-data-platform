@@ -153,6 +153,11 @@ const Flows: React.FC<{ hub: Hub }> = ({ hub }) => {
               <Typography variant='caption' color='texts.secondary'>
                 {s.table}
               </Typography>
+              {s.drift.map(d => (
+                <Typography key={d} variant='caption' color='error.main' component='div'>
+                  {d}
+                </Typography>
+              ))}
             </div>
           </Table.Cell>
           <Table.Cell $flex={1.6}>

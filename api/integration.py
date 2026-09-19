@@ -25,7 +25,7 @@ from fastapi import APIRouter
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from core import flow_jobs, sample
+from core import flow_jobs, flow_schema, sample
 from core import flows as flowmod
 from core.bootstrap_db import admin_dsn
 from core.mapping import _properties
@@ -62,10 +62,21 @@ def jobs() -> tuple[dict[str, dict], str | None]:
         out[name] = {
             "status": job.get("jobStatus"), "id": job.get("jobId"),
             "started": job.get("startTime"), "finished": job.get("finishTime"),
-            "error": job.get("errorMsg"),
+            "error": root_cause(job.get("errorMsg")),
             "read": int(metrics.get("SourceReceivedCount") or 0),
             "written": sum(int(v) for v in (metrics.get("TableSinkWriteCount") or {}).values())}
     return out, None
+
+
+def root_cause(error: str | None) -> str | None:
+    """SeaTunnel's error is a Java stack trace of kilobytes; its last
+    `Caused by` is the sentence a person needs ("Invalid column name ...")."""
+    if not error:
+        return error
+    causes = [line.strip()[len("Caused by: "):] for line in error.splitlines()
+              if line.strip().startswith("Caused by: ")]
+    last = (causes[-1] if causes else error.splitlines()[0]).split(": ", 1)[-1]
+    return last[:300]
 
 
 def _ms(ms: int | None) -> str | None:
@@ -142,6 +153,7 @@ def integration() -> dict:
     except Exception as exc:
         return {"hubs": [], "problems": [f"{DIRECTORY}: {exc}"], "seatunnel_error": None}
     running, st_error = jobs()
+    unreachable: dict[str, str] = {}   # a server asked once per request
     hubs = []
     for cid, contract in sorted(by_id.items()):
         spec = flowmod.hub_of(contract)
@@ -156,9 +168,19 @@ def integration() -> dict:
             row = systems.setdefault(table, {
                 "table": table, "system": flowmod.system_of(table),
                 "title": (by_id.get(table) or {}).get("name") or table,
-                "in": [], "out": []})
+                "in": [], "out": [], "drift": []})
             row["in" if into else "out"].append(
                 {"flow": f.id, "match": f.match, "job": running.get(f.id)})
+            # The table changed under the flow: refused on --apply, shown here
+            # while it runs (core/flow_schema.py).
+            host = (flow_schema.server_of(f, by_id) or {}).get("host")
+            if host in unreachable:
+                continue
+            try:
+                row["drift"] += flow_schema.problems(f, by_id, timeout=3)
+            except Exception as exc:
+                unreachable[host] = exc.__class__.__name__
+                row["drift"].append(f"{table}: schema not readable ({unreachable[host]})")
         hub = {"id": cid, "title": contract.get("name") or cid,
                "authority": spec.get("authority"), "codes": flowmod.keys_of(contract),
                "systems": sorted(systems.values(), key=lambda s: s["table"])}
