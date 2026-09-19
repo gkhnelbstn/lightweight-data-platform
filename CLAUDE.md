@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 395 tests; the ones that need a database skip without one
+pytest -q                                                  # 401 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -29,6 +29,7 @@ python demo/medallion.py --with-history                    # ...and give dim.cus
 python integrations/odd/lineage.py --url http://odd-platform:8080   # declared lineage
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
 python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
+python integrations/odd/master_data.py --url http://odd-platform:8080  # golden records -> Master Data
 uvicorn api.main:app --port 8077                           # UI + API
 python core/mapping.py --check                             # validate the declared column mappings
 python core/sync.py --check                                # validate the sync rules
@@ -384,6 +385,12 @@ which is the default branch.
   Postgres *source* needs `REPLICA IDENTITY FULL`, no `timestamptz` column
   (SeaTunnel 2.3.13 refuses the whole table), and its slot: all three are
   checked before a job is submitted, never done for it.
+* **ODD's Master Data page is the hub's golden record, one way** (ADR 0025,
+  `integrations/odd/master_data.py`): a lookup table per hub entity plus
+  `value_maps`, matched by key, classified columns left out. An edit made in
+  ODD is overwritten by the next run -- a record changes in its system. ODD
+  does not quote the names in its own `ALTER TABLE`, so a lookup column named
+  `column` is a 500.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why
