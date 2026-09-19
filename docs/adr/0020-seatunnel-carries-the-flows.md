@@ -74,6 +74,21 @@ compose network.
 So the shape is the opposite of Debezium Server's. The runtime costs a lot
 once and a flow costs little after that.
 
+**Most of the 6.97 GB is connectors nobody here uses.** `connectors/` is 2.4 GB
+for 84 connectors, and `lib/` is 403 MB, mostly Hadoop, AWS and Hive. A
+derived image was built on `eclipse-temurin:8-jre`. It keeps `bin`,
+`config` and `starter`, and from `lib/` only the transforms jar, the Hadoop
+uber jar (checkpoint storage) and the two JDBC drivers. Its seven connectors
+are CDC base, SQL Server CDC, Postgres CDC, MongoDB CDC, JDBC, MongoDB and
+HTTP. The result is **1.28 GB**, and it runs both prototypes unchanged:
+
+* the SQL Server CDC job wrote 2 000 rows to Postgres and 2 000 documents to
+  MongoDB, at the same ~500 MiB;
+* the Postgres CDC flow snapshotted, then carried an update.
+
+Because it never copies `opengauss-jdbc`, the Postgres driver conflict below
+does not arise in it.
+
 ### Three things that would have gone wrong silently
 
 1. **The official image cannot write to Postgres.** `lib/` ships
