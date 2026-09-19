@@ -234,6 +234,21 @@ def unsound_identity(contract: dict, rule: dict) -> list[str]:
             if status == "fail" and field in identity]
 
 
+def rule_problems(contract: dict, rule: dict, engine: str) -> list[str]:
+    """Every reason a rule on disk would not work, for the mode it declares.
+
+    `plan()` and `/api/sync` both ask, and asking twice is how the listing
+    came to hold a view rule to the replica identity: a view has none, and no
+    upsert to merge duplicates in either, so neither `problems()` nor
+    `unsound_identity()` is its question (invariant 3, ADR 0017).
+    """
+    model = contract["schema"][0]
+    if mode(rule) == "view":
+        from core import sync_view
+        return sync_view.problems(model, rule, contract, engine)
+    return problems(model, rule, engine) + unsound_identity(contract, rule)
+
+
 def author_rule(contract: dict, server: str, row_filter: str | None = None,
                 columns: list[str] | None = None,
                 identity: list[str] | None = None) -> tuple[dict, list[str]]:
@@ -436,8 +451,7 @@ def plan(contract: dict) -> dict | None:
             render = lambda s: s.as_string(cx)  # noqa: E731
             return {
                 "contract": contract["id"], "engine": "view (postgres_fdw)",
-                "problems": sync_view.problems(
-                    model, rule, contract, source.get("type")),
+                "problems": rule_problems(contract, rule, source.get("type")),
                 "source": [render(s) for s in sync_view.source_statements(
                     model, source.get("schema", "public"), rule)],
                 "target": [render(s) for s in sync_view.target_statements(
@@ -450,7 +464,7 @@ def plan(contract: dict) -> dict | None:
         return {
             "contract": contract["id"], "engine": "logical replication",
             "publication": name,
-            "problems": problems(model, rule) + unsound_identity(contract, rule),
+            "problems": rule_problems(contract, rule, source.get("type")),
             "source": [render(s) for s in
                        _identity_statements(model, source.get("schema", "public"), rule)]
                       + [render(publication_statement(

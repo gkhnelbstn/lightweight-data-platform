@@ -462,3 +462,24 @@ def test_the_shipped_view_rule_would_actually_work():
     assert mode(rule) == "view"
     assert problems(doc["schema"][0], rule, doc, "postgres") == []
     assert {s["server"] for s in doc["servers"]} >= {rule["server"]}
+
+
+def test_a_view_rule_is_not_held_to_logical_replications_preconditions(monkeypatch):
+    """erp.order_lines filters on qty, outside its (order_id, line_no) key.
+    That is a copy's problem, not a view's -- the panel's listing reported it
+    anyway until `/api/sync` and plan() shared rule_problems(). The identity
+    having held is a copy's question too: nothing is upserted to merge."""
+    from core import sync
+    monkeypatch.setattr(sync, "unsound_identity",
+                        lambda *a: ["sentinel: the identity does not hold"])
+    doc = yaml.safe_load(
+        (CONTRACTS / "erp_order_lines.odcs.yaml").read_text(encoding="utf-8"))
+    rule = sync_rule(doc)
+    assert any("replica identity" in p
+               for p in problems(doc["schema"][0], rule, "postgres"))
+    assert sync.rule_problems(doc, rule, "postgres") == []
+    copy = {k: v for k, v in rule.items() if k != "mode"}
+    assert any("replica identity" in p
+               for p in sync.rule_problems(doc, copy, "postgres"))
+    assert "sentinel: the identity does not hold" in \
+        sync.rule_problems(doc, copy, "postgres")
