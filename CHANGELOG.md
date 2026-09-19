@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.6.1...v0.6.2) (2026-09-19)
+
+
+### Bug Fixes
+
+* recent times on the panel read in minutes, not as an hour ([#99](https://github.com/gkhnelbstn/lightweight-data-platform/issues/99)) ([380931b](https://github.com/gkhnelbstn/lightweight-data-platform/commit/380931b4b8844182de6cf851c0c8830bc5346706))
+
 ## [0.6.1](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.6.0...v0.6.1) (2026-09-19)
 
 
