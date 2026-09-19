@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.4.0...v0.4.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* a flow resumes where it stopped after a SeaTunnel restart, or refuses to ([#90](https://github.com/gkhnelbstn/lightweight-data-platform/issues/90)) ([9ab973e](https://github.com/gkhnelbstn/lightweight-data-platform/commit/9ab973e14bcd2aa68559c1f763f124401a92499f))
+
 ## [0.4.0](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.3.0...v0.4.0) (2026-09-19)
 
 
