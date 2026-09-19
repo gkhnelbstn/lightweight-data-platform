@@ -1,0 +1,140 @@
+# 0020 — Apache SeaTunnel can carry the flows; the pair stays ours
+
+**Proposed.** This record describes a prototype and what it found. Adopting
+SeaTunnel is new infrastructure (invariant 6), so the decision is taken
+explicitly, not by merging this file.
+
+## Context
+
+ADR 0019 made an integration its own file (`contracts/flows/`), and
+`core/flows.py` refuses a flow, or a pair of flows, that would corrupt data.
+Nothing moves a row yet. The requirement behind issue #53:
+
+* any source to any target: SQL Server, Postgres (and TimescaleDB), MongoDB,
+  and HTTP APIs;
+* streaming, not a nightly copy;
+* renamed columns, recoded values and changed types;
+* both directions between two systems of record.
+
+Writing an executor for every engine pair is the per-pair cost #56 warned
+about. The question was whether an open-source project can carry the rows,
+so that the code liability is someone else's.
+
+### What was ruled out, with the reason
+
+* **SymmetricDS Community.** It was the one open-source tool with
+  bi-directional sync, transforms and conflict resolution. From 3.17 (March
+  2026) *"support for Microsoft SQL Server and Oracle database platforms has
+  moved to SymmetricDS Pro"* (Jumpmind release notes), so the community
+  edition cannot do the SQL Server side at all.
+* **Redpanda Connect.** `microsoft_sql_server_cdc` and `postgres_cdc` both
+  need an enterprise licence.
+* **TapData Community.** Apache 2.0, with bi-directional tasks, but *"does not
+  currently support active-active conflict resolution. Avoid modifying the
+  same data on both sides simultaneously."* It also runs on a MongoDB
+  metadata store with 5 GB of memory, and keeps its pipelines in that store,
+  not in files, which is invariant 1's problem.
+* **Debezium Server.** ADR 0018 measured it at 893 MiB per pipeline, one
+  connector per instance. Its row filter is Groovy, and it has no loop
+  prevention.
+* **Flink CDC.** A Flink cluster is a larger runtime than the problem.
+
+**Apache SeaTunnel** is Apache 2.0, and 2.3.13 was released on 2026-03-14. In
+one image it ships:
+- CDC sources for SQL Server, Postgres, MongoDB and MySQL;
+- a JDBC sink that turns CDC row kinds into insert, update and delete, and
+  upserts on `primary_keys`;
+- a MongoDB sink;
+- an HTTP source with polling and paging;
+- a SQL transform with `CASE WHEN`, `CAST`, `COALESCE` and date functions.
+
+It runs as one standalone engine ("Zeta") without Kafka or Flink.
+
+## What the prototype did
+
+Everything ran against the demo stack, with `apache/seatunnel:2.3.13` on the
+compose network.
+
+**One flow, SQL Server to Postgres and MongoDB.**
+- Source: SQL Server CDC on `erp.dbo.customers`.
+- Transform: one SQL step that renames columns, recodes `segment` through
+  `CASE`, and leaves `tax_id` and `email` behind.
+- Sinks: a JDBC upsert into Postgres and a MongoDB upsert, from the same job.
+
+| | result |
+|---|---|
+| initial snapshot | 2 000 rows in Postgres, 2 000 documents in MongoDB |
+| update, delete and insert on SQL Server | all three in both targets within **~5 s** (the checkpoint interval) |
+| classified columns | never left the source: the projection is the boundary |
+| memory, one job in local mode | ~500 MiB |
+| memory, a cluster with no jobs | 449 MiB |
+| memory, the same cluster running two flows | 657 MiB, so ~104 MiB per flow |
+| image | 6.97 GB on disk, once |
+
+So the shape is the opposite of Debezium Server's. The runtime costs a lot
+once and a flow costs little after that.
+
+### Three things that would have gone wrong silently
+
+1. **The official image cannot write to Postgres.** `lib/` ships
+   `opengauss-jdbc-5.1.0.jar`, which contains its own
+   `org/postgresql/core/v3/ConnectionFactoryImpl` and shadows the real
+   pgjdbc. Against Postgres 16 with `scram-sha-256` every connection fails
+   with `Protocol error. Session setup failed.`. The message names neither
+   the driver nor the cause, and the server logs a connection that never
+   authenticates. Removing that one jar fixes it. A derived image has to do
+   that until upstream does.
+2. **A value outside the value map becomes NULL.** The demo's segments are
+   `KEY/RETAIL/MID/SMB`, and the map written for the test covered `SMB`,
+   `MID` and `ENT`. 1 000 rows landed with no tier and nothing complained,
+   because `CASE` without `ELSE` is NULL. Whatever compiles a flow's
+   `values` into SQL must not produce that. A check on the target that the
+   column is filled wherever the source was is the data-quality half of the
+   same rule.
+3. **Auto-created targets are not the contract's.** With
+   `CREATE_SCHEMA_WHEN_NOT_EXIST` the sink made `nvarchar(120)` into
+   `varchar(480)` and `char(2)` into `varchar(4)`. The target table belongs
+   to the target's contract. It is created from that contract, and SeaTunnel
+   only writes into it.
+
+## Echo in a two-way pair
+
+Two flows in opposite directions write into each other. What stops a change
+bouncing back for ever is whether writing an unchanged value produces a
+change event.
+
+* **SQL Server target: the echo dies by itself.** A `MERGE` or `UPDATE` that
+  sets every column to the value it already has adds no row to the CDC change
+  table: 1 row before, 1 row after, for both.
+* **Postgres target: a plain upsert echoes.** A plain
+  `insert ... on conflict do update` with identical values emits one change
+  to logical decoding. The same statement guarded with
+  `where t.v is distinct from excluded.v` emits none. Both were tested by
+  hand through `test_decoding`, not through SeaTunnel's sink, which
+  generates the unguarded form.
+
+Together with `core/flows.py`'s refusals, this is what makes a pair
+self-terminating. The inverse maps and one-to-one value maps guarantee the
+round trip reproduces the *identical* value. An identical value is then a
+no-op on SQL Server, and on Postgres a no-op only when the write is guarded.
+
+## What this does not decide
+
+* **Conflicts.** Nothing here tested what happens when both sides change the
+  same column between two syncs, and nothing in SeaTunnel expresses
+  `winsOnConflict`. Its SQL transform is single-table with no joins, so it
+  cannot compare against the target first. A pair whose sides edit the same
+  column still needs per-row state that no adoptable tool provides for SQL
+  Server.
+* **Whether the flow compiler exists.** The proposal is that
+  `contracts/flows/*.yaml` compiles into SeaTunnel job configs and is refused
+  by `core/flows.py` first, the way `syncTo` compiles into a publication. That
+  compiler is not written.
+
+## On upgrade
+
+* **SeaTunnel drops `opengauss-jdbc` from `lib/`, or relocates its
+  packages:** delete the line in the derived image that removes it.
+* **SeaTunnel's JDBC sink gains a guarded upsert** (`is distinct from`, or
+  "skip unchanged rows"): the compiler stops generating a custom `query` for
+  a Postgres target in a pair.
