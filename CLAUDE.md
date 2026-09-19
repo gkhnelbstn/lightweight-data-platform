@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 288 tests; the ones that need a database skip without one
+pytest -q                                                  # 300 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -34,6 +34,7 @@ python core/mapping.py --check                             # validate the declar
 python core/sync.py --check                                # validate the sync rules
 python core/sync.py --apply                                # publication + subscription
 python core/sync_mssql.py --interval 30                    # SQL Server CDC -> Postgres
+python core/hub.py --init                                  # the two-way integration hub
 ```
 
 Both databases come from the environment; nothing hardcodes a DSN:
@@ -266,6 +267,16 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   its own round trip. Expressions wait for a one-way case that needs them
   (issue #53). This is not type checking -- the map *is* the legitimate type
   difference.
+* **Two-way integration runs through a hub** (ADR 0021): systems never write
+  to each other. SeaTunnel lands every change append-only in
+  `hub.<entity>_inbox` (before and after rows, commit time), a trigger runs
+  `hub.merge` (`core/hub.sql`), and the golden record `hub.<entity>` goes
+  back out to every system. The merge's order matters: an awaited value
+  (`hub.expect`) is an echo first, an untouched field second, an agreement
+  third, an edit of the current value fourth -- whatever the clocks say --
+  and only then a conflict, where the later commit wins and `hub.conflict`
+  keeps the loser. Its tests need a real Postgres (`DWH_PORT=5442` locally)
+  and CI fails if they skip.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why
