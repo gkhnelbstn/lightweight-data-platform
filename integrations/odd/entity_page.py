@@ -61,7 +61,7 @@ def _get(url: str) -> dict:
 
 
 def _send(url: str, body: dict, method: str = "POST"):
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+    req = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(),
                                  method=method,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -84,7 +84,7 @@ def entity_id(url: str, oddrn: str) -> int | None:
         for item in results.get("items", []):
             if item.get("oddrn") == oddrn:
                 return item["id"]
-        if not (results.get("page_info") or {}).get("has_next"):
+        if not (results.get("page_info") or {}).get("hasNext"):
             return None
         page += 1
 

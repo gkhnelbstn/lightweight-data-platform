@@ -14,6 +14,14 @@ from core import alerts
 TODAY = date(2026, 9, 14)
 
 
+@pytest.fixture(autouse=True)
+def english(monkeypatch):
+    """The phrases below are English; the demo compose runs the app with
+    `LDP_LANGUAGE: tr`, and `docker compose exec app pytest` inherits it."""
+    from core import language
+    monkeypatch.setattr(language, "LANGUAGE", "en")
+
+
 def test_a_run_with_nothing_new_says_nothing():
     """The common case. `compose` returning None is what stops the POST."""
     assert alerts.compose(TODAY, [{"id": "erp.customers"}], [], {}, []) is None
