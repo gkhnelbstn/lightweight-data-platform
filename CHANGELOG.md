@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.4.1...v0.5.0) (2026-09-19)
+
+
+### Features
+
+* a value outside a value map is logged and kept out, not written as empty ([#92](https://github.com/gkhnelbstn/lightweight-data-platform/issues/92)) ([c7520dd](https://github.com/gkhnelbstn/lightweight-data-platform/commit/c7520dd5cda653110d508b006e5bfbc9bc2233f2))
+
 ## [0.4.1](https://github.com/gkhnelbstn/lightweight-data-platform/compare/v0.4.0...v0.4.1) (2026-09-19)
 
 
