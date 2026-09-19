@@ -280,13 +280,14 @@ def push_to_odd(contract: dict, results: dict, url: str) -> int:
     from integrations.odd.from_datacontract import (build, dataset_oddrn,
                                                     ensure_datasource, post)
     from integrations.odd.mapper import entity_list
+    from integrations.odd.relationships import entities as foreign_keys
 
     from integrations.odd.curate import ensure_terms, fill
     from integrations.odd.entity_page import sync_links
 
     ds = dataset_oddrn(contract, "erp")
-    body = entity_list(build(contract, results, ds), HOST).model_dump(
-        mode="json", exclude_none=True)
+    body = entity_list(build(contract, results, ds) + foreign_keys(contract),
+                       HOST).model_dump(mode="json", exclude_none=True)
     ensure_datasource(url)
     post(url, body)
     # Everything a catalogue is for and a collector cannot know -- owner,
