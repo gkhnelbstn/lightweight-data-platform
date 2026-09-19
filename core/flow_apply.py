@@ -65,14 +65,18 @@ def register(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> None:
         ensure_database(server["host"], server.get("port", 5432), server["database"])
         props = _properties(contract)
         entity = contract["schema"][0]["name"]
+        key = [n for n, p in props.items() if p.get("primaryKey")]
+        keys = flowmod.keys_of(contract) or None
         with psycopg.connect(admin_dsn(server["host"], server.get("port", 5432),
                                        server["database"]), autocommit=True) as cx:
             hub.init(cx)
+            # With codes of their own, the key is the hub's: no row brings it.
             hub.register_entity(
-                cx, entity, [n for n, p in props.items() if p.get("primaryKey")],
-                {n: p["physicalType"] for n, p in props.items()}, spec["authority"],
+                cx, entity, key, {n: p["physicalType"] for n, p in props.items()},
+                spec["authority"], keys=keys,
                 required=[n for n, p in props.items()
-                          if p.get("required") or p.get("primaryKey")])
+                          if (p.get("required") or p.get("primaryKey"))
+                          and not (keys and n in key)])
             into = {f.mapping.reference for f in flows if f.target == cid}
             out = {f.target for f in flows if f.mapping.reference == cid}
             for system in sorted(into & out):
@@ -80,7 +84,9 @@ def register(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> None:
                 fields = sorted({src for f in flows
                                  if f.mapping.reference == cid and f.target == system
                                  for src in f.mapping.columns.values()})
-                hub.register_system(cx, entity, system, fields)
+                link_by = next((list(f.link_by) for f in flows if f.link_by
+                                and f.mapping.reference == system and f.target == cid), None)
+                hub.register_system(cx, entity, system, fields, link_by)
         print(f"hub {cid}: {entity} on {server['host']}/{server['database']}, "
               f"systems {sorted(into & out)}")
 

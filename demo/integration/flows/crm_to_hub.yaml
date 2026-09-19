@@ -1,6 +1,8 @@
 id: crm_to_hub
 from: crm.account
 to: hub.customer
-columns: {code: ACCOUNT_CODE, name: TITLE, tax_id: TAX_NO, active: ACTIVE}
+columns: {crm_code: ACCOUNT_CODE, name: TITLE, tax_id: TAX_NO, active: ACTIVE}
 values:
   active: {Y: true, N: false}
+# A CRM account the hub has not seen is the customer with its tax number.
+linkBy: [tax_id]

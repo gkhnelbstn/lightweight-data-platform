@@ -85,6 +85,37 @@ create table if not exists hub.tombstone (
     primary key (entity, key)
 );
 
+-- Systems that do not share a key (#80). `keys` names, per system, the golden
+-- column holding that system's own key for the record -- the crosswalk -- and
+-- the golden record's key is then the hub's own, from `hub.record_id`. The
+-- local keys are columns of the golden record, not a table beside it, because
+-- the delivery back is a SeaTunnel job that cannot look anything up: the key
+-- has to be in the row it reads.
+alter table hub.entity add column if not exists keys jsonb;
+create sequence if not exists hub.record_id;
+-- How a row under a key the hub has not seen finds its record: golden columns
+-- that must all be equal, a tax identifier. Declared by the flow (`linkBy`).
+alter table hub.system add column if not exists link_by text[];
+-- The local keys a deleted record had, so a late change under one of them
+-- still meets its tombstone rather than looking like a new record.
+alter table hub.tombstone add column if not exists aliases jsonb;
+
+-- Rows the hub could not place, waiting for a person (`hub.link`). A
+-- duplicate made quietly is the one outcome worse than waiting.
+create table if not exists hub.unmatched (
+    entity text  not null,
+    system text  not null,
+    local  jsonb not null,
+    ms     bigint not null,
+    row    jsonb not null,
+    -- 'ambiguous': several records match; 'taken': the one that matches has
+    -- another key of this system already; 'unmatchable': nothing to match by;
+    -- 'part': part of a record whose owning row has not placed it yet.
+    reason text  not null,
+    at     timestamptz not null default now(),
+    primary key (entity, system, local)
+);
+
 -- True, and forgotten, when this value is one the hub sent and is waiting to
 -- see again. Everything older for the same field goes too: it was
 -- superseded. An expectation older than an hour is dropped, because a
@@ -129,6 +160,148 @@ begin
     values (p_system, p_entity, p_key, p_field, p_value);
 end $$;
 
+-- The golden key of the record a row belongs to, for a system with keys of
+-- its own; null when the row is held instead. A key seen before answers at
+-- once, a deleted record's too. An unseen one is matched by the system's
+-- rule: one record without a key of this system is it, none is a new record,
+-- anything else waits. A row carrying the golden key already is a person's
+-- decision being replayed (`hub.link`), and is trusted.
+create or replace function hub.resolve(p_entity text, p_system text, p_kind text,
+                                       p_ms bigint, p_row jsonb,
+                                       out hk jsonb, out linked boolean, out fresh boolean)
+language plpgsql as $$
+declare
+    e     hub.entity;
+    kc    text;
+    ac    text;
+    lk    jsonb;
+    rule  text[];
+    probe jsonb;
+    hits  jsonb[];
+    why   text;
+begin
+    linked := false;
+    fresh := false;
+    select * into e from hub.entity x where x.name = p_entity;
+    kc := e.key[1];
+    ac := e.keys ->> split_part(p_system, '.', 1);
+    lk := jsonb_build_object(ac, p_row -> ac);
+    -- Two rows under one new key, from two tables of a system, place it once.
+    perform pg_advisory_xact_lock(hashtextextended(p_entity || split_part(p_system, '.', 1) || lk::text, 0));
+
+    if p_row ? kc then
+        execute format('select array_agg(to_jsonb(g)) from hub.%I g, jsonb_populate_record(null::hub.%I, $1) r '
+                       'where g.%I = r.%I', p_entity, p_entity, kc, kc) into hits using p_row;
+        hk := jsonb_build_object(kc, p_row -> kc);
+        linked := hits is not null and hits[1] -> ac is distinct from p_row -> ac;
+        fresh := true;
+    else
+        execute format('select array_agg(to_jsonb(g)) from hub.%I g, jsonb_populate_record(null::hub.%I, $1) r '
+                       'where g.%I = r.%I', p_entity, p_entity, ac, ac) into hits using lk;
+        if hits is not null then
+            hk := jsonb_build_object(kc, hits[1] -> kc);
+            return;
+        end if;
+        select t.key into hk from hub.tombstone t
+         where t.entity = p_entity and t.aliases @> lk
+         order by t.deleted_ms desc limit 1;
+        if hk is not null then
+            return;
+        end if;
+        if p_kind = 'DELETE' then
+            -- Never placed, now gone: nothing left to decide.
+            delete from hub.unmatched u
+             where u.entity = p_entity and u.system = p_system and u.local = lk;
+            return;
+        end if;
+        select s.link_by into rule from hub.system s
+         where s.entity = p_entity and s.system = p_system;
+        probe := (select jsonb_object_agg(c, p_row -> c) from unnest(rule) c);
+        if exists (select 1 from unnest(e.required) r where not p_row ? r) then
+            why := 'part';
+        elsif probe is null or exists (select 1 from jsonb_each(probe) v where v.value = 'null') then
+            why := 'unmatchable';
+        else
+            -- Two systems bringing one new customer at once make one record.
+            perform pg_advisory_xact_lock(hashtextextended(p_entity || probe::text, 0));
+            execute format('select array_agg(to_jsonb(g)) from hub.%I g, jsonb_populate_record(null::hub.%I, $1) r '
+                           'where %s', p_entity, p_entity,
+                           (select string_agg(format('g.%I = r.%I', c, c), ' and ') from unnest(rule) c))
+                into hits using probe;
+            if cardinality(hits) > 1 then
+                why := 'ambiguous';
+            elsif hits is not null and hits[1] -> ac <> 'null'::jsonb then
+                why := 'taken';
+            elsif hits is not null then
+                hk := jsonb_build_object(kc, hits[1] -> kc);
+                linked := true;
+            else
+                hk := jsonb_build_object(kc, nextval('hub.record_id'));
+            end if;
+        end if;
+        if hk is null then
+            insert into hub.unmatched (entity, system, local, ms, row, reason)
+            values (p_entity, p_system, lk, p_ms, p_row, why)
+            on conflict (entity, system, local) do update
+            set ms = excluded.ms, row = excluded.row, reason = excluded.reason, at = now();
+            return;
+        end if;
+        fresh := true;
+    end if;
+    delete from hub.unmatched u
+     where u.entity = p_entity and u.system = p_system and u.local = lk;
+end $$;
+
+-- Rows held under a local key that now has a record, the owning row first.
+-- `p_key` places them in a record a person chose.
+create or replace function hub.replay(p_entity text, p_system text, p_local jsonb,
+                                      p_key jsonb default null)
+returns void language plpgsql as $$
+declare
+    u hub.unmatched;
+begin
+    for u in select x.* from hub.unmatched x, hub.entity e
+              where x.entity = p_entity and e.name = p_entity and x.local = p_local
+                and split_part(x.system, '.', 1) = split_part(p_system, '.', 1)
+              order by (select count(*) from unnest(e.required) r where not x.row ? r), x.system
+    loop
+        delete from hub.unmatched x
+         where x.entity = u.entity and x.system = u.system and x.local = u.local;
+        perform hub.merge(u.entity, u.system, 'INSERT', u.ms, u.row || coalesce(p_key, '{}'));
+    end loop;
+end $$;
+
+-- A person's decision on held rows: this system's key is that record, or,
+-- with no record given, a record of its own.
+create or replace function hub.link(p_entity text, p_system text, p_local jsonb,
+                                    p_record jsonb default null)
+returns jsonb language plpgsql as $$
+declare
+    e  hub.entity;
+    ac text;
+    g  jsonb;
+begin
+    select * into e from hub.entity x where x.name = p_entity;
+    ac := e.keys ->> split_part(p_system, '.', 1);
+    if ac is null then
+        raise exception 'hub: % has no key of its own in %', p_system, p_entity;
+    end if;
+    if p_record is null then
+        p_record := jsonb_build_object(e.key[1], nextval('hub.record_id'));
+    else
+        execute format('select to_jsonb(g) from hub.%I g, jsonb_populate_record(null::hub.%I, $1) r '
+                       'where g.%I = r.%I', p_entity, p_entity, e.key[1], e.key[1])
+            into g using p_record;
+        if g is null then
+            raise exception 'hub: % has no record %', p_entity, p_record;
+        elsif g -> ac <> 'null'::jsonb and g -> ac <> p_local -> ac then
+            raise exception 'hub: record % is already % in %', p_record, g -> ac, p_system;
+        end if;
+    end if;
+    perform hub.replay(p_entity, p_system, p_local, p_record);
+    return p_record;
+end $$;
+
 create or replace function hub.merge(p_entity text, p_system text, p_kind text,
                                      p_ms bigint, p_row jsonb)
 returns void language plpgsql as $$
@@ -161,13 +334,27 @@ declare
     back    text[] := '{}';
     meta    text[] := array['_at', '_by', '_rev', '_changed', '_skip'];
     clist   text;
+    -- A system with keys of its own (#80): the golden column holding them,
+    -- every such column (none is a field), and how this row was placed.
+    xkeys   jsonb;
+    ac      text;
+    skip    text[];
+    linked  boolean := false;
+    fresh   boolean := false;
 begin
-    select e.key, e.authority, e.required into keycols, auth, req
+    select e.key, e.authority, e.required, e.keys into keycols, auth, req, xkeys
       from hub.entity e where e.name = p_entity;
     if keycols is null then
         raise exception 'hub: % is not a registered entity', p_entity;
     end if;
-    select jsonb_object_agg(c, p_row -> c) into k from unnest(keycols) c;
+    skip := keycols || array(select v from jsonb_each_text(coalesce(xkeys, '{}')) t(n, v));
+    ac := xkeys ->> split_part(p_system, '.', 1);
+    if xkeys is not null and ac is null then
+        raise exception 'hub: % has no key column in %', p_system, p_entity;
+    end if;
+    -- Until it is placed, a row is known by its own system's key.
+    select jsonb_object_agg(c, p_row -> c) into k
+      from unnest(case when ac is null then keycols else array[ac] end) c;
     -- Two systems' changes to one record are merged one at a time.
     perform pg_advisory_xact_lock(hashtextextended(p_entity || k::text, 0));
 
@@ -187,7 +374,7 @@ begin
         -- its fields. The record itself belongs to a flow that carries all of
         -- what the record requires.
         before := p_row;
-        after := (select jsonb_object_agg(e.key, case when e.key = any(keycols)
+        after := (select jsonb_object_agg(e.key, case when e.key = any(skip)
                                                       then e.value else 'null'::jsonb end)
                     from jsonb_each(p_row) e);
         kind := 'UPDATE_AFTER';
@@ -195,6 +382,17 @@ begin
         before := p_row;
     else
         raise exception 'hub: % is not a row kind', p_kind;
+    end if;
+
+    if ac is not null then
+        select r.hk, r.linked, r.fresh into k, linked, fresh
+          from hub.resolve(p_entity, p_system, p_kind, p_ms, coalesce(after, before)) r;
+        if k is null then
+            return;
+        end if;
+        perform pg_advisory_xact_lock(hashtextextended(p_entity || k::text, 0));
+        after := after || k;
+        before := before || k;
     end if;
 
     keyed := (select string_agg(format('g.%I is not distinct from r.%I', c, c), ' and ')
@@ -216,9 +414,13 @@ begin
                            p_entity, p_entity, keyed) using k, p_system;
             execute format('delete from hub.%I g using jsonb_populate_record(null::hub.%I, $1) r where %s',
                            p_entity, p_entity, keyed) using k;
-            insert into hub.tombstone values (p_entity, k, p_ms, p_system)
+            insert into hub.tombstone (entity, key, deleted_ms, deleted_by, aliases)
+            values (p_entity, k, p_ms, p_system,
+                    (select jsonb_object_agg(v, g -> v) from jsonb_each_text(xkeys) t(s, v)
+                      where g -> v <> 'null'::jsonb))
                 on conflict (entity, key) do update
-                set deleted_ms = excluded.deleted_ms, deleted_by = excluded.deleted_by;
+                set deleted_ms = excluded.deleted_ms, deleted_by = excluded.deleted_by,
+                    aliases = excluded.aliases;
             perform hub.expect_add(s.system, p_entity, k, '*', null) from hub.system s
              where s.entity = p_entity and s.system <> p_system and s.fields is null;
         else
@@ -232,7 +434,7 @@ begin
             perform hub.expect_add(p_system, p_entity, k, e.key, e.value)
                from jsonb_each(g - meta) e
                left join hub.system s on s.entity = p_entity and s.system = p_system
-              where not e.key = any(keycols)
+              where not e.key = any(skip)
                 and (s.fields is null or e.key = any(s.fields));
         end if;
         return;
@@ -247,7 +449,7 @@ begin
             return;
         end if;
         for f, a in select e.key, e.value from jsonb_each(after) e loop
-            continue when f = any(keycols);
+            continue when f = any(skip);
             continue when hub.consume(p_system, p_entity, k, f, a);
             continue when before is not null and (before -> f) is not distinct from a;
             genuine := true;
@@ -272,7 +474,7 @@ begin
         end if;
         -- New everywhere else.
         for f in select jsonb_object_keys(after) loop
-            if not f = any(keycols) then
+            if not f = any(skip) then
                 f_at := f_at || jsonb_build_object(f, p_ms);
                 f_by := f_by || jsonb_build_object(f, p_system);
             end if;
@@ -283,13 +485,16 @@ begin
                                               '_changed', '*', '_skip', p_system);
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(after) e
-          where s.entity = p_entity and s.system <> p_system and not e.key = any(keycols)
+          where s.entity = p_entity and s.system <> p_system and not e.key = any(skip)
             and (s.fields is null or e.key = any(s.fields));
+        if fresh then
+            perform hub.replay(p_entity, p_system, jsonb_build_object(ac, after -> ac));
+        end if;
         return;
     end if;
 
     for f, a in select e.key, e.value from jsonb_each(after) e loop
-        continue when f = any(keycols);
+        continue when f = any(skip);
         -- Our own write, on its way back.
         continue when hub.consume(p_system, p_entity, k, f, a);
         b := before -> f;
@@ -355,6 +560,12 @@ begin
                                   where x.system = p_system and x.entity = p_entity
                                     and x.key = k and x.field = c));
 
+    -- A record this system's key was just linked to: the key is news to that
+    -- system's other tables, which could not be written without it.
+    if linked then
+        changed := changed || jsonb_build_object(ac, after -> ac);
+    end if;
+
     -- What a delivery writes: only the fields this revision changed, so it
     -- never carries an unchanged field's value over an edit made in the
     -- target meanwhile. It skips the system the change came from, which
@@ -379,7 +590,7 @@ begin
                   case when cardinality(lost) > 0 or cardinality(back) > 0 then null else p_system end;
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(changed) e
-          where s.entity = p_entity and s.system <> p_system
+          where s.entity = p_entity and s.system <> p_system and not e.key = any(skip)
             and (s.fields is null or e.key = any(s.fields));
         perform hub.expect_add(p_system, p_entity, k, bf.name, changed -> bf.name)
            from unnest(back) bf(name);
@@ -395,6 +606,10 @@ begin
     if cardinality(lost) > 0 then
         perform hub.expect_add(p_system, p_entity, k, l.name, g -> l.name)
            from unnest(lost) l(name);
+    end if;
+    -- Placed just now: what was held under the same key follows it.
+    if fresh then
+        perform hub.replay(p_entity, p_system, jsonb_build_object(ac, after -> ac));
     end if;
 end $$;
 

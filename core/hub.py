@@ -23,6 +23,7 @@ transaction.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import psycopg
@@ -41,13 +42,19 @@ def init(cx: psycopg.Connection) -> None:
 
 def register_entity(cx: psycopg.Connection, name: str, key: list[str],
                     columns: dict[str, str], authority: str,
-                    required: list[str] | None = None) -> None:
+                    required: list[str] | None = None,
+                    keys: dict[str, str] | None = None) -> None:
     """The golden table, its inbox, and the trigger between them.
 
     `columns` is the canonical shape -- column name to Postgres type -- that
     every system's flow maps into and out of. The golden table keeps the whole
     old row on update (`replica identity full`), because that is what
     SeaTunnel's Postgres CDC needs to carry it back out.
+
+    `keys` is for systems that do not share a key (#80): per system, the
+    column holding its own key. The golden key is then the hub's, and each of
+    those columns is unique -- one record per local key, one local key per
+    record and system.
     """
     clash = sorted(set(columns) & {*META, "id", "system", "row_kind",
                                    "source_ms", "landed_at", "fields"})
@@ -80,23 +87,31 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
     cx.execute(sql.SQL(
         "create trigger merge after insert on hub.{} for each row "
         "execute function hub.on_inbox({})").format(inbox, sql.Literal(name)))
-    cx.execute("insert into hub.entity (name, key, authority, required) "
-               "values (%s, %s, %s, %s) on conflict (name) do update set "
+    for column in (keys or {}).values():
+        cx.execute(sql.SQL("create unique index if not exists {} on hub.{} ({})").format(
+            sql.Identifier(f"{name}_{column}"), golden, sql.Identifier(column)))
+    cx.execute("insert into hub.entity (name, key, authority, required, keys) "
+               "values (%s, %s, %s, %s, %s) on conflict (name) do update set "
                "key = excluded.key, authority = excluded.authority, "
-               "required = excluded.required",
-               (name, key, authority, list(required or key)))
+               "required = excluded.required, keys = excluded.keys",
+               (name, key, authority, list(required or key),
+                None if keys is None else json.dumps(keys)))
 
 
 def register_system(cx: psycopg.Connection, entity: str, system: str,
-                    fields: list[str] | None = None) -> None:
+                    fields: list[str] | None = None,
+                    link_by: list[str] | None = None) -> None:
     """A system that receives the golden record, and so will echo it back.
 
     `fields` is what it receives, when that is only part of the record: a
     table of addresses beside a table of customers. None is all of it.
+    `link_by` is how its rows under a key the hub has not seen find their
+    record (#80).
     """
-    cx.execute("insert into hub.system (entity, system, fields) values (%s, %s, %s) "
-               "on conflict (entity, system) do update set fields = excluded.fields",
-               (entity, system, fields))
+    cx.execute("insert into hub.system (entity, system, fields, link_by) "
+               "values (%s, %s, %s, %s) on conflict (entity, system) do update "
+               "set fields = excluded.fields, link_by = excluded.link_by",
+               (entity, system, fields, link_by))
 
 
 def main() -> None:

@@ -1,5 +1,7 @@
 # The golden customer record both systems meet in (ADR 0021). The CRM's
 # values stand when both already hold the same customer at the first sync.
+# The two systems number their customers differently (#80): the record's key
+# is the hub's own, and each system's code is a column of it.
 apiVersion: v3.0.2
 kind: DataContract
 id: hub.customer
@@ -18,7 +20,9 @@ schema:
     physicalName: customer
     physicalType: table
     properties:
-      - {name: code, physicalType: int, primaryKey: true, required: true, description: "Customer number, shared by both systems."}
+      - {name: customer_id, physicalType: bigint, primaryKey: true, required: true, description: "The hub's own number for the customer, neither system's."}
+      - {name: crm_code, physicalType: int, description: "The CRM's account code for this customer."}
+      - {name: billing_code, physicalType: text, description: "Billing's customer code for this customer."}
       - {name: name, physicalType: text, required: true, description: "Name, whichever system set it last."}
       - {name: tax_id, physicalType: text, classification: pii, description: "Tax identifier."}
       - {name: active, physicalType: boolean, required: true, description: "Whether the customer is active."}
@@ -28,3 +32,4 @@ customProperties:
   - property: hub
     value:
       authority: crm.account
+      keys: {crm: crm_code, billing: billing_code}

@@ -40,6 +40,22 @@ A flow that carries all of what the hub record requires owns the record: its
 inserts create it, its deletes delete it. One that carries only part of it
 fills and empties that part (core/hub.sql).
 
+**Different codes, one record (#80).** When the systems do not share a key,
+the hub contract names the column holding each system's own
+(`hub: {keys: {crm: crm_code, billing: billing_code}}`), the golden record's
+key is the hub's, and the flow that owns the record says how a row under a
+code the hub has not seen finds it:
+
+    from: billing.customer                 from: hub.customer
+    to: hub.customer                       to: billing.customer
+    columns: {billing_code: CustomerCode,  columns: {CustomerCode: billing_code,
+              tax_id: TaxId, ...}                    TaxId: tax_id, ...}
+    linkBy: [tax_id]                       filledByTarget: [CustomerCode]
+
+The hub cannot make up a system's code, so a system that receives new records
+assigns its own (`filledByTarget`), and its insert coming back is what links
+it.
+
 What only flows have is a **pair**, the two directions between a system table
 and its hub:
 
@@ -71,6 +87,8 @@ class Flow:
     mapping: Mapping
     filled_by_target: frozenset[str] = field(default_factory=frozenset)
     match: dict = field(default_factory=dict)
+    # Hub columns that identify a record under a key the hub has not seen.
+    link_by: tuple[str, ...] = ()
 
 
 def parse(doc: dict) -> Flow:
@@ -80,7 +98,8 @@ def parse(doc: dict) -> Flow:
         mapping=Mapping(str(doc.get("from", "")), dict(doc.get("columns") or {}),
                         dict(doc.get("values") or {})),
         filled_by_target=frozenset(doc.get("filledByTarget") or []),
-        match=dict(doc.get("match") or {}))
+        match=dict(doc.get("match") or {}),
+        link_by=tuple(doc.get("linkBy") or ()))
 
 
 def load(directory: Path = FLOWS) -> list[Flow]:
@@ -94,6 +113,11 @@ def hub_of(contract: dict | None) -> dict | None:
         if prop.get("property") == "hub":
             return prop.get("value") or {}
     return None
+
+
+def keys_of(contract: dict | None) -> dict[str, str]:
+    """System to the hub column holding its own key, when they differ (#80)."""
+    return dict((hub_of(contract) or {}).get("keys") or {})
 
 
 def system_of(contract_id: str) -> str:
@@ -157,7 +181,7 @@ def _pair_problems(a: Flow, b: Flow, by_id: dict[str, dict]) -> list[str]:
 
 def _match_problems(flow: Flow, table: dict, hub: dict, into_hub: bool) -> list[str]:
     """The system table's key, less what the hub's key covers, must be pinned."""
-    hub_key = set(_keys(hub))
+    hub_key = set(_keys(hub)) | set(keys_of(hub).values())
     if into_hub:
         covered = {src for tgt, src in flow.mapping.columns.items() if tgt in hub_key}
     else:
@@ -185,10 +209,18 @@ def _hub_problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
             out.append(f"{cid}: authority {authority!r} is not a system with "
                        f"a flow into this hub, so the first sync has no "
                        f"system to take disputed values from")
-        required, key = _required(contract), set(_keys(contract))
+        keys = keys_of(contract)
+        # With keys of their own, the golden key is the hub's: nothing fills it.
+        required = _required(contract) - (set(_keys(contract)) if keys else set())
+        key = set(_keys(contract)) | set(keys.values())
+        out += [f"{cid}: keys names {c!r} for {s}, which is not a column of this "
+                f"hub, or is its own key" for s, c in sorted(keys.items())
+                if c not in _properties(contract) or c in _keys(contract)]
         by_system: dict[str, list[Flow]] = {}
         for f in into:
             by_system.setdefault(system_of(f.mapping.reference), []).append(f)
+        out += _crosswalk_problems(cid, keys, required, key, into,
+                                   [f for f in flows if f.mapping.reference == cid])
         for system, fs in sorted(by_system.items()):
             if not any(required <= set(f.mapping.columns) for f in fs):
                 out.append(f"{cid}: no flow from {system} carries everything the "
@@ -215,6 +247,48 @@ def _hub_problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
     return out
 
 
+def _crosswalk_problems(cid: str, keys: dict, required: set[str], key: set[str],
+                        into: list[Flow], back: list[Flow]) -> list[str]:
+    """Systems with codes of their own (#80): each fills its code, the record's
+    owner says how an unseen code finds its record, and a system that gets new
+    records assigns their codes itself."""
+    if not keys:
+        return [f"{f.id}: linkBy only matters when the systems keep keys of "
+                f"their own (hub keys), and {cid} names none" for f in into if f.link_by]
+    out: list[str] = []
+    for f in into:
+        alias = keys.get(system_of(f.mapping.reference))
+        if alias is None:
+            out.append(f"{f.id}: {cid} has no column for "
+                       f"{system_of(f.mapping.reference)}'s own key (hub keys)")
+        elif alias not in f.mapping.columns:
+            out.append(f"{f.id}: {system_of(f.mapping.reference)}'s key is not "
+                       f"mapped into {alias!r}, so a row cannot find its record")
+        if set(f.mapping.columns) & set(key) - set(keys.values()):
+            out.append(f"{f.id}: the key of {cid} is the hub's own when systems "
+                       f"keep keys of theirs; no flow fills it")
+        if not required <= set(f.mapping.columns):
+            continue
+        if not f.link_by:
+            out.append(f"{f.id}: a row under a code the hub has not seen needs "
+                       f"linkBy to find its record, or every unseen code is a "
+                       f"new record -- a duplicate of one it has under another")
+        loose = sorted(set(f.link_by) - (set(f.mapping.columns) - key))
+        if loose:
+            out.append(f"{f.id}: linkBy names {', '.join(loose)}, which this "
+                       f"flow does not carry as a field")
+    for f in back:
+        if not required <= set(f.mapping.columns.values()):
+            continue
+        made = sorted(t for t, src in f.mapping.columns.items()
+                      if src in keys.values() and t not in f.filled_by_target)
+        if made:
+            out.append(f"{f.id}: a record new to {f.target} has no {', '.join(made)} "
+                       f"yet, and the hub cannot make up {system_of(f.target)}'s "
+                       f"code; {f.target} must assign it (filledByTarget)")
+    return out
+
+
 def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
     """Every reason these flows would not hold, before anything moves."""
     out: list[str] = []
@@ -236,7 +310,9 @@ def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
             # each needs the key, and the record's owner is checked per system.
             filled: set[str] = set()
             out += column_problems(flow.id, here, flow.mapping, source, filled)
-            gaps = sorted(set(_keys(target)) - filled)
+            # With codes of their own, the flow fills its code instead
+            # (_crosswalk_problems).
+            gaps = [] if keys_of(target) else sorted(set(_keys(target)) - filled)
             if gaps:
                 out.append(f"{flow.id}: the hub key {', '.join(gaps)} is not "
                            f"filled, so a row cannot find its record")

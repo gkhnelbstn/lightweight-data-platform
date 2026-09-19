@@ -3,7 +3,9 @@
 -- names, types and codes. Both are seeded so the first sync has something to
 -- decide: three customers identical in both, one that disagrees, and one on
 -- each side only. The CRM keeps addresses in a table of their own, one row per
--- kind; billing keeps them as two columns of the customer (#79).
+-- kind; billing keeps them as two columns of the customer (#79). The two
+-- number their customers differently, and each numbers the customers it
+-- receives itself (#80): the hub links them by tax number.
 --
 --   sqlcmd -S localhost -U sa -P ... -C -i demo/integration/setup.sql
 SET NOCOUNT ON;
@@ -21,11 +23,13 @@ IF (SELECT is_cdc_enabled FROM sys.databases WHERE name = 'crm') = 1
     EXEC sys.sp_cdc_disable_db;
 IF OBJECT_ID('dbo.account_address') IS NOT NULL DROP TABLE dbo.account_address;
 IF OBJECT_ID('dbo.account') IS NOT NULL DROP TABLE dbo.account;
+IF OBJECT_ID('dbo.account_no') IS NOT NULL DROP SEQUENCE dbo.account_no;
 -- Its own batch: a batch is compiled against the tables as they are, and an
 -- INSERT naming a new column fails while the old table still exists.
 GO
+CREATE SEQUENCE dbo.account_no START WITH 100;
 CREATE TABLE dbo.account (
-    ACCOUNT_CODE int           NOT NULL PRIMARY KEY,
+    ACCOUNT_CODE int           NOT NULL PRIMARY KEY DEFAULT (NEXT VALUE FOR dbo.account_no),
     TITLE        nvarchar(100) NOT NULL,
     TAX_NO       varchar(11)   NULL,
     ACTIVE       char(1)       NOT NULL DEFAULT 'Y'
@@ -58,9 +62,12 @@ USE billing;
 IF (SELECT is_cdc_enabled FROM sys.databases WHERE name = 'billing') = 1
     EXEC sys.sp_cdc_disable_db;
 IF OBJECT_ID('dbo.customer') IS NOT NULL DROP TABLE dbo.customer;
+IF OBJECT_ID('dbo.customer_no') IS NOT NULL DROP SEQUENCE dbo.customer_no;
 GO
+CREATE SEQUENCE dbo.customer_no START WITH 100;
 CREATE TABLE dbo.customer (
-    CustomerCode int           NOT NULL PRIMARY KEY,
+    CustomerCode varchar(20)   NOT NULL PRIMARY KEY
+                               DEFAULT (CONCAT('120.01.', NEXT VALUE FOR dbo.customer_no)),
     Name         nvarchar(150) NOT NULL,
     TaxId        varchar(11)   NULL,
     IsActive     bit           NOT NULL DEFAULT 1,
@@ -69,11 +76,11 @@ CREATE TABLE dbo.customer (
     CreatedAt    datetime2     NOT NULL DEFAULT sysutcdatetime()
 );
 INSERT INTO dbo.customer (CustomerCode, Name, TaxId, IsActive, InvoiceCity, ShippingCity) VALUES
-    (1, N'Anadolu Gıda',   '1234567890', 1, N'İstanbul', N'Kocaeli'),
-    (2, N'Boğaz Lojistik', '2345678901', 1, N'İzmir',    NULL),
-    (3, N'Çınar Yapı',     '3456789012', 0, NULL,        NULL),
-    (4, N'Delta Limited',  '4567890123', 1, N'Ankara',   NULL),
-    (6, N'Fırat Enerji',   '6789012345', 1, N'Erzurum',  NULL);
+    ('120.01.014', N'Anadolu Gıda',   '1234567890', 1, N'İstanbul', N'Kocaeli'),
+    ('120.01.011', N'Boğaz Lojistik', '2345678901', 1, N'İzmir',    NULL),
+    ('120.01.015', N'Çınar Yapı',     '3456789012', 0, NULL,        NULL),
+    ('120.01.012', N'Delta Limited',  '4567890123', 1, N'Ankara',   NULL),
+    ('120.01.013', N'Fırat Enerji',   '6789012345', 1, N'Erzurum',  NULL);
 IF (SELECT is_cdc_enabled FROM sys.databases WHERE name = 'billing') = 0
     EXEC sys.sp_cdc_enable_db;
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'customer',

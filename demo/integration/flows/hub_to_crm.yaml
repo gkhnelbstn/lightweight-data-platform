@@ -1,6 +1,8 @@
 id: hub_to_crm
 from: hub.customer
 to: crm.account
-columns: {ACCOUNT_CODE: code, TITLE: name, TAX_NO: tax_id, ACTIVE: active}
+columns: {ACCOUNT_CODE: crm_code, TITLE: name, TAX_NO: tax_id, ACTIVE: active}
 values:
   ACTIVE: {true: Y, false: N}
+# The CRM numbers a customer it receives itself.
+filledByTarget: [ACCOUNT_CODE]
