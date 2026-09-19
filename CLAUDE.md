@@ -48,6 +48,17 @@ export DQ_DSN=postgresql://postgres:postgres@localhost:5432/dq     # contracts, 
 export DQ_HOST=dq.local                                            # ODDRN identity, keep stable
 ```
 
+## Releasing
+
+Everything reaches `main` by PR, squash-merged, and **the PR title is a
+Conventional Commit** (`feat:`, `fix:`, `docs:`, `ci:`...): with a squash
+merge the title is the commit release-please reads, and a title without a type
+releases nothing. `.github/workflows/release-please.yml` then opens a release
+PR (version bump, `CHANGELOG.md`); merging it tags the release and calls
+`release.yml`, which publishes the images and attaches the contracts. A
+GITHUB_TOKEN tag starts no workflow, which is why it is a call and not a tag
+trigger.
+
 ## Invariants — break these and the design stops making sense
 
 1. **The contract is the only source of truth.** Not only the checks: the

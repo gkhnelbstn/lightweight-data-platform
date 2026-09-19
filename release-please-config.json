@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "lightweight-data-platform",
+      "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
+      "changelog-sections": [
+        {"type": "feat", "section": "Features"},
+        {"type": "fix", "section": "Bug Fixes"},
+        {"type": "perf", "section": "Performance"},
+        {"type": "docs", "section": "Documentation"},
+        {"type": "revert", "section": "Reverts"},
+        {"type": "refactor", "section": "Refactoring", "hidden": true},
+        {"type": "test", "section": "Tests", "hidden": true},
+        {"type": "ci", "section": "CI", "hidden": true},
+        {"type": "chore", "section": "Chores", "hidden": true}
+      ]
+    }
+  }
+}

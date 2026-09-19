@@ -1,5 +1,7 @@
 name: release
 
+# Called by release-please.yml once it has tagged a release; a tag pushed by
+# hand still starts it too, and so does a manual run for an existing tag.
 on:
   push:
     tags: ["v*"]
@@ -8,6 +10,12 @@ on:
       tag:
         description: tag to release
         required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: tag to release
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -19,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -26,8 +36,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # From a call or a manual run the ref is main, not the tag: the input
+      # wins whenever there is one.
       - id: meta
-        run: echo "tag=${GITHUB_REF_NAME:-${{ inputs.tag }}}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: app
         uses: docker/build-push-action@v6
@@ -74,6 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       # The contracts are the artifact a consumer most likely wants without
@@ -81,10 +94,14 @@ jobs:
       - name: bundle the contracts
         run: |
           mkdir -p dist
-          tar -czf dist/contracts-${GITHUB_REF_NAME:-${{ inputs.tag }}}.tar.gz contracts/
+          tar -czf dist/contracts-${{ inputs.tag || github.ref_name }}.tar.gz contracts/
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          generate_release_notes: true
-          files: dist/*.tar.gz
+      # release-please has already written the release and its notes from the
+      # CHANGELOG; a tag pushed by hand has none yet, so one is made.
+      - name: attach the contracts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --generate-notes --verify-tag
+          gh release upload "$TAG" dist/*.tar.gz --clobber
