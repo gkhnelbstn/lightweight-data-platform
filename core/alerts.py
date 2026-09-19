@@ -36,6 +36,8 @@ import os
 import urllib.request
 from datetime import date
 
+from core.language import say
+
 ALERT_URL = os.getenv("DQ_ALERT_URL", "").strip()
 
 
@@ -85,12 +87,13 @@ def sync_problems(statuses: list[dict]) -> list[str]:
     for status in statuses or []:
         contract = status.get("contract", "?")
         if status.get("copying"):
-            out.append(f"{contract}: {', '.join(status['copying'])} stuck in "
-                       f"the initial copy -- nothing is replicating")
+            out.append(say("{contract}: {tables} stuck in the initial copy -- "
+                           "nothing is replicating", contract=contract,
+                           tables=", ".join(status["copying"])))
         elif status.get("streaming") is False:
-            out.append(f"{contract}: the apply worker is not running")
+            out.append(say("{contract}: the apply worker is not running", contract=contract))
         elif status.get("reachable") is False:
-            out.append(f"{contract}: the view's source is unreachable")
+            out.append(say("{contract}: the view's source is unreachable", contract=contract))
     return out
 
 
@@ -103,19 +106,23 @@ def compose(as_of: date, contracts: list[dict], breaches: list[dict],
     """
     lines = []
     for row in breaches:
-        why = (f"{row['errored']} checks could not run"
-               if row.get("errored") else f"score {row['score']:.4f} "
-               f"below {float(row['sla_min']):.2f}")
-        lines.append(f"SLA missed: {row['contract']} -- {why}")
+        why = (say("{n} checks could not run", n=row["errored"])
+               if row.get("errored") else
+               say("score {score} below {minimum}", score=f"{row['score']:.4f}",
+                   minimum=f"{float(row['sla_min']):.2f}"))
+        lines.append(say("SLA missed: {contract} -- {why}", contract=row["contract"], why=why))
     for contract_id, names in sorted(new_failures.items()):
         shown = ", ".join(names[:3])
-        more = f" (+{len(names) - 3} more)" if len(names) > 3 else ""
-        lines.append(f"Newly failing in {contract_id}: {shown}{more}")
+        if len(names) > 3:
+            shown += " " + say("(+{n} more)", n=len(names) - 3)
+        lines.append(say("Newly failing in {contract}: {checks}",
+                         contract=contract_id, checks=shown))
     lines.extend(sync)
     if not lines:
         return None
-    return f"*Contract quality {as_of}* -- {len(contracts)} contracts\n" + \
-        "\n".join(f"• {line}" for line in lines)
+    head = (f"*{say('Contract quality {as_of}', as_of=as_of)}* -- "
+            f"{say('{n} contracts', n=len(contracts))}")
+    return head + "\n" + "\n".join(f"• {line}" for line in lines)
 
 
 def send(text: str, url: str | None = None) -> bool:

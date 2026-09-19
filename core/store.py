@@ -160,6 +160,13 @@ create table if not exists odd_links (
   link_id integer not null,
   primary key (contract_id, name)
 );
+-- `name` holds what a link is, not what it says: the words follow
+-- LDP_LANGUAGE (issue #44), and keying by them would add a second set of
+-- links on a language change. Rows written before that held the Turkish words.
+update odd_links set name = case name when 'Kontroller' then 'checks'
+                                      when 'Veri kalitesi (kontrat)' then 'contract'
+                                      when 'Senkron kurali' then 'sync' end
+ where name in ('Kontroller', 'Veri kalitesi (kontrat)', 'Senkron kurali');
 
 create table if not exists contract_scores (
   run_at date not null,

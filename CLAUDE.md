@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 377 tests; the ones that need a database skip without one
+pytest -q                                                  # 379 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -182,7 +182,10 @@ trigger.
   `tests/test_panel_i18n.py` exists. Contract text is never translated:
   the rule form writes English descriptions into `*.odcs.yaml` (issue #44).
   A dynamic key (`t(c.dimension)`) is outside that test; add its entry to
-  `deploy/odd-platform-ui/tr.json` by hand.
+  `deploy/odd-platform-ui/tr.json` by hand. Text the **server** writes once for
+  everyone -- ODD link names, the alert message -- follows `LDP_LANGUAGE`
+  (`core/language.py`) instead, since no viewer's picker can choose it; so
+  `odd_links` keys a link by what it is (`checks`), never by its words.
 * ODD reports an existing collector's token **masked**, so it cannot be read
   back. `odd-bootstrap.sh` reuses the token from the config it wrote last time
   and rotates only when there is no local copy — creating a collector whose
