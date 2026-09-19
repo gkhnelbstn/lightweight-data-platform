@@ -268,6 +268,9 @@ def _crosswalk_problems(cid: str, keys: dict, required: set[str], key: set[str],
             out.append(f"{f.id}: the key of {cid} is the hub's own when systems "
                        f"keep keys of theirs; no flow fills it")
         if not required <= set(f.mapping.columns):
+            if f.link_by:
+                out.append(f"{f.id}: linkBy is never used here -- a flow carrying "
+                           f"part of a record waits for the one that owns it")
             continue
         if not f.link_by:
             out.append(f"{f.id}: a row under a code the hub has not seen needs "

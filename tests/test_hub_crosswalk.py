@@ -132,6 +132,9 @@ def test_a_person_decides_what_the_rule_cannot(hub):
     # A different customer after all: a record of its own.
     hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
     assert records(hub) == [(1, None, "Acme", None), (2, None, "Acme branch", None)]
+    # New to everyone else, and the CRM already has it.
+    assert hub.execute("select _changed, _skip from hub.customer where crm_code = 2"
+                       ).fetchone() == ("*", "crm.account")
     # Two records now share the tax identifier, so billing's cannot pick one.
     send(hub, "billing.customer", "INSERT", 110, **BILLING, city=None)
     assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]

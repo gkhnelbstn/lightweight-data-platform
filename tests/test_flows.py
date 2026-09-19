@@ -343,6 +343,13 @@ def test_every_system_has_a_column_for_its_code():
                for p in got), got
 
 
+def test_a_rule_on_part_of_a_record_is_reported():
+    part = _with(XCRM_IN, id="crm_tax_to_hub", columns={"crm_code": "ACCOUNT_CODE",
+                                                       "tax_id": "TAX_NO"})
+    got = _xcheck(*XALL, part)
+    assert any("crm_tax_to_hub: linkBy is never used here" in p for p in got), got
+
+
 def test_a_rule_without_codes_to_link_is_reported():
     got = _check(_with(CRM_IN, linkBy=["tax_id"]), CRM_OUT, BILLING_IN, BILLING_OUT)
     assert any("linkBy only matters" in p for p in got), got
