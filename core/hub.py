@@ -40,7 +40,7 @@ def init(cx: psycopg.Connection) -> None:
 
 
 def register_entity(cx: psycopg.Connection, name: str, key: list[str],
-                    columns: dict[str, str]) -> None:
+                    columns: dict[str, str], authority: str) -> None:
     """The golden table, its inbox, and the trigger between them.
 
     `columns` is the canonical shape -- column name to Postgres type -- that
@@ -72,8 +72,9 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
     cx.execute(sql.SQL(
         "create trigger merge after insert on hub.{} for each row "
         "execute function hub.on_inbox({})").format(inbox, sql.Literal(name)))
-    cx.execute("insert into hub.entity values (%s, %s) on conflict (name) "
-               "do update set key = excluded.key", (name, key))
+    cx.execute("insert into hub.entity values (%s, %s, %s) on conflict (name) "
+               "do update set key = excluded.key, authority = excluded.authority",
+               (name, key, authority))
 
 
 def register_system(cx: psycopg.Connection, entity: str, system: str) -> None:

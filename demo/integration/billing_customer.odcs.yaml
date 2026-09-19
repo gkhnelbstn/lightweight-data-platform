@@ -1,0 +1,24 @@
+# The billing package's customer table, as billing holds it.
+apiVersion: v3.0.2
+kind: DataContract
+id: billing.customer
+name: Billing customers
+version: 1.0.0
+status: active
+servers:
+  - server: billing
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: billing
+    schema: dbo
+schema:
+  - name: customer
+    physicalName: customer
+    physicalType: table
+    properties:
+      - {name: CustomerCode, physicalType: int, primaryKey: true, required: true, description: "Customer number."}
+      - {name: Name, physicalType: nvarchar, required: true, description: "Customer name."}
+      - {name: TaxId, physicalType: varchar, classification: pii, description: "Tax identifier."}
+      - {name: IsActive, physicalType: bit, required: true, description: "Active flag."}
+      - {name: CreatedAt, physicalType: datetime2, required: true, description: "Set by billing."}

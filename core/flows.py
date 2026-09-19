@@ -1,44 +1,45 @@
-"""Integration flows: rows moved between two systems neither of which is ours.
+"""Integration flows: rows moved between systems neither of which is ours.
 
-Two systems neither of which is ours -- an ERP and an accounting package, a
-CRM and a billing system -- each have a table contract that describes *their*
-table. The integration between them is ours, and it is its own file. It is
-not a line in either system's contract, which should not have to know that
-someone copies its rows elsewhere. One file per direction, under
-`contracts/flows/`. That directory is outside the glob every contract reader
-uses, so a flow is never windowed, scored or catalogued as if it were a
-table (ADR 0019):
+Two systems -- an ERP and an accounting package, a CRM and a billing system --
+each have a table contract that describes *their* table. The integration is
+ours, and it is its own file, one per direction, under `contracts/flows/`
+(ADR 0019). That directory is outside the glob every contract reader uses, so
+a flow is never windowed, scored or catalogued as if it were a table.
 
-    # contracts/flows/crm_to_billing.yaml
-    id: crm_to_billing
-    from: crm.account                 # the source table's contract
-    to: billing.customer              # the target table's contract
-    columns: {CustomerCode: ACCOUNT_CODE, Name: TITLE, IsActive: ACTIVE}  # target: source
-    values:                           # target column: {arrives: lands}
-      IsActive: {Y: true, N: false}
-    winsOnConflict: [CustomerCode, Name]  # target columns where this side wins
-    filledByTarget: [CreatedAt]       # the target's own default fills these
+Systems never write to each other. Both sides of a two-way integration meet in
+a **hub**: a contract with a `hub` custom property, whose table is the golden
+record (ADR 0021). Each system has a flow into the hub and a flow back out:
+
+    # contracts/flows/crm_to_hub.yaml       # contracts/flows/hub_to_crm.yaml
+    id: crm_to_hub                          id: hub_to_crm
+    from: crm.account                       from: hub.customer
+    to: hub.customer                        to: crm.account
+    columns: {code: ACCOUNT_CODE,           columns: {ACCOUNT_CODE: code,
+              active: ACTIVE}                         ACTIVE: active}
+    values: {active: {Y: true, N: false}}   values: {ACTIVE: {true: Y, false: N}}
+                                            filledByTarget: [CREATED_AT]
+
+The hub decides conflicts by commit time, and the hub contract names the
+system whose values win the *first* sync, when both already hold the same
+record (`hub: {authority: crm.account}`).
 
 A column map breaks the same ways here as in a `derivedFrom` entry, so the
-one-way refusals are core/mapping.py's, shared. What only a flow has is a
-**pair**: two flows between the same tables in opposite directions, each able
-to pass alone while the pair corrupts data.
+one-way refusals are core/mapping.py's, shared. What only flows have is a
+**pair**, the two directions between a system and its hub:
 
-* **The maps must be inverses.** `Name <- TITLE` needs `TITLE <- Name` the other
-  way. Otherwise an edit is never propagated and is overwritten by the next
-  change from the other side, or it comes back into a different column.
-* **A value map has to survive the round trip too.** It must be one-to-one,
-  and the way back must be its inverse. `'Y'` and `'T'` both becoming `1`
-  cannot come back as both, and a side that copies instead of translating
-  writes `1` into a `char(1)` that meant `'Y'`.
-* **Every column of a pair has exactly one winner.** Both sides edit the same
-  customer, so ADR 0008's escape hatch, row filters proven disjoint, is
-  false by construction. `winsOnConflict` does not restrict who may write. It
-  decides whose value stands when both changed the same column since the last
-  sync. With no winner that is settled by timing; with two, the flows
-  contradict each other.
+* **The maps must be inverses.** `code <- ACCOUNT_CODE` needs
+  `ACCOUNT_CODE <- code` back. Otherwise an edit is never propagated, or it
+  comes back into a different column.
+* **A value map has to survive the round trip.** It must be one-to-one, and
+  the way back must be its inverse: `'Y'` and `'T'` both becoming `true`
+  cannot both come back.
+* **Two systems may not pair with each other directly.** Nothing would
+  remember what was sent, so an echo could not be told from an edit (ADR
+  0021). A pair has a hub on one side.
 
-Nothing executes a flow yet. See issue #53.
+Several systems filling the same hub column is the point of a hub, so it is
+not "filled twice". Each flow into a hub has to fill the hub's required
+columns by itself, because any one system can create a record there.
 """
 from __future__ import annotations
 
@@ -58,7 +59,6 @@ class Flow:
     id: str
     target: str
     mapping: Mapping
-    wins: frozenset[str] = field(default_factory=frozenset)
     filled_by_target: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -68,13 +68,20 @@ def parse(doc: dict) -> Flow:
         target=str(doc.get("to", "")),
         mapping=Mapping(str(doc.get("from", "")), dict(doc.get("columns") or {}),
                         dict(doc.get("values") or {})),
-        wins=frozenset(doc.get("winsOnConflict") or []),
         filled_by_target=frozenset(doc.get("filledByTarget") or []))
 
 
 def load(directory: Path = FLOWS) -> list[Flow]:
     return [parse(yaml.safe_load(p.read_text(encoding="utf-8")))
             for p in sorted(directory.glob("*.yaml"))]
+
+
+def hub_of(contract: dict | None) -> dict | None:
+    """The `hub` custom property, when this contract is a hub's golden record."""
+    for prop in (contract or {}).get("customProperties") or []:
+        if prop.get("property") == "hub":
+            return prop.get("value") or {}
+    return None
 
 
 def _value_problems(a: Flow, b: Flow, mine: str, theirs: str) -> list[str]:
@@ -98,7 +105,13 @@ def _value_problems(a: Flow, b: Flow, mine: str, theirs: str) -> list[str]:
     return out
 
 
-def _pair_problems(a: Flow, b: Flow) -> list[str]:
+def _pair_problems(a: Flow, b: Flow, by_id: dict[str, dict]) -> list[str]:
+    if not (hub_of(by_id.get(a.target)) or hub_of(by_id.get(b.target))):
+        # Reported by one side only, or `--check` counts it twice.
+        return [] if a.id > b.id else [
+            f"{a.id}: {a.mapping.reference} and {a.target} write to each "
+            f"other directly; two-way integration goes through a hub, or an "
+            f"echo cannot be told from an edit (ADR 0021)"]
     out: list[str] = []
     for mine, theirs in a.mapping.columns.items():
         returned = b.mapping.columns.get(theirs)
@@ -107,26 +120,27 @@ def _pair_problems(a: Flow, b: Flow) -> list[str]:
                        f"{b.id} does not map it back, so an edit made at "
                        f"{a.target} is overwritten by the next change at "
                        f"{a.mapping.reference}")
-            continue
-        if returned != mine:
+        elif returned != mine:
             out.append(f"{a.id}: {mine!r} is filled from {theirs!r}, but "
                        f"{b.id} fills {theirs!r} from {returned!r}; the round "
                        f"trip moves the value into another column")
+        elif a.id < b.id:
+            out += _value_problems(a, b, mine, theirs)
+    return out
+
+
+def _hub_problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
+    out: list[str] = []
+    for cid, contract in by_id.items():
+        hub = hub_of(contract)
+        if hub is None:
             continue
-        # The rest is a fact about the pair, not about one direction, so one
-        # side reports it -- or `--check` counts one problem twice.
-        if a.id > b.id:
-            continue
-        out += _value_problems(a, b, mine, theirs)
-        winners = (mine in a.wins) + (theirs in b.wins)
-        if winners == 0:
-            out.append(f"{a.id}: {mine!r} <-> {theirs!r} is edited on both "
-                       f"sides and neither flow wins it, so a conflict is "
-                       f"settled by timing")
-        elif winners == 2:
-            out.append(f"{a.id}: {mine!r} <-> {theirs!r} is won by both "
-                       f"{a.id} and {b.id}; the two flows contradict each "
-                       f"other")
+        sources = {f.mapping.reference for f in flows if f.target == cid}
+        authority = hub.get("authority")
+        if sources and authority not in sources:
+            out.append(f"{cid}: authority {authority!r} is not a system with "
+                       f"a flow into this hub, so the first sync has no "
+                       f"system to take disputed values from")
     return out
 
 
@@ -142,10 +156,18 @@ def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
             out += [f"{flow.id}: names {ref!r}, which is not a contract this "
                     f"platform loads" for ref in missing]
             continue
-        here = _properties(by_id[flow.target])
-        out += column_problems(flow.id, here, flow.mapping,
-                               by_id[flow.mapping.reference],
-                               covered.setdefault(flow.target, set()))
+        target = by_id[flow.target]
+        here = _properties(target)
+        if hub_of(target) is not None:
+            # Every system fills the hub; each must be able to create a record.
+            filled: set[str] = set()
+            out += column_problems(flow.id, here, flow.mapping,
+                                   by_id[flow.mapping.reference], filled)
+            out += gap_problems(flow.id, here, filled, set(flow.filled_by_target))
+        else:
+            out += column_problems(flow.id, here, flow.mapping,
+                                   by_id[flow.mapping.reference],
+                                   covered.setdefault(flow.target, set()))
 
     for target, filled in covered.items():
         into = [f for f in flows if f.target == target]
@@ -155,5 +177,5 @@ def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
     for a in flows:
         for b in flows:
             if (a.mapping.reference, a.target) == (b.target, b.mapping.reference):
-                out += _pair_problems(a, b)
-    return out
+                out += _pair_problems(a, b, by_id)
+    return out + _hub_problems(flows, by_id)

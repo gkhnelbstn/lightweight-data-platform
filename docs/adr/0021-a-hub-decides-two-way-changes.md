@@ -76,13 +76,72 @@ after every edit removes the record everywhere. One committed before an edit
 it did not see is refused and logged, and the record is sent back to the
 system that deleted it.
 
+A deleted record leaves a **tombstone** (`hub.tombstone`) with the delete's
+commit time. Without it, a change for a record the hub no longer has looks
+like a new record. The live demo found exactly that: a winner's delivery came
+back after the record was deleted and recreated it. So for a record the hub
+does not have, the merge first consumes awaited values; if nothing genuine is
+left, it stops there. A genuine edit then meets the delete by commit time.
+An edit newer than the delete brings the record back, and an older one loses
+to it. Both are logged.
+
+**The first sync** is not an edit. Both systems already hold the same record,
+each arrives as an `INSERT`, and commit times say nothing about which value is
+right. So an `INSERT` for a record the hub already has goes to the hub
+contract's **authority** (`hub: {authority: crm.account}`, decided in
+conversation). Its values stand, and every difference is logged with reason
+`seed`. The same rule covers two systems creating one key.
+
+### The hub is a contract, and the jobs are compiled from flows
+
+* The golden record's shape is an ODCS contract whose `hub` custom property
+  names the authority (`demo/integration/hub_customer.odcs.yaml`). Each system
+  has a flow in and a flow out (ADR 0019, core/flows.py). Two systems can no
+  longer pair directly: `core/flows.py` refuses it, because only a hub can
+  tell an echo from an edit. `winsOnConflict` is gone, since the commit time
+  decides.
+* `core/flow_jobs.py` compiles each flow into a SeaTunnel job:
+  * in: CDC, `Metadata` (`SourceTimestamp`) and `RowKindExtractor`, the map as
+    SQL, then a plain insert into the inbox;
+  * out: the golden record's CDC, before images dropped, the reverse map, and
+    the sink's generated `MERGE` into the system.
+* `core/flow_apply.py` creates the hub, registers the entity and the systems
+  that have both directions, and submits the jobs through SeaTunnel's REST
+  API. Credentials stay placeholders until that request.
+
+### Measured, on the demo
+
+Two SQL Server databases, `crm` and `billing`, with different names, types and
+codes. `demo/integration/verify.py` repeats the run on demand.
+
+| | |
+|---|---|
+| first sync, 5 + 5 customers, 3 identical, 1 disputed, 1 on each side only | 6 in both; the disputed one took the CRM's value, logged `seed` |
+| an edit, either direction, through the hub | 6–9 s |
+| the same field edited on both sides 1 s apart | both converge on the later commit; the loser is in `hub.conflict` |
+| insert, delete | 5–10 s |
+| idle after all of it | inbox unchanged for 30 s: no echo loop |
+| SeaTunnel with the four jobs | 669 MiB |
+
+### Known limits
+
+* A value awaited from a system can be superseded before the job that would
+  deliver it starts. At the first sync, the out-flow's snapshot reads the
+  final golden record, so the intermediate value is never sent. The awaited
+  value is then never consumed. It is harmless unless that system edits the
+  field to exactly that value within the hour it lives.
+* A value outside a value map lands as NULL (ADR 0020). The hub contract's
+  checks have to catch it.
+* Postgres *targets* are not compiled yet. They need the guarded upsert and a
+  delete branch of ADR 0020, and the compiler refuses them rather than emit
+  a looping job.
+* **Many to one is not built yet** (#53): several tables into one record, a
+  crosswalk for differing codes, and aggregation, which is one-way only.
+
 ### What this record does not decide
 
 * **Where the hub runs.** It is a Postgres database like `erp` and `dq`
   (`python core/hub.py --init`). One per deployment is assumed.
-* **The flow compiler.** Something generates each system's two SeaTunnel
-  jobs from `contracts/flows/` (ADR 0019): into the inbox, and from the golden
-  record back to the system with a guarded write. That is the next step.
 * **Losing systems whose writes are rejected by their own rules.** If the hub
   sends a value the target's constraints refuse, the SeaTunnel job fails.
   Surfacing that is the compiler's and the panel's job.

@@ -1,0 +1,28 @@
+# The golden customer record both systems meet in (ADR 0021). The CRM's
+# values stand when both already hold the same customer at the first sync.
+apiVersion: v3.0.2
+kind: DataContract
+id: hub.customer
+name: Customer (hub)
+version: 1.0.0
+status: active
+servers:
+  - server: hub
+    type: postgres
+    host: db
+    port: 5432
+    database: hub
+    schema: hub
+schema:
+  - name: customer
+    physicalName: customer
+    physicalType: table
+    properties:
+      - {name: code, physicalType: int, primaryKey: true, required: true, description: "Customer number, shared by both systems."}
+      - {name: name, physicalType: text, required: true, description: "Name, whichever system set it last."}
+      - {name: tax_id, physicalType: text, classification: pii, description: "Tax identifier."}
+      - {name: active, physicalType: boolean, required: true, description: "Whether the customer is active."}
+customProperties:
+  - property: hub
+    value:
+      authority: crm.account

@@ -1,0 +1,5 @@
+id: hub_to_billing
+from: hub.customer
+to: billing.customer
+columns: {CustomerCode: code, Name: name, TaxId: tax_id, IsActive: active}
+filledByTarget: [CreatedAt]

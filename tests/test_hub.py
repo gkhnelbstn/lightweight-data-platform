@@ -36,7 +36,7 @@ def hub():
     ensure_database(HOST, PORT, SCRATCH)
     cx = psycopg.connect(admin_dsn(HOST, PORT, SCRATCH), autocommit=True)
     h.init(cx)
-    h.register_entity(cx, "customer", ["code"], COLUMNS)
+    h.register_entity(cx, "customer", ["code"], COLUMNS, authority="crm")
     for system in ("crm", "billing"):
         h.register_system(cx, "customer", system)
     try:
@@ -180,6 +180,65 @@ def test_a_delete_older_than_an_edit_is_refused_and_undone(hub):
     assert sorted(expected(hub, "crm")) == [("active", True), ("name", "Kept")]
 
 
+def test_a_delivery_echoing_back_after_a_delete_does_not_resurrect_it(hub):
+    """Found live: billing won a conflict, then deleted the record; the
+    winner's delivery to crm came back after the delete and recreated it."""
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    update(hub, "billing", 200, ACME, {**ACME, "name": "Won"})
+    send(hub, "billing", "DELETE", 300, **{**ACME, "name": "Won"})
+    update(hub, "crm", 310, ACME, {**ACME, "name": "Won"})      # the delivery, late
+    assert golden(hub) is None
+    assert conflicts(hub) == []
+
+
+def test_an_edit_older_than_a_delete_loses_to_it(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    send(hub, "billing", "DELETE", 300, **ACME)
+    update(hub, "crm", 250, ACME, {**ACME, "name": "Edited before the delete"})
+    assert golden(hub) is None
+    assert conflicts(hub)[-1][:2] == ("*", None)
+
+
+def test_an_edit_newer_than_a_delete_brings_the_record_back(hub):
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    send(hub, "billing", "DELETE", 300, **ACME)
+    update(hub, "crm", 350, ACME, {**ACME, "name": "Edited after the delete"})
+    assert golden(hub)[0] == "Edited after the delete"
+    field, kept, kept_by, lost, lost_by = conflicts(hub)[-1]
+    assert (field, kept["name"], kept_by, lost, lost_by) == (
+        "*", "Edited after the delete", "crm", None, "billing")
+    assert ("name", "Edited after the delete") in expected(hub, "billing")
+
+
+def test_first_sync_the_authority_wins_when_it_arrives_second(hub):
+    """billing's snapshot lands first; crm's, the authority, disagrees."""
+    send(hub, "billing", "INSERT", 900, **{**ACME, "name": "Acme (billing)"})
+    send(hub, "crm", "INSERT", 800, **ACME)
+    assert golden(hub)[0] == "Acme"
+    assert conflicts(hub) == [("name", "Acme", "crm", "Acme (billing)", "billing")]
+    assert hub.execute("select reason from hub.conflict").fetchone()[0] == "seed"
+    assert expected(hub, "billing") == [("name", "Acme")]
+
+
+def test_first_sync_the_authority_wins_when_it_arrives_first(hub):
+    send(hub, "crm", "INSERT", 800, **ACME)
+    send(hub, "billing", "INSERT", 900, **{**ACME, "name": "Acme (billing)"})
+    assert golden(hub)[0] == "Acme"
+    assert conflicts(hub) == [("name", "Acme", "crm", "Acme (billing)", "billing")]
+    # billing is corrected, and the correction is awaited once.
+    assert expected(hub, "billing") == [("name", "Acme")]
+
+
+def test_first_sync_of_identical_records_is_silent(hub):
+    send(hub, "billing", "INSERT", 900, **ACME)
+    send(hub, "crm", "INSERT", 800, **ACME)
+    assert conflicts(hub) == []
+    assert expected(hub, "crm") == []
+
+
 def test_an_unknown_entity_is_refused(hub):
     with pytest.raises(psycopg.errors.RaiseException, match="not a registered entity"):
         hub.execute("select hub.merge('supplier', 'crm', 'INSERT', 1, %s)",
@@ -189,4 +248,4 @@ def test_an_unknown_entity_is_refused(hub):
 def test_reserved_columns_are_refused():
     from core import hub as h
     with pytest.raises(ValueError, match="reserved"):
-        h.register_entity(None, "x", ["id"], {"id": "int", "_rev": "int"})
+        h.register_entity(None, "x", ["id"], {"id": "int", "_rev": "int"}, "a")

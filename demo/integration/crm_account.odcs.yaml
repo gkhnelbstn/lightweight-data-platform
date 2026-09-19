@@ -1,0 +1,24 @@
+# The CRM's customer table, as the CRM holds it. It knows nothing about the
+# integration: that is in flows/ (ADR 0019).
+apiVersion: v3.0.2
+kind: DataContract
+id: crm.account
+name: CRM accounts
+version: 1.0.0
+status: active
+servers:
+  - server: crm
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: crm
+    schema: dbo
+schema:
+  - name: account
+    physicalName: account
+    physicalType: table
+    properties:
+      - {name: ACCOUNT_CODE, physicalType: int, primaryKey: true, required: true, description: "Customer number."}
+      - {name: TITLE, physicalType: nvarchar, required: true, description: "Registered name."}
+      - {name: TAX_NO, physicalType: varchar, classification: pii, description: "Tax identifier."}
+      - {name: ACTIVE, physicalType: char, required: true, description: "'Y' or 'N'."}

@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 300 tests; the ones that need a database skip without one
+pytest -q                                                  # 316 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -35,6 +35,9 @@ python core/sync.py --check                                # validate the sync r
 python core/sync.py --apply                                # publication + subscription
 python core/sync_mssql.py --interval 30                    # SQL Server CDC -> Postgres
 python core/hub.py --init                                  # the two-way integration hub
+python core/flow_jobs.py --check --contracts demo/integration  # refuse bad flows
+python core/flow_jobs.py --apply --contracts demo/integration  # hub + SeaTunnel jobs (needs --profile flows)
+python demo/integration/verify.py                          # drive the two-way demo and assert it
 ```
 
 Both databases come from the environment; nothing hardcodes a DSN:
@@ -277,6 +280,15 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   and only then a conflict, where the later commit wins and `hub.conflict`
   keeps the loser. Its tests need a real Postgres (`DWH_PORT=5442` locally)
   and CI fails if they skip.
+* **The first sync is not an edit.** An `INSERT` for a record the hub already
+  has goes to the hub contract's `authority`, logged as `seed`. A deleted
+  record leaves a `hub.tombstone`; a change for a record the hub does not have
+  is checked for being our own echo *before* it may create anything -- a late
+  delivery once resurrected a deleted customer. Two systems may not pair
+  directly: `core/flows.py` refuses it.
+* `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
+  needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
+  generated upsert there loops for ever -- so it raises instead.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why
