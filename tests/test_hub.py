@@ -426,3 +426,23 @@ def test_an_hour_old_awaited_value_goes_whatever_record_it_is_for(hub):
     send(hub, "billing", "INSERT", 100, **ACME)
     assert hub.execute("select count(*) from hub.expect where key = '{\"code\": 99}'"
                        ).fetchone()[0] == 0
+
+
+# --- what became of each row, for the tab's history ------------------------
+
+def outcomes(cx, system):
+    return [r[0] for r in cx.execute(
+        "select outcome from hub.customer_inbox where system = %s and row_kind <> "
+        "'UPDATE_BEFORE' order by id", (system,)).fetchall()]
+
+
+def test_each_row_says_what_the_hub_did_with_it(hub):
+    """A history line reads "our own write coming back" or "lost to a later
+    edit", not only "billing updated the name"."""
+    send(hub, "crm", "INSERT", 100, **ACME)                               # created
+    send(hub, "billing", "INSERT", 105, **ACME)                           # our delivery, back
+    update(hub, "crm", 200, ACME, {**ACME, "name": "Acme Ltd"})           # applied
+    update(hub, "billing", 150, ACME, {**ACME, "name": "Acme stale"})     # lost
+    update(hub, "billing", 210, ACME, {**ACME, "name": "Acme Ltd"})       # echo
+    assert outcomes(hub, "crm") == ["created", "applied"]
+    assert outcomes(hub, "billing") == ["echo", "lost", "echo"]

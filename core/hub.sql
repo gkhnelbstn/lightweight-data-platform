@@ -316,9 +316,12 @@ begin
     return p_record;
 end $$;
 
+-- It said nothing before; it says what became of the row now (a changed
+-- return type is a new function, so the old one goes first).
+drop function if exists hub.merge(text, text, text, bigint, jsonb);
 create or replace function hub.merge(p_entity text, p_system text, p_kind text,
                                      p_ms bigint, p_row jsonb)
-returns void language plpgsql as $$
+returns text language plpgsql as $$
 declare
     keycols text[];
     req     text[];
@@ -355,6 +358,9 @@ declare
     skip    text[];
     linked  boolean := false;
     fresh   boolean := false;
+    -- What became of this row, for the Integration tab's history.
+    echoed  boolean := false;
+    outcome text;
     -- Fields whose value the flow's value map did not know (#84).
     unmapped text[] := array(select jsonb_array_elements_text(coalesce(p_row -> '_unmapped', '[]')));
 begin
@@ -378,7 +384,7 @@ begin
     if kind = 'UPDATE_BEFORE' then
         insert into hub.pending_before values (p_system, p_entity, k, p_row)
             on conflict (system, entity, key) do update set row = excluded.row;
-        return;
+        return 'before';
     elsif kind = 'UPDATE_AFTER' then
         delete from hub.pending_before p
          where p.system = p_system and p.entity = p_entity and p.key = k
@@ -412,7 +418,7 @@ begin
                                    then jsonb_build_object('_unmapped', to_jsonb(unmapped))
                                    else '{}' end) r;
         if k is null then
-            return;
+            return 'held';
         end if;
         perform pg_advisory_xact_lock(hashtextextended(p_entity || k::text, 0));
         after := after || k;
@@ -435,10 +441,13 @@ begin
 
     -- A delete: the latest commit decides, against the newest field.
     if after is null then
-        if hub.consume(p_system, p_entity, k, '*', null) or g is null then
-            return;
+        if hub.consume(p_system, p_entity, k, '*', null) then
+            return 'echo';
+        elsif g is null then
+            return 'unchanged';
         end if;
         gt := (select coalesce(max(v::bigint), 0) from jsonb_each_text(g -> '_at') t(n, v));
+        outcome := case when p_ms >= gt then 'deleted' else 'lost' end;
         if p_ms >= gt then
             -- Name the deleter first, so the delete's before image carries it
             -- and the delivery skips the system that already did it.
@@ -470,7 +479,7 @@ begin
               where not e.key = any(skip)
                 and (s.fields is null or e.key = any(s.fields));
         end if;
-        return;
+        return outcome;
     end if;
 
     -- A record the hub does not have. First, is it our own write coming back?
@@ -479,7 +488,7 @@ begin
         -- Part of a record emptying for a record the hub no longer has: there
         -- is nothing left to empty.
         if p_kind = 'DELETE' then
-            return;
+            return 'unchanged';
         end if;
         for f, a in select e.key, e.value from jsonb_each(after) e loop
             continue when f = any(skip);
@@ -488,7 +497,7 @@ begin
             genuine := true;
         end loop;
         if not genuine then
-            return;
+            return 'echo';
         end if;
         -- Then, was it deleted? The later commit wins against the delete too.
         select t.deleted_ms, t.deleted_by into tdel, tby
@@ -496,7 +505,7 @@ begin
         if tdel is not null and p_ms <= tdel then
             insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms)
             values (p_entity, k, '*', null, tby, tdel, after, p_system, p_ms);
-            return;
+            return 'lost';
         end if;
         if tdel is not null then
             if kind = 'UPDATE_AFTER' then
@@ -523,13 +532,16 @@ begin
         if fresh then
             perform hub.replay(p_entity, p_system, jsonb_build_object(ac, after -> ac));
         end if;
-        return;
+        return 'created';
     end if;
 
     for f, a in select e.key, e.value from jsonb_each(after) e loop
         continue when f = any(skip);
         -- Our own write, on its way back.
-        continue when hub.consume(p_system, p_entity, k, f, a);
+        if hub.consume(p_system, p_entity, k, f, a) then
+            echoed := true;
+            continue;
+        end if;
         b := before -> f;
         -- A value this system already had -- its before image, or nothing at
         -- all for a new row -- can never come back as a change: delivering it
@@ -651,6 +663,10 @@ begin
     if fresh then
         perform hub.replay(p_entity, p_system, jsonb_build_object(ac, after -> ac));
     end if;
+    return case when changed <> '{}' then 'applied'
+                when cardinality(lost) > 0 then 'lost'
+                when echoed then 'echo'
+                else 'unchanged' end;
 end $$;
 
 -- `fields` is the flow's own list, comma-separated. A flow carrying part of a
@@ -659,7 +675,7 @@ end $$;
 create or replace function hub.on_inbox() returns trigger language plpgsql as $$
 declare
     r jsonb := to_jsonb(new) - 'id' - 'system' - 'row_kind' - 'source_ms'
-                             - 'landed_at' - 'fields' - 'unmapped';
+                             - 'landed_at' - 'fields' - 'unmapped' - 'outcome';
 begin
     if new.fields is not null then
         r := (select jsonb_object_agg(f, r -> f)
@@ -670,6 +686,9 @@ begin
         r := r || jsonb_build_object('_unmapped', to_jsonb(
             string_to_array(trim(trailing ',' from new.unmapped), ',')));
     end if;
-    perform hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r);
+    -- What the hub did with it, kept beside it: a history line reads "an echo
+    -- of our own write" or "lost to a later edit", not only "billing updated".
+    execute format('update hub.%I set outcome = $1 where id = $2', tg_table_name)
+        using hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r), new.id;
     return null;
 end $$;

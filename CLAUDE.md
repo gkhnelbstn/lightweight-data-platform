@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 381 tests; the ones that need a database skip without one
+pytest -q                                                  # 383 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -182,7 +182,10 @@ which is the default branch.
   (`deploy/odd-platform-integration-tab.mjs`, four anchors in `ToolbarTabs.tsx`
   and `App.tsx`, ADR 0022), and reads `GET /api/integration`, which asks
   SeaTunnel and the hub server-side. `INTEGRATION_DIR` says where the hub
-  contracts are; the demo compose sets it to `demo/integration`.
+  contracts are; the demo compose sets it to `demo/integration`. A log line
+  there opens its record (`api/integration_detail.py`): each field with who
+  set it, and the inbox history with the `outcome` `hub.merge` now returns --
+  an `echo` of the hub's own delivery reads exactly like an edit otherwise.
 * The UI's language is **ODD's own picker**, and Turkish is a carried patch
   (`deploy/odd-platform-tr.mjs`, ADR 0011). The panel shares ODD's i18n
   instance through `shared.tsx`'s `useT`, in its own `ldp` namespace, with

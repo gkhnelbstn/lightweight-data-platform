@@ -489,3 +489,50 @@ export interface IntegrationState {
 }
 
 export const getIntegration = () => json<IntegrationState>('/api/integration');
+
+/** One record, or one held row, opened from the Integration tab:
+ * api/integration_detail.py. */
+export interface HistoryEntry {
+  at: string;
+  committed_at: string | null;
+  system: string;
+  /** What the hub did with it: applied, echo, lost, held, created, deleted,
+   * unchanged. Null for rows that reached the hub before it was recorded. */
+  outcome: string | null;
+  kind: 'insert' | 'update' | 'delete';
+  changes: { field: string; from: unknown; to: unknown }[];
+}
+
+export interface RecordDetail {
+  key: Record<string, unknown>;
+  codes: Record<string, unknown>;
+  fields: Record<string, { value: unknown; by: string | null; at: string | null }>;
+  deleted: { at: string | null; by: string } | null;
+  history: HistoryEntry[];
+  conflicts: HubConflict[];
+}
+
+export interface HeldDetail {
+  reason: string;
+  at: string;
+  row: Record<string, unknown>;
+  rule: Record<string, unknown>;
+  candidates: {
+    key: Record<string, unknown>;
+    codes: Record<string, unknown>;
+    fields: Record<string, unknown>;
+    link: string;
+  }[];
+  link_new: string;
+}
+
+export const getRecord = (hub: string, key: Record<string, unknown>) =>
+  json<RecordDetail>(
+    `/api/integration/record?hub=${encodeURIComponent(hub)}&key=${encodeURIComponent(JSON.stringify(key))}`
+  );
+
+export const getHeld = (hub: string, system: string, local: Record<string, unknown>) =>
+  json<HeldDetail>(
+    `/api/integration/held?hub=${encodeURIComponent(hub)}&system=${encodeURIComponent(system)}` +
+      `&local=${encodeURIComponent(JSON.stringify(local))}`
+  );

@@ -76,3 +76,23 @@ def test_a_failed_job_says_its_root_cause_not_its_stack():
              "\tat com.microsoft.sqlserver.X(X.java:2)")
     assert api.root_cause(trace) == "Invalid column name 'TAX_NO'."
     assert api.root_cause(None) is None
+
+
+def test_a_record_history_reads_as_what_happened():
+    """An update's before and after images are one line of what changed, a
+    classified value stays masked, and each line says what the hub did."""
+    from api.integration_detail import history
+    row = lambda kind, sys, ms, outcome, **v: {  # noqa: E731
+        "row_kind": kind, "system": sys, "source_ms": ms, "landed_at": "t",
+        "fields": "crm_code,name,tax_id", "row": {"crm_code": 1, "outcome": outcome, **v}}
+    rows = [row("INSERT", "crm.account", 1, "created", name="Acme", tax_id="111"),
+            row("UPDATE_BEFORE", "billing.customer", 2, "before", name="Acme", tax_id="111"),
+            row("UPDATE_AFTER", "billing.customer", 2, "echo", name="Acme Ltd", tax_id="111"),
+            row("DELETE", "crm.account", 3, "deleted", name="Acme Ltd", tax_id="111")]
+    out = history(rows, skip={"crm_code"}, hidden={"tax_id"})
+    assert [(h["system"], h["kind"], h["outcome"]) for h in out] == [
+        ("crm.account", "insert", "created"), ("billing.customer", "update", "echo"),
+        ("crm.account", "delete", "deleted")]
+    assert out[0]["changes"] == [{"field": "name", "from": None, "to": "Acme"},
+                                 {"field": "tax_id", "from": None, "to": api.sample.MASK}]
+    assert out[1]["changes"] == [{"field": "name", "from": "Acme", "to": "Acme Ltd"}]
