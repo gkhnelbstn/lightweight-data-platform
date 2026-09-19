@@ -390,3 +390,39 @@ def test_a_value_outside_the_value_map_is_kept_out_and_logged(hub):
     assert hub.execute("select field, kept, lost, lost_by, reason from hub.conflict"
                        ).fetchall() == [("active", True, None, "crm", "unmapped")]
     assert ("active", None) not in expected(hub, "billing")
+
+
+# --- an awaited value that can never come back (#84) --------------------------
+
+def test_an_address_added_then_removed_is_not_swallowed_by_a_stale_empty(hub):
+    """billing made the record with no city, so the hub awaited an empty city
+    from the CRM's address table -- which has no row to empty and never
+    answers. The CRM then adds an address and removes it: the removal is an
+    edit, not that old echo."""
+    send(hub, "billing", "INSERT", 100, **ACME, city=None)
+    send(hub, "crm", "INSERT", 101, **ACME)
+    send(hub, "crm_address", "INSERT", 200, code=1, city="Bursa")
+    assert city(hub) == ("Acme", "Bursa")
+    send(hub, "crm_address", "DELETE", 300, code=1, city="Bursa")
+    assert city(hub) == ("Acme", None)
+
+
+def test_a_value_the_system_already_had_is_not_awaited_from_it(hub):
+    """An awaited value the system already holds can never come back as a
+    change: delivering it there changed nothing. Awaiting it anyway would
+    swallow a later edit to exactly that value."""
+    send(hub, "crm", "INSERT", 100, **ACME)
+    hub.execute("insert into hub.expect (system, entity, key, field, value) values "
+                "('crm', 'customer', '{\"code\": 1}', 'name', '\"Acme\"')")
+    update(hub, "crm", 200, ACME, {**ACME, "name": "Acme X"})
+    update(hub, "crm", 300, {**ACME, "name": "Acme X"}, ACME)
+    assert golden(hub)[0] == "Acme"
+
+
+def test_an_hour_old_awaited_value_goes_whatever_record_it_is_for(hub):
+    hub.execute("insert into hub.expect (system, entity, key, field, value, created_at) "
+                "values ('crm', 'customer', '{\"code\": 99}', 'name', '\"x\"', "
+                "now() - interval '2 hours')")
+    send(hub, "billing", "INSERT", 100, **ACME)
+    assert hub.execute("select count(*) from hub.expect where key = '{\"code\": 99}'"
+                       ).fetchone()[0] == 0
