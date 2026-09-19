@@ -176,10 +176,45 @@ to emit for a Postgres target in a pair.
   by `core/flows.py` first, the way `syncTo` compiles into a publication. That
   compiler is not written.
 
+## What a conflict rule would need, and 2.3.13 does not give
+
+Both sides of a pair edit the same fields, and that cannot be prevented, so
+conflicts need a rule. The rule chosen in conversation is **the latest edit
+wins**. That needs each change's commit time, and a spike on the demo
+measured what SeaTunnel actually hands over. It was one `UPDATE` on SQL
+Server, landed in Postgres through `Metadata` and `RowKindExtractor`:
+
+| | commit (`cdc.lsn_time_mapping`) | what SeaTunnel said |
+|---|---|---|
+| time | `11:06:06.380` | `EventTime` `11:06:07.823`, `Delay` 1 443 ms |
+| before image | present in the change table (`__$operation = 3`) | **not emitted**, `UPDATE_AFTER` only |
+
+* **`EventTime` is when SeaTunnel read the change, not when it committed.**
+  Its own source (`SeaTunnelRowDebeziumDeserializeSchema`) sets it from
+  `fetchTimestamp`. The commit time is `SourceTimestamp`, which was added in
+  apache/seatunnel#10667 (April 2026) and is not in 2.3.13: asking for it
+  fails with *"metadata fields 'SourceTimestamp' ... not found"*. The spike's
+  gap was 1.4 s, and SQL Server's capture job polls every 5 s, so ordering
+  two edits by `EventTime` is wrong whenever they are closer than that.
+* **No before image for SQL Server.** The same deserializer emits
+  `UPDATE_BEFORE` on the development branch, and the Postgres pair above
+  received one. For SQL Server under 2.3.13 only the after image arrived.
+  A merge step that decides by comparing against a stored copy per system
+  works without it. One that compares against the before image does not.
+
+So with the released SeaTunnel, "latest edit wins" on SQL Server can only
+mean *latest captured wins*. `core/sync_mssql.py` already has exact commit
+times (`sys.fn_cdc_map_lsn_to_time`) and before images (`'all update old'`),
+so capture from SQL Server is the one step where our reader still knows more
+than the adopted tool.
+
 ## On upgrade
 
 * **SeaTunnel drops `opengauss-jdbc` from `lib/`, or relocates its
   packages:** delete the line in the derived image that removes it.
+* **A SeaTunnel release carries `SourceTimestamp` (apache/seatunnel#10667)
+  and `UPDATE_BEFORE` for SQL Server:** re-run the spike. If both arrive, the
+  SQL Server capture step no longer needs our reader.
 * **SeaTunnel's JDBC sink gains a guarded upsert** (`is distinct from`, or
   "skip unchanged rows"): the compiler stops generating a custom `query` for
   a Postgres target in a pair.
