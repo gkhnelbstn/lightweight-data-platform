@@ -9,7 +9,9 @@ in the same order:
 2. for each hub contract, the golden table, its inbox and its authority;
 3. register every system that has flows both in and out -- only those echo
    the hub's writes back, so only those are awaited (ADR 0021);
-4. submit each job that is not already running, by name.
+4. submit each job that is not already running, by name -- resuming it from
+   its last checkpoint when it ran before, or refusing to (core/flow_resume.py,
+   ADR 0023).
 
 Credentials are never written into a job file: configs carry `${PG_USER}`
 and friends, filled from the environment on the way to SeaTunnel.
@@ -23,6 +25,7 @@ import urllib.request
 
 import psycopg
 
+from core import flow_resume
 from core import flows as flowmod
 from core import hub
 from core.bootstrap_db import admin_dsn, ensure_database
@@ -91,22 +94,52 @@ def register(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> None:
               f"systems {sorted(into & out)}")
 
 
+def _hub_dsn(by_id: dict[str, dict], flow: flowmod.Flow) -> str:
+    """The database of the hub this flow goes into or comes out of."""
+    into = flowmod.hub_of(by_id.get(flow.target)) is not None
+    contract = by_id[flow.target if into else flow.mapping.reference]
+    server = next(s for s in contract["servers"] if s["type"].startswith("postgres"))
+    return admin_dsn(server["host"], server.get("port", 5432), server["database"])
+
+
 def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
-          configs: dict[str, dict]) -> None:
+          configs: dict[str, dict], resnapshot: bool = False) -> None:
     register(by_id, flows)
     already = running()
-    for name, config in configs.items():
-        if name in already:
-            print(f"{name}: already running")
+    refused = []
+    for flow in flows:
+        if flow.id in already:
+            print(f"{flow.id}: already running")
             continue
-        answer = _http("POST", f"/submit-job?jobName={name}", _fill(config))
-        print(f"{name}: submitted {answer}")
+        with psycopg.connect(_hub_dsn(by_id, flow), autocommit=True) as cx:
+            row = cx.execute("select job_id from hub.job where flow = %s",
+                             (flow.id,)).fetchone()
+            job_id = row[0] if row else None
+            checkpoint = flow_resume.last_checkpoint_ms(job_id) if job_id else None
+            oldest = (flow_resume.oldest_change_ms(by_id[flow.mapping.reference])
+                      if checkpoint and not resnapshot else None)
+            action, why = flow_resume.plan(flow.id, job_id, checkpoint, oldest, resnapshot)
+            if action == "refuse":
+                refused.append(why)
+                continue
+            if why:
+                print(why)
+            query = f"/submit-job?jobName={flow.id}" + (
+                f"&jobId={job_id}&isStartWithSavePoint=true" if action == "resume" else "")
+            answer = _http("POST", query, _fill(configs[flow.id]))
+            cx.execute("insert into hub.job (flow, job_id) values (%s, %s) "
+                       "on conflict (flow) do update set job_id = excluded.job_id, "
+                       "submitted_at = now()", (flow.id, int(answer["jobId"])))
+        print(f"{flow.id}: {'resumed' if action == 'resume' else 'started'} {answer}")
+    if refused:
+        raise SystemExit("\n".join(f"REFUSED: {r}" for r in refused))
 
 
 def stop(names: set[str] | None = None) -> None:
-    """Stop the running jobs with these names, or every running job."""
+    """Stop the running jobs with these names, or every running job -- with a
+    savepoint, so the next --apply resumes exactly there."""
     for job in _http("GET", "/running-jobs") or []:
         if names is None or job.get("jobName") in names:
             _http("POST", "/stop-job", {"jobId": int(job["jobId"]),
-                                        "isStopWithSavePoint": False})
+                                        "isStopWithSavePoint": True})
             print(f"{job.get('jobName')}: stopped")

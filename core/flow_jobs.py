@@ -274,6 +274,9 @@ def main() -> None:
     mode.add_argument("--stop", action="store_true",
                       help="stop the running jobs of these flows")
     ap.add_argument("--contracts", type=Path, default=Path("contracts"))
+    ap.add_argument("--resnapshot", action="store_true",
+                    help="with --apply: start flows from scratch rather than from "
+                         "their checkpoints (ADR 0023 says what that costs)")
     args = ap.parse_args()
 
     by_id, flows = load(args.contracts)
@@ -292,7 +295,7 @@ def main() -> None:
         print(json.dumps(jobs(by_id, flows), indent=2))
     else:
         from core import flow_apply
-        flow_apply.apply(by_id, flows, jobs(by_id, flows))
+        flow_apply.apply(by_id, flows, jobs(by_id, flows), resnapshot=args.resnapshot)
 
 
 if __name__ == "__main__":
