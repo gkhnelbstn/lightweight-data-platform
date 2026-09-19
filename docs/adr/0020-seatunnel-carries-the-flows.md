@@ -80,7 +80,7 @@ derived image was built on `eclipse-temurin:8-jre`. It keeps `bin`,
 `config` and `starter`, and from `lib/` only the transforms jar, the Hadoop
 uber jar (checkpoint storage) and the two JDBC drivers. Its seven connectors
 are CDC base, SQL Server CDC, Postgres CDC, MongoDB CDC, JDBC, MongoDB and
-HTTP. The result is **1.28 GB**, and it runs both prototypes unchanged:
+HTTP. The result was **1.28 GB**, and it ran both prototypes unchanged:
 
 * the SQL Server CDC job wrote 2 000 rows to Postgres and 2 000 documents to
   MongoDB, at the same ~500 MiB;
@@ -88,6 +88,11 @@ HTTP. The result is **1.28 GB**, and it runs both prototypes unchanged:
 
 Because it never copies `opengauss-jdbc`, the Postgres driver conflict below
 does not arise in it.
+
+`deploy/Dockerfile.seatunnel` is that image made reproducible. It keeps only
+`starter/seatunnel-starter.jar`, not the Flink and Spark starters beside it,
+and adds the carried commit below. It is **893 MB** and ran the commit-time
+spike at 439 MiB.
 
 ### Three things that would have gone wrong silently
 
@@ -176,45 +181,63 @@ to emit for a Postgres target in a pair.
   by `core/flows.py` first, the way `syncTo` compiles into a publication. That
   compiler is not written.
 
-## What a conflict rule would need, and 2.3.13 does not give
+## What a conflict rule needs, and how it is got
 
 Both sides of a pair edit the same fields, and that cannot be prevented, so
 conflicts need a rule. The rule chosen in conversation is **the latest edit
-wins**. That needs each change's commit time, and a spike on the demo
-measured what SeaTunnel actually hands over. It was one `UPDATE` on SQL
-Server, landed in Postgres through `Metadata` and `RowKindExtractor`:
+wins**. That needs each change's commit time, and it helps to have the value
+the edit replaced. Spikes on the demo measured what SeaTunnel actually hands
+over for one `UPDATE` on SQL Server:
 
-| | commit (`cdc.lsn_time_mapping`) | what SeaTunnel said |
+| | SQL Server (`cdc` change table, `lsn_time_mapping`) | SeaTunnel |
 |---|---|---|
-| time | `11:06:06.380` | `EventTime` `11:06:07.823`, `Delay` 1 443 ms |
-| before image | present in the change table (`__$operation = 3`) | **not emitted**, `UPDATE_AFTER` only |
+| read time | | `EventTime`: 1.4 s and 2.7 s after the commit in two runs |
+| commit time | `tran_end_time` `1789819613703` | `SourceTimestamp` `1789819613703`, **with #10667 carried** |
+| before image | `__$operation = 3` | `UPDATE_BEFORE`, then `UPDATE_AFTER` |
 
-* **`EventTime` is when SeaTunnel read the change, not when it committed.**
-  Its own source (`SeaTunnelRowDebeziumDeserializeSchema`) sets it from
-  `fetchTimestamp`. The commit time is `SourceTimestamp`, which was added in
-  apache/seatunnel#10667 (April 2026) and is not in 2.3.13: asking for it
-  fails with *"metadata fields 'SourceTimestamp' ... not found"*. The spike's
-  gap was 1.4 s, and SQL Server's capture job polls every 5 s, so ordering
-  two edits by `EventTime` is wrong whenever they are closer than that.
-* **No before image for SQL Server.** The same deserializer emits
-  `UPDATE_BEFORE` on the development branch, and the Postgres pair above
-  received one. For SQL Server under 2.3.13 only the after image arrived.
-  A merge step that decides by comparing against a stored copy per system
-  works without it. One that compares against the before image does not.
+* **`EventTime` is when SeaTunnel read the change.** Its source,
+  `SeaTunnelRowDebeziumDeserializeSchema`, sets it from `fetchTimestamp`, and
+  SQL Server's capture job polls every 5 s. Ordering edits by it is wrong
+  whenever they are closer than that. After an outage it is wrong by the
+  length of the outage, because the whole backlog is read "now".
+* **`SourceTimestamp` is the commit time, and 2.3.13 does not have it.** It
+  was added in apache/seatunnel#10667 (April 2026, after 2.3.13); asking
+  2.3.13 for it fails with *"metadata fields 'SourceTimestamp' ... not
+  found"*. That one commit is cherry-picked onto 2.3.13 in
+  `deploy/Dockerfile.seatunnel`, which rebuilds the two jars it touches
+  (`seatunnel-starter`, `connector-cdc-base`). With it, the value equals
+  `tran_end_time` to the millisecond (at most 1 ms apart, which is SQL
+Server's `datetime` rounding). The same branch is kept in the fork,
+  `gkhnelbstn/seatunnel`, as `ldp/2.3.13-source-timestamp`. It is a carried
+  patch (ADR 0011) of an already-merged upstream commit, so it goes at the
+  next release rather than on a maintainer's decision.
+* **The before image is there. The first spike lost it downstream.** 2.3.13's
+  deserializer emits `UPDATE_BEFORE` for every engine. A console sink showed
+  both rows for SQL Server. The first spike wrote through the JDBC sink's
+  generated SQL with no primary key, and only the after row survived that. With
+  `RowKindExtractor` and a plain `insert` statement, every row lands in commit
+  order, each with its commit time:
 
-So with the released SeaTunnel, "latest edit wins" on SQL Server can only
-mean *latest captured wins*. `core/sync_mssql.py` already has exact commit
-times (`sys.fn_cdc_map_lsn_to_time`) and before images (`'all update old'`),
-so capture from SQL Server is the one step where our reader still knows more
-than the adopted tool.
+  | row_kind | source_ms | segment |
+  |---|---|---|
+  | UPDATE_BEFORE | 1789819717070 | RETAIL |
+  | UPDATE_AFTER | 1789819717070 | SMB |
+  | UPDATE_BEFORE | 1789819717080 | SMB |
+  | UPDATE_AFTER | 1789819717080 | RETAIL |
+
+  That append-only shape is how changes should reach whatever merges them.
+
+So "latest edit wins" means *latest committed wins*, on the released
+connectors plus one carried commit. No reader of ours is needed for it.
 
 ## On upgrade
 
 * **SeaTunnel drops `opengauss-jdbc` from `lib/`, or relocates its
   packages:** delete the line in the derived image that removes it.
-* **A SeaTunnel release carries `SourceTimestamp` (apache/seatunnel#10667)
-  and `UPDATE_BEFORE` for SQL Server:** re-run the spike. If both arrive, the
-  SQL Server capture step no longer needs our reader.
+* **A SeaTunnel release carries `SourceTimestamp` (apache/seatunnel#10667):**
+  delete the `src` and `build` stages of `deploy/Dockerfile.seatunnel`, and
+  the two `COPY --from=build` lines, and re-run the commit-time spike against
+  the release.
 * **SeaTunnel's JDBC sink gains a guarded upsert** (`is distinct from`, or
   "skip unchanged rows"): the compiler stops generating a custom `query` for
   a Postgres target in a pair.

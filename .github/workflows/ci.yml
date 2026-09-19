@@ -210,3 +210,13 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # ADR 0020 / 0011: the flows' runtime, slimmed and carrying one upstream
+      # commit. The cherry-pick fails the build if it stops applying.
+      - name: seatunnel (flows)
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy
+          file: deploy/Dockerfile.seatunnel
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

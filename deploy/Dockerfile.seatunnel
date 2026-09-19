@@ -1,0 +1,69 @@
+# Apache SeaTunnel for integration flows (ADR 0020), as small as it can be and
+# with one upstream commit carried until a release has it (ADR 0011).
+#
+# * Slim: the official image is 6.97 GB, 2.4 GB of it connectors this
+#   repository does not use. This keeps the seven it does, and only the four
+#   jars of lib/ they need. The official lib/ also ships opengauss-jdbc, which
+#   shadows pgjdbc and breaks every Postgres connection
+#   (apache/seatunnel#10242, #11510); it is simply not copied.
+# * Patched: 2.3.13's `EventTime` is when SeaTunnel *read* a change. A
+#   conflict rule of "the latest edit wins" needs when it *committed*, which is
+#   `SourceTimestamp` from apache/seatunnel#10667 -- merged in April 2026,
+#   after 2.3.13. It is cherry-picked here, and the build fails if it stops
+#   applying. Verified against SQL Server: `SourceTimestamp` equals
+#   `cdc.lsn_time_mapping.tran_end_time` to the millisecond.
+#
+# Delete the `src` and `build` stages, and the two COPY lines from `build`,
+# when a SeaTunnel release carries #10667.
+#
+#   docker build -f deploy/Dockerfile.seatunnel -t ldp/seatunnel deploy
+ARG SEATUNNEL_VERSION=2.3.13
+
+# --- upstream at the release, plus the one commit ----------------------------
+FROM alpine/git:latest AS src
+ARG SEATUNNEL_VERSION
+WORKDIR /src
+RUN git clone -q --filter=blob:none --no-checkout https://github.com/apache/seatunnel.git . \
+    && git checkout -q ${SEATUNNEL_VERSION} \
+    && git fetch -q origin 6dee790d77830f43690d9e2cf0593d27c8b1c242 \
+    && git -c user.name=ldp -c user.email=ldp@localhost \
+         cherry-pick 6dee790d77830f43690d9e2cf0593d27c8b1c242
+
+# --- only the two jars the commit changes ------------------------------------
+FROM maven:3.9-eclipse-temurin-8 AS build
+ARG SEATUNNEL_VERSION
+COPY --from=src /src /src
+WORKDIR /src
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q -B -Drevision=${SEATUNNEL_VERSION} -DskipTests -Dmaven.test.skip=true \
+        -Dspotless.check.skip=true -Dspotless.apply.skip=true -Dcheckstyle.skip=true \
+        -Dlicense.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true \
+        -pl seatunnel-core/seatunnel-starter,seatunnel-connectors-v2/connector-cdc/connector-cdc-base \
+        -am install
+
+FROM apache/seatunnel:${SEATUNNEL_VERSION} AS dist
+
+# --- the runtime -------------------------------------------------------------
+FROM eclipse-temurin:8-jre
+ARG SEATUNNEL_VERSION
+WORKDIR /opt/seatunnel
+ENV SEATUNNEL_HOME=/opt/seatunnel
+COPY --from=dist /opt/seatunnel/bin bin
+COPY --from=dist /opt/seatunnel/config config
+COPY --from=dist /opt/seatunnel/plugins plugins
+COPY --from=dist /opt/seatunnel/starter/logging starter/logging
+COPY --from=dist /opt/seatunnel/connectors/plugin-mapping.properties connectors/
+COPY --from=dist ["/opt/seatunnel/connectors/connector-cdc-sqlserver-${SEATUNNEL_VERSION}.jar", \
+                  "/opt/seatunnel/connectors/connector-cdc-postgres-${SEATUNNEL_VERSION}.jar", \
+                  "/opt/seatunnel/connectors/connector-cdc-mongodb-${SEATUNNEL_VERSION}.jar", \
+                  "/opt/seatunnel/connectors/connector-jdbc-${SEATUNNEL_VERSION}.jar", \
+                  "/opt/seatunnel/connectors/connector-mongodb-${SEATUNNEL_VERSION}.jar", \
+                  "/opt/seatunnel/connectors/connector-http-base-${SEATUNNEL_VERSION}.jar", \
+                  "connectors/"]
+COPY --from=dist ["/opt/seatunnel/lib/seatunnel-transforms-v2.jar", \
+                  "/opt/seatunnel/lib/seatunnel-hadoop3-3.1.4-uber.jar", \
+                  "/opt/seatunnel/lib/mssql-jdbc-9.2.1.jre8.jar", \
+                  "/opt/seatunnel/lib/postgresql-42.4.3.jar", \
+                  "lib/"]
+COPY --from=build /src/seatunnel-core/seatunnel-starter/target/seatunnel-starter.jar starter/
+COPY --from=build /src/seatunnel-connectors-v2/connector-cdc/connector-cdc-base/target/connector-cdc-base-${SEATUNNEL_VERSION}.jar connectors/
