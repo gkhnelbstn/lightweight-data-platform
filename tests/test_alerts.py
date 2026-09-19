@@ -66,3 +66,13 @@ def test_a_healthy_rule_and_an_unknown_engine_stay_quiet():
 
 def test_no_url_means_no_alerting_and_no_error():
     assert alerts.send("anything", url="") is False
+
+
+def test_the_message_is_written_in_the_deployments_language(monkeypatch):
+    """Issue #44: written once for everyone, so the deployment picks it."""
+    from core import language
+    monkeypatch.setattr(language, "LANGUAGE", "tr")
+    text = alerts.compose(TODAY, [{"id": "erp.customers"}], [],
+                          {"erp.customers": ["a", "b", "c", "d"]}, [])
+    assert "Kontrat kalitesi" in text and "1 kontrat" in text
+    assert "erp.customers içinde yeni hatalar: a, b, c (+1 tane daha)" in text
