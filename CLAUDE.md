@@ -405,6 +405,15 @@ which is the default branch.
   because SeaTunnel answers an empty username with "Unable to create a
   source". `stop()` waits for the job to be gone, or the apply after it reads
   "already running" and starts nothing.
+* **A discussion about an asset is a Slack thread, and nothing else.** ODD's
+  Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
+  channel list is empty until a workspace is connected:
+  `deploy/slack-app-manifest.yaml` is the app, `ODD_SLACK_ENABLED` and
+  `ODD_SLACK_TOKEN` in `.env` are the wiring, and the token is the
+  workspace owner's to create. `DATACOLLABORATION_ENABLED: true` with an
+  empty token refuses to start ODD ("Slack OAuth token is empty"), which is
+  why both default to off. Replies arrive at `/api/slack/events`, so they
+  need this platform reachable from Slack; posting does not.
 * **ODD's Master Data page is the hub's golden record, one way** (ADR 0025,
   `integrations/odd/master_data.py`): a lookup table per hub entity plus
   `value_maps`, matched by key, classified columns left out. An edit made in
