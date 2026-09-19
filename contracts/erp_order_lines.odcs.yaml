@@ -1,7 +1,7 @@
 # The order lines behind sales_orders. Its own contract rather than a second
 # model in erp_postgres.odcs.yaml: the runner, the sampler and the catalogue
 # all address `schema[0]`, so one contract is one table here.
-apiVersion: v3.0.2
+apiVersion: v3.1.0
 kind: DataContract
 id: erp.order_lines
 name: Sales Order Lines
@@ -69,6 +69,9 @@ schema:
         description: "The order this line belongs to. Half of the key, and the join back to sales_orders."
         required: true
         primaryKey: true
+        relationships:
+          - type: foreignKey
+            to: sales_orders.order_id
       - name: line_no
         logicalType: integer
         physicalType: integer

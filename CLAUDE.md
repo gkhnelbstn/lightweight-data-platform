@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 401 tests; the ones that need a database skip without one
+pytest -q                                                  # 405 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -385,6 +385,13 @@ which is the default branch.
   Postgres *source* needs `REPLICA IDENTITY FULL`, no `timestamptz` column
   (SeaTunnel 2.3.13 refuses the whole table), and its slot: all three are
   checked before a job is submitted, never done for it.
+* **A contract's foreign keys are ODD's ER diagram** (`relationships` on the
+  property, ODCS 3.1, `integrations/odd/relationships.py`): published with the
+  daily push as an `ENTITY_RELATIONSHIP`, both ends on the ODDRNs odd-collector
+  minted. Not lineage -- a foreign key says which row a row belongs to, not
+  which job made it. ODD 0.29.0 answers 500 for any table whose columns ever
+  changed; the one-line fix is compiled in `deploy/Dockerfile.odd-platform`'s
+  `api` stage (ADR 0011).
 * **ODD's Master Data page is the hub's golden record, one way** (ADR 0025,
   `integrations/odd/master_data.py`): a lookup table per hub entity plus
   `value_maps`, matched by key, classified columns left out. An edit made in
