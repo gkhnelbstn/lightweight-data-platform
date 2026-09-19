@@ -275,3 +275,81 @@ def test_read_with_one_match_and_written_back_with_another():
     _, outbound = _address("SHP", "invoice_city")
     found = _check(CRM_IN, inbound, outbound, by_id=WIDE)
     assert any("read with match" in p and "written back with" in p for p in found)
+
+
+# --- different codes, one record (#80) --------------------------------------
+
+XHUB = _table("hub.customer", "customer", [
+    {"name": "customer_id", "primaryKey": True, "required": True},
+    {"name": "crm_code"}, {"name": "billing_code"},
+    {"name": "name", "required": True},
+    {"name": "tax_id", "classification": "pii"},
+    {"name": "active"}],
+    customProperties=[{"property": "hub", "value": {
+        "authority": "crm.account", "keys": {"crm": "crm_code", "billing": "billing_code"}}}])
+XBY_ID = {**BY_ID, "hub.customer": XHUB}
+
+
+def _recoded(doc, old, new):
+    cols = {(new if k == old else k): (new if v == old else v)
+            for k, v in doc["columns"].items()}
+    return _with(doc, columns=cols)
+
+
+XCRM_IN = _with(_recoded(CRM_IN, "code", "crm_code"), linkBy=["tax_id"])
+XCRM_OUT = _with(_recoded(CRM_OUT, "code", "crm_code"), filledByTarget=["ACCOUNT_CODE"])
+XBILLING_IN = _with(_recoded(BILLING_IN, "code", "billing_code"), linkBy=["tax_id"])
+XBILLING_OUT = _with(_recoded(BILLING_OUT, "code", "billing_code"),
+                     filledByTarget=["CreatedAt", "CustomerCode"])
+XALL = (XCRM_IN, XCRM_OUT, XBILLING_IN, XBILLING_OUT)
+
+
+def _xcheck(*docs):
+    return _check(*docs, by_id=XBY_ID)
+
+
+def test_two_systems_with_their_own_codes_are_silent():
+    assert _xcheck(*XALL) == []
+
+
+def test_an_unseen_code_needs_a_rule_to_find_its_record():
+    got = _xcheck(_with(XBILLING_IN, linkBy=[]), XBILLING_OUT, XCRM_IN, XCRM_OUT)
+    assert any("billing_to_hub: a row under a code the hub has not seen needs linkBy" in p
+               for p in got), got
+
+
+def test_the_rule_must_be_a_field_the_flow_carries():
+    got = _xcheck(_with(XBILLING_IN, linkBy=["crm_code"]), XBILLING_OUT, XCRM_IN, XCRM_OUT)
+    assert any("linkBy names crm_code" in p for p in got), got
+
+
+def test_a_system_receiving_new_records_assigns_their_codes():
+    got = _xcheck(XCRM_IN, XCRM_OUT, XBILLING_IN, _with(XBILLING_OUT, filledByTarget=["CreatedAt"]))
+    assert any("hub_to_billing: a record new to billing.customer has no CustomerCode" in p
+               for p in got), got
+
+
+def test_a_flow_may_not_fill_the_hubs_own_key():
+    bad = _with(XBILLING_IN, columns={**XBILLING_IN["columns"], "customer_id": "CustomerCode"})
+    got = _xcheck(bad, XBILLING_OUT, XCRM_IN, XCRM_OUT)
+    assert any("the key of hub.customer is the hub's own" in p for p in got), got
+
+
+def test_every_system_has_a_column_for_its_code():
+    hub = copy.deepcopy(XHUB)
+    hub["customProperties"][0]["value"]["keys"] = {"crm": "crm_code"}
+    got = _check(*XALL, by_id={**BY_ID, "hub.customer": hub})
+    assert any("billing_to_hub: hub.customer has no column for billing's own key" in p
+               for p in got), got
+
+
+def test_a_rule_on_part_of_a_record_is_reported():
+    part = _with(XCRM_IN, id="crm_tax_to_hub", columns={"crm_code": "ACCOUNT_CODE",
+                                                       "tax_id": "TAX_NO"})
+    got = _xcheck(*XALL, part)
+    assert any("crm_tax_to_hub: linkBy is never used here" in p for p in got), got
+
+
+def test_a_rule_without_codes_to_link_is_reported():
+    got = _check(_with(CRM_IN, linkBy=["tax_id"]), CRM_OUT, BILLING_IN, BILLING_OUT)
+    assert any("linkBy only matters" in p for p in got), got

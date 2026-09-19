@@ -1,5 +1,6 @@
 id: billing_to_hub
 from: billing.customer
 to: hub.customer
-columns: {code: CustomerCode, name: Name, tax_id: TaxId, active: IsActive,
+columns: {billing_code: CustomerCode, name: Name, tax_id: TaxId, active: IsActive,
           invoice_city: InvoiceCity, shipping_city: ShippingCity}
+linkBy: [tax_id]

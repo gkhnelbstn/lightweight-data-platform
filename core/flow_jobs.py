@@ -122,7 +122,8 @@ def inbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
                            "query": insert}}]}
 
 
-def outbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
+def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
+             link_by: tuple[str, ...] = ()) -> dict:
     """The golden record back into a system, one revision at a time.
 
     Each revision says what it changed (`_changed`) and which system it came
@@ -138,6 +139,13 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
     one kind of row of a table with several per record (#79): its constants
     are written back, and a kind with no value has no row, so it is deleted
     rather than left empty.
+
+    A target that keeps codes of its own (#80) assigns them to the records it
+    receives (`filledByTarget`): the insert leaves the code out, and matches a
+    row it already has by `link_by` -- the pair's rule -- so a record the hub
+    has not linked yet is not inserted twice. A revision that brings a record's
+    code for this system is new to it, like `*`: the rows it could not be
+    written before can be now.
     """
     target = by_id[flow.target]
     server = _server(target)
@@ -151,32 +159,45 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
     cols = flow.mapping.columns                      # target column: hub column
     keyed = [(t, s) for t, s in cols.items() if t in key]
     carried = [(t, s) for t, s in cols.items() if t not in key]
+    assigned = {t for t, _ in keyed if t in flow.filled_by_target}
     ours = f"(_skip IS NULL OR _skip <> {_literal(flow.target)})"
-    waits = [f"{s} IS NOT NULL" for t, s in cols.items()
-             if props.get(t, {}).get("required") or props.get(t, {}).get("primaryKey")]
+    waits = [f"{s} IS NOT NULL" for t, s in cols.items() if t not in assigned
+             and (props.get(t, {}).get("required") or props.get(t, {}).get("primaryKey"))]
     present = ([f"({' OR '.join(f'{s} IS NOT NULL' for _, s in carried)})"]
                if flow.match and carried else [])
     constants = "".join(f", {_literal(v)} AS {c}" for c, v in flow.match.items())
     # Only revisions that changed something this flow writes: an unrelated
     # revision must not recreate or delete a row the target changed meanwhile.
-    touched = ("(_changed = '*' OR "
-               + " OR ".join(f"POSITION({_literal(',' + s + ',')}, _changed) > 0"
-                             for _, s in carried) + ")") if carried else "_changed = '*'"
+    touched = "(" + " OR ".join(["_changed = '*'"] + [
+        f"POSITION({_literal(',' + s + ',')}, _changed) > 0" for _, s in keyed + carried]) + ")"
+    # Emptying is said by name only. A revision new to the target ('*', or
+    # the one bringing its key) with a part still empty says nothing about
+    # that part: the owner's row can reach the hub before its address does,
+    # and deleting the target's row then deletes the address on its way in.
+    named = "(" + " OR ".join(
+        f"POSITION({_literal(',' + s + ',')}, _changed) > 0" for _, s in carried) + ")"
+    new = " OR ".join(["s._changed = '*'"] + [
+        f"CHARINDEX({_literal(',' + s + ',')}, s._changed) > 0" for _, s in keyed])
 
     written = list(cols) + list(flow.match)
     using = ", ".join(f"? AS [{c}]" for c in written) + ", ? AS _changed"
     on = " AND ".join(f"t.[{c}] = s.[{c}]" for c in [t for t, _ in keyed] + list(flow.match))
+    linked = [t for t, s in cols.items() if s in link_by]
+    if assigned and linked:
+        on = (f"({on} OR ({' AND '.join(f's.[{c}] IS NULL' for c in sorted(assigned))} AND "
+              + " AND ".join(f"t.[{c}] = s.[{c}]" for c in linked) + "))")
     sets = ", ".join(
-        f"t.[{t}] = CASE WHEN s._changed = '*' OR CHARINDEX({_literal(',' + s + ',')}, "
+        f"t.[{t}] = CASE WHEN {new} OR CHARINDEX({_literal(',' + s + ',')}, "
         f"s._changed) > 0 THEN s.[{t}] ELSE t.[{t}] END" for t, s in carried)
+    inserted = [c for c in written if c not in assigned]
     merge = (f"MERGE {table} WITH (HOLDLOCK) AS t USING (SELECT {using}) AS s ON {on} "
              + (f"WHEN MATCHED THEN UPDATE SET {sets} " if sets else "")
              # A missing record is created only by a revision that is new to
              # everyone ('*'): otherwise it was deleted here and not yet in
              # the hub. A kind of row is created when its value changes.
-             + ("WHEN NOT MATCHED " if flow.match else "WHEN NOT MATCHED AND s._changed = '*' ")
-             + f"THEN INSERT ({', '.join(f'[{c}]' for c in written)}) "
-               f"VALUES ({', '.join(f's.[{c}]' for c in written)});")
+             + ("WHEN NOT MATCHED " if flow.match else f"WHEN NOT MATCHED AND ({new}) ")
+             + f"THEN INSERT ({', '.join(f'[{c}]' for c in inserted)}) "
+               f"VALUES ({', '.join(f's.[{c}]' for c in inserted)});")
     delete = (f"DELETE FROM {table} WHERE "
               + " AND ".join([f"[{t}] = ?" for t, _ in keyed]
                              + [f"[{c}] = {_literal(v)}" for c, v in flow.match.items()]))
@@ -204,7 +225,7 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
         transform.append(
             {"Sql": {"plugin_input": "live", "plugin_output": "emptied",
                      "query": f"SELECT {keys_only} FROM dual"
-                              + _where([ours, touched] + key_known
+                              + _where([ours, named] + key_known
                                        + [f"{s} IS NULL" for _, s in carried])}})
         sink.append({"Jdbc": {"plugin_input": "emptied", **jdbc, "query": delete}})
     return {
@@ -236,7 +257,10 @@ def jobs(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> dict[str, dict]:
     out = {}
     for flow in flows:
         into_hub = flowmod.hub_of(by_id.get(flow.target)) is not None
-        out[flow.id] = _rest(inbound(flow, by_id) if into_hub else outbound(flow, by_id))
+        pair = next((f for f in flows if (f.mapping.reference, f.target, f.match)
+                     == (flow.target, flow.mapping.reference, flow.match)), None)
+        out[flow.id] = _rest(inbound(flow, by_id) if into_hub else outbound(
+            flow, by_id, pair.link_by if pair else ()))
     return out
 
 

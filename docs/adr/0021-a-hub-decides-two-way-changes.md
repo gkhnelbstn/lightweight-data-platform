@@ -144,6 +144,8 @@ codes. `demo/integration/verify.py` repeats the run on demand.
 | a CRM address edit; a billing column set, then cleared | 7–9 s; the CRM row is created, then deleted |
 | a CRM address row deleted | billing's column emptied, the customer kept, 8 s |
 | idle after all of it, eight jobs | inbox unchanged for 30 s |
+| first sync, two numberings, 4 customers in both, 1 in each only | 6 records, every one with both codes, nothing held |
+| a customer new to either system | numbered by that system, linked in the hub, 6–9 s |
 
 ### Several tables, one record (#79)
 
@@ -184,12 +186,66 @@ the same field.
   it went. A never-set field has no commit time; that is the whole test.
 * **A row going away empties its part.** A delete from a flow that does not
   carry the required fields becomes an update to empty. On the way out an
-  empty part is a delete of that row, not a row with a `NULL` city.
+  empty part is a delete of that row, not a row with a `NULL` city -- but only
+  when the revision names the field. A revision new to the target (`*`) with
+  the part still empty is the owner's row arriving before its address, and
+  deleting the target's row then deletes the address on its way in. #80's
+  live run found this; #79's had passed by the luck of arrival order.
 
 The loop also showed that a delivery of the whole row is wrong once several
 flows write one record: a revision triggered by the address carried the
 customer's name as well, and landed over an edit made in the meantime. Hence
 `_changed` and the compiler's own `MERGE`.
+
+### Different codes, one record (#80)
+
+The same customer is `1` in the CRM and `120.01.014` in billing. The hub
+contract names the column holding each system's own code, and the record's key
+is the hub's own:
+
+```yaml
+customProperties:
+  - property: hub
+    value: {authority: crm.account, keys: {crm: crm_code, billing: billing_code}}
+```
+
+**The codes are columns of the golden record, not a table beside it.** The
+delivery back is a SeaTunnel job reading the golden record's CDC, and it
+cannot look anything up; the target's code has to be in the row it reads.
+Each is a unique column, so one code cannot name two records, and one record
+cannot hold two codes of one system. A deleted record's codes go into its
+tombstone, so a late change under one of them still meets the delete.
+
+**A row under a code the hub has not seen** (`hub.resolve`):
+
+* the flow that owns the record declares how to find it, `linkBy: [tax_id]`,
+  and `core/flows.py` refuses an owner flow without one;
+* exactly one record matches and has no code of this system: it is that
+  record, and the code is linked;
+* none matches: it is a new record, with a new hub key;
+* several match, the match already has another code of this system, or the
+  row has nothing to match by (a null tax number): it is **held** in
+  `hub.unmatched` and nothing is created. A person decides with
+  `hub.link(entity, system, code[, record])`, and what was held is replayed;
+* a part (an address) under an unseen code cannot say who the customer is. It
+  is held until its owner's row places the code, then replayed.
+
+None matching could also be a customer who exists under another code with a
+different tax number. The two are indistinguishable; the rule defines who is
+the same customer. A duplicate is only ever made by a rule that said so, and
+a missing value to match by is held rather than guessed.
+
+**A record new to a system** needs that system's code, which the hub cannot
+make up. So a system receiving new records assigns its own (the flow lists
+the key in `filledByTarget`, and `core/flows.py` refuses one that does not).
+The compiled `MERGE` leaves the key out of the insert, and the insert coming
+back through the target's CDC is matched by the rule and linked. Until then
+the golden record has no code there, so the `MERGE` also matches the target's
+row by the pair's `linkBy` (`s.CustomerCode IS NULL AND t.TaxId = s.TaxId`):
+a second delivery before the link updates rather than inserts again, and at
+the first sync it finds the row the target had all along. The revision that
+links a code is new to that system's other tables, which could not be written
+without it: they read the key's column in `_changed` like `*`.
 
 ### Known limits
 
@@ -203,9 +259,13 @@ customer's name as well, and landed over an edit made in the meantime. Hence
 * Postgres *targets* are not compiled yet. They need the guarded upsert and a
   delete branch of ADR 0020, and the compiler refuses them rather than emit
   a looping job.
-* **Many to one is partly built** (#53): several tables into one record is
-  done (#79). A crosswalk for differing codes (#80), aggregation, which is one-way
-  only (#81), and a third system (#82) are not.
+* **Many to one is partly built** (#53): several tables into one record
+  (#79) and differing codes (#80) are done. Aggregation, which is one-way only
+  (#81), and a third system (#82) are not.
+* A system's code is one column. A composite local key waits for a system
+  that has one.
+* A system whose codes are typed by people cannot receive new records: there
+  is nothing to put in `filledByTarget`. Its rows still link and sync.
 * A part a system has no row for is still awaited as empty from it, and the
   awaited value lives out its hour. The cost is a no-op write back to that
   system if it sets the field within the hour -- SQL Server records no change
@@ -231,6 +291,10 @@ customer's name as well, and landed over an edit made in the meantime. Hence
   for current-value edits, a flipped comparison, deletes ignoring time, no
   de-duplication, gap-filling an emptied field, no partial delete, and no
   redelivery to a winner with a value still on its way.
+  `tests/test_hub_crosswalk.py` does the same for #80, and each of these
+  mutations fails it: no refusal of a second code, never linking by the rule,
+  no tombstone lookup by code, no replay after a link or a creation, the link
+  not written, and parts not held.
 * The hub is a new database, but not new infrastructure (invariant 6). It is
   the Postgres the stack already runs.
 

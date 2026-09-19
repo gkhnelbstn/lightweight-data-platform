@@ -17,7 +17,7 @@ schema:
     physicalName: customer
     physicalType: table
     properties:
-      - {name: CustomerCode, physicalType: int, primaryKey: true, required: true, description: "Customer number."}
+      - {name: CustomerCode, physicalType: varchar, primaryKey: true, required: true, description: "Billing's own customer code, assigned by billing."}
       - {name: Name, physicalType: nvarchar, required: true, description: "Customer name."}
       - {name: TaxId, physicalType: varchar, classification: pii, description: "Tax identifier."}
       - {name: IsActive, physicalType: bit, required: true, description: "Active flag."}

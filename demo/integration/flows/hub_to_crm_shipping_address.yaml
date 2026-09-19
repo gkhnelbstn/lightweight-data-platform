@@ -2,4 +2,4 @@ id: hub_to_crm_shipping_address
 from: hub.customer
 to: crm.account_address
 match: {ADDR_TYPE: SHP}
-columns: {ACCOUNT_CODE: code, CITY: shipping_city}
+columns: {ACCOUNT_CODE: crm_code, CITY: shipping_city}

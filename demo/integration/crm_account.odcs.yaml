@@ -18,7 +18,7 @@ schema:
     physicalName: account
     physicalType: table
     properties:
-      - {name: ACCOUNT_CODE, physicalType: int, primaryKey: true, required: true, description: "Customer number."}
+      - {name: ACCOUNT_CODE, physicalType: int, primaryKey: true, required: true, description: "Account number, assigned by the CRM."}
       - {name: TITLE, physicalType: nvarchar, required: true, description: "Registered name."}
       - {name: TAX_NO, physicalType: varchar, classification: pii, description: "Tax identifier."}
       - {name: ACTIVE, physicalType: char, required: true, description: "'Y' or 'N'."}

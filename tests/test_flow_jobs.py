@@ -51,7 +51,7 @@ def test_a_value_map_is_a_searched_case(compiled):
     assert ("CASE WHEN ACTIVE = 'Y' THEN true WHEN ACTIVE = 'N' THEN false END "
             "AS active") in sql
     assert "'crm.account' AS system" in sql
-    assert "'code,name,tax_id,active' AS fields" in sql
+    assert "'crm_code,name,tax_id,active' AS fields" in sql
     back = compiled["hub_to_crm"]["transform"][3]["query"]
     assert "CASE WHEN active = true THEN 'Y' WHEN active = false THEN 'N' END AS ACTIVE" in back
 
@@ -68,12 +68,14 @@ def test_out_of_the_hub_writes_only_what_a_revision_changed(compiled):
     # billing receives, and not before the record has what billing requires.
     assert "(_skip IS NULL OR _skip <> 'billing.customer')" in upserts
     assert "POSITION(',name,', _changed) > 0" in upserts
-    assert upserts.endswith("code IS NOT NULL AND name IS NOT NULL AND active IS NOT NULL")
+    # billing numbers a customer it receives itself (#80): no code to wait for.
+    assert upserts.endswith("name IS NOT NULL AND active IS NOT NULL")
     merge, delete = (sink["query"] for sink in job["sink"])
     assert merge.startswith("MERGE dbo.customer WITH (HOLDLOCK) AS t")
-    assert ("t.[Name] = CASE WHEN s._changed = '*' OR CHARINDEX(',name,', s._changed) > 0 "
+    new = "s._changed = '*' OR CHARINDEX(',billing_code,', s._changed) > 0"
+    assert (f"t.[Name] = CASE WHEN {new} OR CHARINDEX(',name,', s._changed) > 0 "
             "THEN s.[Name] ELSE t.[Name] END") in merge
-    assert "WHEN NOT MATCHED AND s._changed = '*' THEN INSERT" in merge
+    assert f"WHEN NOT MATCHED AND ({new}) THEN INSERT ([Name], " in merge
     assert delete == "DELETE FROM dbo.customer WHERE [CustomerCode] = ?"
     assert not any(sink.get("generate_sink_sql") for sink in job["sink"])
 
@@ -108,11 +110,17 @@ def test_a_kind_of_row_is_merged_when_present_and_deleted_when_absent(compiled):
     only a revision that changed the invoice address may say so."""
     job = compiled["hub_to_crm_invoice_address"]
     present, emptied = job["transform"][3]["query"], job["transform"][5]["query"]
-    touched = "(_changed = '*' OR POSITION(',invoice_city,', _changed) > 0)"
-    assert touched in present and touched in emptied
+    # Also the revision that gives the record its CRM code (#80): the rows
+    # could not be written before it.
+    touched = ("(_changed = '*' OR POSITION(',crm_code,', _changed) > 0 "
+               "OR POSITION(',invoice_city,', _changed) > 0)")
+    assert touched in present
+    # Emptied only by a revision naming the field: a '*' with the address
+    # still empty is the owner arriving first, not the address going away.
+    assert "WHERE (_skip IS NULL OR _skip <> 'crm.account_address') AND "            "(POSITION(',invoice_city,', _changed) > 0) AND" in emptied
     assert ", 'INV' AS ADDR_TYPE" in present
-    assert present.endswith("code IS NOT NULL AND (invoice_city IS NOT NULL)")
-    assert emptied.endswith("code IS NOT NULL AND invoice_city IS NULL")
+    assert present.endswith("crm_code IS NOT NULL AND (invoice_city IS NOT NULL)")
+    assert emptied.endswith("crm_code IS NOT NULL AND invoice_city IS NULL")
     merge, deleted, gone = (sink["query"] for sink in job["sink"])
     assert "ON t.[ACCOUNT_CODE] = s.[ACCOUNT_CODE] AND t.[ADDR_TYPE] = s.[ADDR_TYPE]" in merge
     assert "WHEN NOT MATCHED THEN INSERT" in merge
@@ -123,4 +131,15 @@ def test_a_kind_of_row_is_merged_when_present_and_deleted_when_absent(compiled):
 def test_a_kind_of_row_is_read_with_its_match(compiled):
     sql = compiled["crm_invoice_address_to_hub"]["transform"][2]["query"]
     assert sql.endswith("WHERE ADDR_TYPE = 'INV'")
-    assert "'code,invoice_city' AS fields" in sql
+    assert "'crm_code,invoice_city' AS fields" in sql
+
+
+def test_a_record_billing_has_not_numbered_yet_is_found_by_its_rule(compiled):
+    """#80: until billing's insert comes back, the hub has no billing code for
+    the record, so a second delivery would insert it twice. It matches the row
+    by the pair's linkBy instead -- at the first sync, the row billing had all
+    along."""
+    merge = compiled["hub_to_billing"]["sink"][0]["query"]
+    assert ("ON (t.[CustomerCode] = s.[CustomerCode] OR (s.[CustomerCode] IS NULL "
+            "AND t.[TaxId] = s.[TaxId]))") in merge
+    assert "[CustomerCode]" not in merge.split("THEN INSERT")[1]

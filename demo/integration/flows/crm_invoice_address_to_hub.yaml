@@ -2,4 +2,4 @@ id: crm_invoice_address_to_hub
 from: crm.account_address
 to: hub.customer
 match: {ADDR_TYPE: INV}
-columns: {code: ACCOUNT_CODE, invoice_city: CITY}
+columns: {crm_code: ACCOUNT_CODE, invoice_city: CITY}

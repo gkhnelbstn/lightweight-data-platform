@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 335 tests; the ones that need a database skip without one
+pytest -q                                                  # 357 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -248,7 +248,7 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   for. Issue #50 is the narrower case that *is* a bug.
 * **An integration between two systems is its own file**, one per direction,
   in `contracts/flows/` (ADR 0019): `from`, `to`, `columns`, `values`,
-  `match`, `filledByTarget`. The two systems' table contracts
+  `match`, `linkBy`, `filledByTarget`. The two systems' table contracts
   describe their tables and know nothing about it. The subdirectory is
   deliberate -- every contract reader and the CI lint glob
   `contracts/*.odcs.yaml` non-recursively, so a flow is never windowed,
@@ -299,7 +299,18 @@ export DQ_HOST=dq.local                                            # ODDRN ident
   *emptied* one has a commit time and is not a gap -- confusing the two is the
   loop the live demo ran. A flow short of the hub's `required` fields owns
   only its part: its delete empties the part, and an empty part goes out as a
-  delete of that row.
+  delete of that row -- only when the revision *names* the field. A `*` with
+  the part empty is the owner arriving first, and deleting there deletes the
+  address on its way in (#80's live run).
+* **Systems with different codes** (#80): the hub contract's `keys` names each
+  system's code column, the record's key is the hub's own, and the codes are
+  golden columns because the SeaTunnel delivery cannot look anything up. An
+  unseen code is linked by the owner flow's `linkBy`: one match links, none
+  creates, anything else (several, a match already coded, a null to match by,
+  a part before its owner) waits in `hub.unmatched` for `hub.link`. A system
+  receiving new records numbers them itself (`filledByTarget` on its key);
+  the `MERGE` also matches by `linkBy` while the code is unknown, or a second
+  delivery inserts the customer twice.
 * `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
   needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
   generated upsert there loops for ever -- so it raises instead.

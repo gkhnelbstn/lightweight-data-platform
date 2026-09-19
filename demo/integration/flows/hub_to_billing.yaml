@@ -1,6 +1,6 @@
 id: hub_to_billing
 from: hub.customer
 to: billing.customer
-columns: {CustomerCode: code, Name: name, TaxId: tax_id, IsActive: active,
+columns: {CustomerCode: billing_code, Name: name, TaxId: tax_id, IsActive: active,
           InvoiceCity: invoice_city, ShippingCity: shipping_city}
-filledByTarget: [CreatedAt]
+filledByTarget: [CreatedAt, CustomerCode]
