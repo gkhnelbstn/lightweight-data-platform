@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 360 tests; the ones that need a database skip without one
+pytest -q                                                  # 367 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -38,6 +38,8 @@ python core/hub.py --init                                  # the two-way integra
 python core/flow_jobs.py --check --contracts demo/integration  # refuse bad flows
 python core/flow_jobs.py --apply --contracts demo/integration  # hub + SeaTunnel jobs (needs --profile flows)
 python demo/integration/verify.py                          # drive the two-way demo and assert it
+python demo/integration/outage.py before|after             # the restart drill, ADR 0023
+python core/flow_jobs.py --apply --resnapshot ...          # start flows from scratch, knowingly
 ```
 
 Both databases come from the environment; nothing hardcodes a DSN:
@@ -327,6 +329,15 @@ trigger.
   receiving new records numbers them itself (`filledByTarget` on its key);
   the `MERGE` also matches by `linkBy` while the code is unknown, or a second
   delivery inserts the customer twice.
+* **A SeaTunnel restart loses every job, and a fresh start is not a
+  recovery.** It re-reads every table, the hub takes the re-read for a first
+  sync, and an edit made during the outage goes to the authority while a
+  delete is never seen -- both measured, both silent. `--apply` resumes each
+  flow under its old id (`hub.job`) from its checkpoint, which the app reads
+  from the shared `seatunnel-checkpoints` volume, and refuses when there is
+  none or when SQL Server's CDC retention ran out meanwhile: SeaTunnel does
+  both wrong without a word. `--resnapshot` is the knowing way through. ADR
+  0023.
 * `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
   needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
   generated upsert there loops for ever -- so it raises instead.

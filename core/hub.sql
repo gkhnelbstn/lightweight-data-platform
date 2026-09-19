@@ -116,6 +116,15 @@ create table if not exists hub.unmatched (
     primary key (entity, system, local)
 );
 
+-- The SeaTunnel job each flow last ran as. A flow resumes under its old id,
+-- from that id's checkpoint, or it re-reads its table from scratch -- which
+-- the hub cannot tell from edits (core/flow_resume.py, ADR 0023).
+create table if not exists hub.job (
+    flow         text primary key,
+    job_id       bigint not null,
+    submitted_at timestamptz not null default now()
+);
+
 -- True, and forgotten, when this value is one the hub sent and is waiting to
 -- see again. Everything older for the same field goes too: it was
 -- superseded. An expectation older than an hour is dropped, because a

@@ -61,6 +61,10 @@ services:
   app:
     environment:
       INTEGRATION_DIR: demo/integration
+    # SeaTunnel's checkpoints, read to decide whether a flow can resume where
+    # it stopped (core/flow_resume.py, ADR 0023). Read-only: they are its.
+    volumes:
+      - seatunnel-checkpoints:/seatunnel/checkpoints:ro
 
   sync-mssql:
     extends:
@@ -87,6 +91,10 @@ services:
       db: { condition: service_healthy }
       mssql: { condition: service_healthy }
     ports: ["8081:8080"]
+    # A restart loses every job (measured); the checkpoints are what a flow
+    # resumes from, so they outlive the container.
+    volumes:
+      - seatunnel-checkpoints:/tmp/seatunnel/checkpoint_snapshot
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080' || exit 1"]
       interval: 5s
@@ -129,6 +137,7 @@ services:
     entrypoint: ["/bin/bash", "/app/bootstrap.sh"]
 
 volumes:
+  seatunnel-checkpoints:
   mssql-data:
   mongo-data:
   superset-home:
