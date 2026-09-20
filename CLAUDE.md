@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 441 tests; the ones that need a database skip without one
+pytest -q                                                  # 442 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -354,8 +354,11 @@ which is the default branch.
   flow under its old id (`hub.job`) from its checkpoint, which the app reads
   from the shared `seatunnel-checkpoints` volume, and refuses when there is
   none or when SQL Server's CDC retention ran out meanwhile: SeaTunnel does
-  both wrong without a word. `--resnapshot` is the knowing way through. ADR
-  0023.
+  both wrong without a word. `--resnapshot` is the knowing way through, and
+  it is also the answer to the third refusal (#125): a checkpoint a crash
+  left half-written is a file like any other, so the flow is resumed from it
+  and SeaTunnel answers the submit with a bare HTTP 500, the `EOFException`
+  reaching only its own server log. ADR 0023.
 * **A table that changed under its flow is refused, never followed**
   (`core/flow_schema.py`): a mapped column missing from the live table, or not
   in its CDC capture instance. Compare captured columns **by id** -- a dropped

@@ -43,6 +43,23 @@ def _at(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def unreadable(name: str, code: int) -> str:
+    """A savepoint SeaTunnel could not restore, said in this file's words.
+
+    ADR 0023 refuses a flow with no checkpoint and one whose CDC retention
+    ran out. There is a third case (#125): a checkpoint that exists but was
+    truncated, because the process was killed between writing it and closing
+    the file. `last_checkpoint_ms` sees the file and reports a checkpoint, and
+    the restore then fails -- SeaTunnel answers the submit with a bare HTTP
+    500 and puts the `EOFException` in its own server log, so without this the
+    operator reads a `urllib` traceback and has to go looking.
+    """
+    return (f"{name}: SeaTunnel could not read its checkpoint (HTTP {code}); "
+            f"a checkpoint a crash left half-written looks exactly like one "
+            f"that is fine. --resnapshot is the way through, and ADR 0023 "
+            f"says what it costs")
+
+
 def plan(flow: str, job_id: int | None, checkpoint_ms: int | None,
          oldest_change_ms: int | None, resnapshot: bool,
          slot_missing: bool = False) -> tuple[str, str | None]:
