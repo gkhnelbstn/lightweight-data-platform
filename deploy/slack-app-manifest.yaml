@@ -1,0 +1,56 @@
+# The Slack app ODD needs to hold a discussion about an asset.
+#
+# ODD's Discussions tab posts into a Slack channel and shows the thread's
+# replies; SLACK is the only provider it has (0.29.0), so without a Slack app
+# the channel list on that tab is empty and no discussion can be started.
+#
+# This is the app, as a manifest. It is created once, by someone who can
+# install an app in the workspace -- the token it returns is a credential and
+# belongs to whoever owns the workspace:
+#
+#   1. https://api.slack.com/apps -> Create New App -> From a manifest, and
+#      paste this file. Change `request_url` to the address Slack can reach
+#      this platform's API at.
+#   2. Install to Workspace, and copy the Bot User OAuth Token (`xoxb-...`).
+#   3. Put it in `.env` beside this repository:
+#
+#          ODD_SLACK_ENABLED=true
+#          ODD_SLACK_TOKEN=xoxb-...
+#
+#      then `docker compose up -d odd-platform`.
+#   4. Invite the bot to each channel a discussion may go to
+#      (`/invite @OpenDataDiscovery`). ODD only lists channels it is a member
+#      of, so a channel nobody invited it to never appears.
+#
+# Replies come back through Slack's Events API, which posts to
+# `request_url`. On a laptop that address is not reachable from Slack, so
+# messages go out and replies do not come back until this platform is
+# published or a tunnel is put in front of it. Everything else works without
+# it.
+display_information:
+  name: OpenDataDiscovery
+  description: Discussions about data assets, from the OpenDataDiscovery catalogue
+  background_color: "#0080ff"
+features:
+  bot_user:
+    display_name: OpenDataDiscovery
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      # conversations.list: the channels the Discussions tab offers.
+      - channels:read
+      # chat.postMessage: the message itself.
+      - chat:write
+      # users.info: who replied, and their avatar.
+      - users:read
+      # message.channels events: the replies in the thread.
+      - channels:history
+settings:
+  event_subscriptions:
+    request_url: https://odd.example.com/api/slack/events
+    bot_events:
+      - message.channels
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
