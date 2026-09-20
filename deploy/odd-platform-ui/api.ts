@@ -481,6 +481,7 @@ export interface Hub {
   conflicts?: HubConflict[];
   held?: HeldRow[];
   deleted?: Tombstone[];
+  activity?: Activity[];
 }
 
 /** A one-way aggregate (#81): many rows summed into one, per group. */
@@ -495,6 +496,14 @@ export interface Totals {
   groups?: number;
   landed_at?: string | null;
   error?: string;
+}
+
+/** Changes that reached the hub, one row per hour and system: the tab's
+ * "is anything arriving" answered as a shape rather than a number (#111). */
+export interface Activity {
+  hour: string;
+  system: string;
+  n: number;
 }
 
 export interface IntegrationState {
@@ -638,3 +647,18 @@ export function seatunnelUrl(): string {
   if (window.__SEATUNNEL_UI__) return window.__SEATUNNEL_UI__.replace(/\/$/, '');
   return `${window.location.protocol}//${window.location.hostname}:8081`;
 }
+
+/** Settling a held row: which record this system's code belongs to, or none
+ * for a record of its own. The hub's refusals come back as the message
+ * (api/integration_detail.py, #111). */
+export const linkHeld = (
+  hub: string,
+  system: string,
+  local: Record<string, unknown>,
+  record: Record<string, unknown> | null
+) =>
+  json<{ record: Record<string, unknown> }>('/api/integration/link', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hub, system, local, record }),
+  });

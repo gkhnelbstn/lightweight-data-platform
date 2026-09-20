@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Typography } from '@mui/material';
+import { Button } from 'components/shared/elements';
 import type { HeldDetail, HistoryEntry, RecordDetail } from './api';
-import { getHeld, getRecord } from './api';
+import { getHeld, getRecord, linkHeld } from './api';
 import { tr, useT, when } from './shared';
 import * as S from './Contracts.styles';
 
@@ -168,9 +169,34 @@ export const HeldPanel: React.FC<{
   const t = useT();
   const [detail, setDetail] = useState<HeldDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [said, setSaid] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     getHeld(hub, system, local).then(setDetail).catch((e: Error) => setError(e.message));
   }, [hub, system, JSON.stringify(local)]);
+
+  /* The decision, taken here rather than printed as SQL for psql (#111). The
+     hub's own refusals come back as the message: a record that has another
+     code from this system already is a refusal, not a silent overwrite. */
+  const settle = async (record: Record<string, unknown> | null) => {
+    setBusy(true);
+    setSaid(null);
+    setRefused(null);
+    try {
+      const got = await linkHeld(hub, system, local, record);
+      setSaid(
+        record
+          ? tr('Linked. The row follows that record from its next change.')
+          : tr('It is a record of its own now: {{record}}', { record: show(got.record) })
+      );
+    } catch (e) {
+      setRefused((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!detail) return <Loading error={error} />;
 
   const rule = Object.entries(detail.rule);
@@ -197,7 +223,7 @@ export const HeldPanel: React.FC<{
               <tr>
                 <th>{t('Candidate record')}</th>
                 <th>{t('Now')}</th>
-                <th>{t('To link it there')}</th>
+                <th>{t('Decide')}</th>
               </tr>
             </thead>
             <tbody>
@@ -211,7 +237,15 @@ export const HeldPanel: React.FC<{
                       .join(' · ')}
                   </td>
                   <td>
-                    <code>{c.link}</code>
+                    <Button
+                      buttonType='secondary-m'
+                      text={t('Link it here')}
+                      isLoading={busy}
+                      onClick={() => settle(c.key)}
+                    />
+                    <Typography variant='caption' color='texts.secondary' component='div'>
+                      <code>{c.link}</code>
+                    </Typography>
                   </td>
                 </tr>
               ))}
@@ -219,9 +253,27 @@ export const HeldPanel: React.FC<{
           </S.Cells>
         </S.Scroll>
       )}
-      <Typography variant='caption' color='texts.secondary'>
-        {t('To make it a record of its own:')} <code>{detail.link_new}</code>
-      </Typography>
+      <S.Actions>
+        <Button
+          buttonType='tertiary-m'
+          text={t('Make it a record of its own')}
+          isLoading={busy}
+          onClick={() => settle(null)}
+        />
+        <Typography variant='caption' color='texts.secondary'>
+          <code>{detail.link_new}</code>
+        </Typography>
+      </S.Actions>
+      {said && (
+        <Typography variant='body2' color='success.main'>
+          {said}
+        </Typography>
+      )}
+      {refused && (
+        <Typography variant='body2' color='error.main'>
+          {refused}
+        </Typography>
+      )}
     </S.Panel>
   );
 };

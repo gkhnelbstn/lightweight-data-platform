@@ -78,6 +78,26 @@ own delivery coming back through a system's CDC reads exactly like that system
 editing the field, and on the first sync the history of a disputed name was
 four such lines.
 
+## The tab answers at a glance, filters, and settles (#111)
+
+Three things were the difference between a page that lists what the hub knows
+and one somebody uses:
+
+* **A header that answers the first question.** Records, how many flows
+  actually run, the slowest arrival, and how much waits for a person -- all
+  counts the tab already had, one tab-click away each. Beside them, one bar
+  per hour of the changes that reached the hub over the last day: a count
+  cannot say whether 33 an hour is normal, and a shape can.
+* **A search box over each log.** Conflicts, held rows and deletions grow.
+  One box over the row's own words -- a code, a system, a field -- rather
+  than a filter per column, because that is what a person arrives knowing.
+* **A decision, taken here.** A held row showed its candidate records and
+  printed the `hub.link` call for someone to paste into psql. The button runs
+  the same function, and the hub's refusals -- a record that already holds
+  another code from this system -- come back as the sentence rather than a
+  500. It is the one write on this tab, and it says which record a code
+  belongs to, never what a field holds.
+
 ## Consequences
 
 * The fork now touches three of ODD's files instead of one, still by anchor,

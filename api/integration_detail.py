@@ -2,15 +2,18 @@
 
 A line in the conflict log says a value lost; it does not say what the record
 looks like now, who set each field, or what led there. This is that second
-look, read-only like the tab (api/integration.py):
+look, beside the tab (api/integration.py):
 
 * **a record**: every field with the system that set it and when, its code in
   each system, the changes that reached the hub for it -- an update as
   `from -> to`, not two rows of before and after -- and its conflicts;
 * **a held row**: why the hub could not place it, the records its rule
-  matched, and the `hub.link` call that settles each choice.
+  matched, and the button that settles each choice -- `hub.link`, run here
+  rather than printed for someone to paste into psql (#111).
 
-Classified values are masked here as everywhere (core/sample.py).
+Classified values are masked here as everywhere (core/sample.py). Reading is
+the rule; the one write is `hub.link`, and it says which record a code
+belongs to -- never what a field holds.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ import json
 import psycopg
 from fastapi import APIRouter, HTTPException
 from psycopg import sql
+from pydantic import BaseModel
 from psycopg.rows import dict_row
 
 from api import integration as tab
@@ -157,3 +161,35 @@ def held(hub: str, system: str, local: str) -> dict:
                         "link": link({keycol: g[keycol]})}
                        for g in (c["g"] for c in candidates)],
         "link_new": link(None)}
+
+
+class Link(BaseModel):
+    hub: str
+    system: str
+    local: dict
+    """The record to attach the code to; nothing makes a record of its own."""
+    record: dict | None = None
+
+
+@router.post("/api/integration/link")
+def link(body: Link) -> dict:
+    """Settle a held row from the screen (#111).
+
+    The panel used to print the `hub.link` call for someone to run on the hub
+    database. This runs that call -- the same function, with the same
+    refusals: a record that does not exist, or one that already holds another
+    code from this system, raises and the row stays held. Nothing else here
+    writes to a hub, and nothing writes a *value*: linking says which record a
+    code belongs to, and the flows carry the values as they always did.
+    """
+    contract, entity, _, _, _ = _hub(body.hub)
+    with _connect(contract) as cx:
+        try:
+            got = cx.execute("select hub.link(%s, %s, %s::jsonb, %s::jsonb) as record",
+                             (entity, body.system, json.dumps(body.local),
+                              json.dumps(body.record) if body.record else None)).fetchone()
+        except psycopg.errors.RaiseException as exc:
+            # The hub's own refusal, which is the sentence a person needs.
+            raise HTTPException(400, str(exc).strip().splitlines()[0]) from exc
+        cx.commit()
+    return {"record": got["record"]}
