@@ -367,6 +367,34 @@ one of them was sent to that system for that record, so any of them
 identifies it. The answer is recognised as the hub's own delivery, and the
 customer stays one customer.
 
+## A row the hub did nothing with is not history (#56)
+
+The inbox is append-only and nothing prunes it, which was fine while every row
+in it was a change: a system writes when something happens. A polled source
+does not (ADR 0027). It answers with every record every time, so the hub gets
+a row per record per poll and decides, almost always, that nothing happened.
+
+Measured on the demo after the loyalty scheme joined it: 2 612 of 3 473 inbox
+rows, from an hour and a half of a ten-second poll of *two* members. 17 280 a
+day, for two members. The same shape at any real size is the whole table
+again, daily.
+
+Two ways to bound it, and the cheaper one is also the more honest: keep the
+rows and prune them on a schedule, or not write what says nothing. The trigger
+already knows -- `hub.merge` has answered by the time `outcome` is written --
+so it drops its own row instead. The log then grows with what changed, which
+is the shape it should have had, and the tab's hourly chart goes back to
+meaning something: it counts these rows, so a poll doing nothing would have
+filled it. Whether a flow is alive is its job's to say, and the tab reads that
+from SeaTunnel.
+
+Nothing reads an `unchanged` row. The merge is synchronous in the trigger, so
+the inbox is a log for people rather than a queue, and retention here trades
+only against how far back a screen can look. That is also why there is no
+retention rule beyond this one: with the no-ops gone the log grows with real
+changes, and no measurement yet says that is a problem. Rows already there
+stay, because an upgrade should not delete somebody's log.
+
 ## Consequences
 
 * The conflict rule has a measurable cost: `hub.conflict` is the list of every

@@ -82,11 +82,11 @@ def crm_address(code, kind):
 
 
 def inbox() -> int:
-    """Rows that did something. The loyalty scheme is polled (ADR 0027), so
-    its rows never stop arriving; one that repeats a member changes nothing
-    and must not make a settled hub look like a loop."""
-    return hub("select count(*) from hub.customer_inbox "
-               "where outcome is distinct from 'unchanged'")[0][0]
+    """Every row the hub kept, which is every row it did something with: one
+    it did nothing with is dropped by the trigger. So a poll repeating a
+    member does not make a settled hub look like a loop, and this can go back
+    to counting the table."""
+    return hub("select count(*) from hub.customer_inbox")[0][0]
 
 
 def shop_row(tax):
