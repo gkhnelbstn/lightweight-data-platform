@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 448 tests; the ones that need a database skip without one
+pytest -q                                                  # 450 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -37,6 +37,7 @@ python core/sync.py --check                                # validate the sync r
 python core/sync.py --apply                                # publication + subscription
 python core/sync_mssql.py --interval 30                    # SQL Server CDC -> Postgres
 python core/hub.py --init                                  # the two-way integration hub
+python core/hub.py --prune --days 30                       # ...and drop the log nobody reads
 python core/flow_jobs.py --check --contracts demo/integration  # refuse bad flows
 python core/flow_jobs.py --apply --contracts demo/integration  # hub + SeaTunnel jobs (needs --profile flows)
 psql -U postgres -f demo/integration/loyalty_setup.sql      # the demo's API source (#97)
@@ -452,6 +453,19 @@ which is the default branch.
   hub card leads with its counts and one bar per hour of what arrived, and
   each log has a search box. Everything else on the tab stays read-only --
   what a field holds is the flows' to carry.
+* **Four tables in the hub grow with what happens, and `--prune` is what
+  bounds three of them** (#56, ADR 0021): each entity's inbox, each
+  aggregate's inbox, and `hub.conflict`. The rest are a working set --
+  `hub.expect` keeps an hour, `hub.pending_before` is popped by the row it
+  waits for, `hub.unmatched` waits for a person -- or the record itself.
+  Nothing reads a pruned row: the merge runs in the trigger, so an inbox is a
+  log for people rather than a queue, and `--days` trades against how far a
+  screen can look and nothing else. **`hub.tombstone` is never pruned**: a
+  change arriving for a record the hub no longer has looks like a new record
+  without one, and how late a delivery can be is CDC retention plus a
+  checkpoint's age plus an outage, which is a number nobody has. Nothing
+  schedules the prune either -- who runs it is a deployment question, the one
+  `core/sync_mssql.py --interval` leaves to compose.
 * **A row the hub did nothing with is not kept** (#56): `hub.on_inbox` drops
   its own row when `hub.merge` answers `unchanged`. A polled source writes one
   per record per poll whether or not anything happened (ADR 0027), and the
