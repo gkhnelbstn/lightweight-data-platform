@@ -94,27 +94,38 @@ const Arrivals: React.FC<{ activity: Activity[] }> = ({ activity }) => {
     );
   }
   const top = Math.max(...hours, 1);
-  const w = 24 * 10;
-  const h = 40;
+  const w = HOURS * 12;
+  const h = 44;
   const total = hours.reduce((sum, n) => sum + n, 0);
   return (
     <div>
       <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden='true'>
         {hours.map((n, i) => (
-          <rect
-            // eslint-disable-next-line react/no-array-index-key
-            key={i}
-            x={i * 10}
-            y={h - Math.max(1, (n / top) * (h - 2))}
-            width={8}
-            height={Math.max(1, (n / top) * (h - 2))}
-            fill={n ? 'currentColor' : '#d5d5d5'}
-            opacity={n ? 0.7 : 1}
-          >
-            <title>{`${n}`}</title>
-          </rect>
+          // The track first: a day of quiet hours is a shape too, and without
+          // it three bars float with nothing to be three of.
+          // eslint-disable-next-line react/no-array-index-key
+          <g key={i}>
+            <rect x={i * 12} y={2} width={9} height={h - 2} fill='currentColor' opacity={0.07} />
+            {n > 0 && (
+              <rect
+                x={i * 12}
+                y={h - Math.max(2, (n / top) * (h - 4))}
+                width={9}
+                height={Math.max(2, (n / top) * (h - 4))}
+                fill='currentColor'
+                opacity={0.65}
+              >
+                <title>{`${n}`}</title>
+              </rect>
+            )}
+          </g>
         ))}
       </svg>
+      <Typography variant='caption' color='texts.secondary' component='div'
+                  style={{ width: w, display: 'flex', justifyContent: 'space-between' }}>
+        <span>{t('24 hours ago')}</span>
+        <span>{t('now')}</span>
+      </Typography>
       <Typography variant='caption' color='texts.secondary' component='div'>
         {t('{{n}} changes reached the hub in the last 24 hours · busiest hour {{top}}', {
           n: total,

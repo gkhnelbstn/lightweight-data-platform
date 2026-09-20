@@ -354,5 +354,6 @@
   "{{failed}} of {{total}} failing, {{errored}} could not run · score {{score}}": "{{total}} kontrolden {{failed}} tanesi hatalı, {{errored}} tanesi çalışamadı · puan {{score}}",
   "failing": "hatalı",
   "could not run": "çalışamadı",
-  "passing": "geçiyor"
+  "passing": "geçiyor",
+  "24 hours ago": "24 saat önce"
 }
