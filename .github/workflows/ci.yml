@@ -184,6 +184,107 @@ jobs:
           print("the day is replaced, not merged")
           PY
 
+  flows:
+    name: a flow actually runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: docker/setup-buildx-action@v3
+      # The image this job exercises is the one the `images` job builds, from
+      # the same cache: two patches of upstream's, and the connector jars they
+      # change (ADR 0011, ADR 0020). Until this job existed that image was
+      # built and thrown away, so a patch that applied and no longer worked
+      # was green -- issue #136.
+      - name: the flows' runtime, loaded here
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy
+          file: deploy/Dockerfile.seatunnel
+          push: false
+          load: true
+          tags: lightweight-data-platform/seatunnel:2.3.13
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: the database, and SeaTunnel without the engines it usually waits for
+        run: |
+          set -e
+          compose="docker compose -f compose.yaml -f compose.demo.yaml -f .github/compose.ci.yaml"
+          $compose up -d db
+          $compose up -d --no-deps seatunnel
+          echo "127.0.0.1 db" | sudo tee -a /etc/hosts
+      - run: pip install -e ".[dev]"
+      - name: the shop, which is the Postgres pair
+        run: |
+          docker compose -f compose.yaml -f compose.demo.yaml -f .github/compose.ci.yaml \
+            exec -T db psql -q -U postgres -f - < demo/integration/shop_setup.sql
+      # One pair, on one engine: no SQL Server, no API, no aggregate. Every
+      # flow is still read and refused as a set; `--only` starts these two.
+      - name: submit the two flows
+        env:
+          PG_USER: postgres
+          PG_PASSWORD: postgres
+          SEATUNNEL_URL: http://localhost:8081
+        run: |
+          for i in $(seq 60); do
+            curl -sf http://localhost:8081/overview > /dev/null && break
+            sleep 2
+          done
+          python core/flow_jobs.py --apply --only shop_to_hub,hub_to_shop \
+            --contracts demo/integration
+      - name: a row in, and a revision back out
+        run: |
+          python - <<'PY'
+          import time
+          import psycopg
+
+          SHOP = "host=db dbname=shop user=postgres password=postgres"
+          HUB = "host=db dbname=hub user=postgres password=postgres"
+
+
+          def wait(what, check, seconds=180):
+              """SeaTunnel's own waits: a snapshot, a poll, a checkpoint. They
+              are seconds on a laptop and slower here, so this is generous and
+              says what it was waiting for when it gives up."""
+              for _ in range(seconds):
+                  got = check()
+                  if got:
+                      return got
+                  time.sleep(1)
+              raise AssertionError(f"{what}: not within {seconds} s")
+
+
+          shop = psycopg.connect(SHOP, autocommit=True)
+          hub = psycopg.connect(HUB, autocommit=True)
+
+          no = shop.execute(
+              "insert into customer (full_name, vat_number, is_active) "
+              "values ('CI', '9990000001', true) returning customer_no").fetchone()[0]
+          record = wait(
+              "the shop's insert reaches the hub",
+              lambda: hub.execute("select customer_id from hub.customer "
+                                  "where shop_code = %s", (no,)).fetchone())
+          print(f"  ok  in: shop {no} is hub record {record[0]}")
+
+          # What a delivery from another system looks like to the out-flow: a
+          # revision naming what it changed, from nobody the shop is (ADR
+          # 0021). There is only one system here, so it is written by hand.
+          hub.execute("update hub.customer set name = 'CI changed', _rev = _rev + 1, "
+                      "_changed = ',name,', _skip = null where customer_id = %s",
+                      (record[0],))
+          wait("the hub's revision reaches the shop",
+               lambda: shop.execute("select 1 from customer where customer_no = %s "
+                                    "and full_name = 'CI changed'", (no,)).fetchone())
+          print("  ok  out: the compiled MERGE wrote it back")
+          PY
+      - name: what SeaTunnel says, if anything above failed
+        if: failure()
+        run: |
+          docker compose -f compose.yaml -f compose.demo.yaml -f .github/compose.ci.yaml \
+            logs --tail 200 seatunnel
+
   images:
     name: build the images
     runs-on: ubuntu-latest

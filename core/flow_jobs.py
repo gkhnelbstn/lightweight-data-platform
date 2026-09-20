@@ -345,12 +345,20 @@ def main() -> None:
     ap.add_argument("--resnapshot", action="store_true",
                     help="with --apply: start flows from scratch rather than from "
                          "their checkpoints (ADR 0023 says what that costs)")
+    # Every flow is still read and still refused as a set -- which systems echo
+    # the hub's writes is a property of the whole of them (ADR 0021) -- and
+    # only these are started or stopped. The Integration tab has had this since
+    # #109; the CLI needs it to bring one pair up without the engines the
+    # others want.
+    ap.add_argument("--only", help="with --apply or --stop: these job names, "
+                                   "comma-separated, rather than all of them")
     args = ap.parse_args()
+    only = {n.strip() for n in args.only.split(",")} if args.only else None
 
     by_id, flows = load(args.contracts)
     if args.stop:
         from core import flow_apply
-        for line in flow_apply.stop({f.id for f in flows}):
+        for line in flow_apply.stop(only or {f.id for f in flows}):
             print(line)
         return
     found = flowmod.problems(flows, by_id)
@@ -365,7 +373,7 @@ def main() -> None:
     else:
         from core import flow_apply
         said, refused = flow_apply.apply(by_id, flows, jobs(by_id, flows),
-                                         resnapshot=args.resnapshot)
+                                         resnapshot=args.resnapshot, only=only)
         for line in said:
             print(line)
         if refused:

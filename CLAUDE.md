@@ -43,6 +43,7 @@ psql -U postgres -f demo/integration/loyalty_setup.sql      # the demo's API sou
 python demo/integration/verify.py                          # drive the two-way demo and assert it
 python demo/integration/outage.py before|after             # the restart drill, ADR 0023
 python core/flow_jobs.py --apply --resnapshot ...          # start flows from scratch, knowingly
+python core/flow_jobs.py --apply --only shop_to_hub ...    # ...or start just these
 # ...or the same four buttons on ODD's Integration tab, which edits the flow files (ADR 0026)
 ```
 
