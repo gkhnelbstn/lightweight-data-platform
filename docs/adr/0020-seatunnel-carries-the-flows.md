@@ -210,6 +210,25 @@ over for one `UPDATE` on SQL Server:
 | commit time | `tran_end_time` `1789819613703` | `SourceTimestamp` `1789819613703`, **with #10667 carried** |
 | before image | `__$operation = 3` | `UPDATE_BEFORE`, then `UPDATE_AFTER` |
 
+**A change to a key column is a delete and an insert, on both engines** (#129).
+Measured after the question was raised by `match`, which pins one of a table's
+several rows per record (#79) and relies on this: a change of the pinned value
+has to reach both flows of the pair whole, and it does only because each of
+them sees a whole event -- the flow that had the row a `DELETE`, the flow that
+gains it an `INSERT`. SQL Server does it because CDC records a key update that
+way; Postgres does it too, which was not obvious, since a table read by a flow
+carries `REPLICA IDENTITY FULL` and the whole old row is therefore in the WAL:
+
+    update shop.customer set customer_no = 7777 where customer_no = 5024
+
+    hub.customer_inbox  DELETE  shop_code 5024  'Anahtar Denemesi'  deleted
+    hub.customer_inbox  INSERT  shop_code 7777  'Anahtar Denemesi'  created
+
+So the rule `core/flows.py` states -- what `match` pins must be part of the
+table's key -- is not engine-specific, and invariant 3 has nothing to say
+here. It also means a system that renumbers a record loses the crosswalk for
+it: the hub sees the record deleted and another one arriving.
+
 * **`EventTime` is when SeaTunnel read the change.** Its source,
   `SeaTunnelRowDebeziumDeserializeSchema`, sets it from `fetchTimestamp`, and
   SQL Server's capture job polls every 5 s. Ordering edits by it is wrong
