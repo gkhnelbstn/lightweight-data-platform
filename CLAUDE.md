@@ -340,10 +340,13 @@ which is the default branch.
   address on its way in (#80's live run). **What it pins must be part of the
   table's key.** Changing it is then a key change, and CDC reports that as a
   delete and an insert: the flow that had the row empties its part, the flow
-  that gains it fills its own -- measured on **SQL Server**, `ADDR_TYPE` moved
-  from `INV` to `SHP` and back, both ways clean through to billing's two
-  columns. Whether Postgres logical decoding reports a key change the same way
-  is untested and nothing pins one there yet. On any
+  that gains it fills its own -- measured, `ADDR_TYPE` moved from `INV` to
+  `SHP` and back, both ways clean through to billing's two columns. **Both
+  engines report a key change that way** (#129, ADR 0020): SQL Server because
+  CDC records it so, Postgres too despite `REPLICA IDENTITY FULL` putting the
+  whole old row in the WAL -- so the rule is not engine-specific. It also
+  means a system that renumbers a record loses the crosswalk for it: the hub
+  sees a delete and another record arriving. On any
   other column the same change is an ordinary update, and each flow's filter
   passes one image of it: half an event each, and the part left behind is
   never emptied. `core/flows.py` refuses it.
