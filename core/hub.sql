@@ -202,19 +202,24 @@ begin
     select * into e from hub.entity x where x.name = p_entity;
     kc := e.key[1];
     ac := e.keys ->> split_part(p_system, '.', 1);
-    -- The newest value awaited per field, as `hub.consume` would read it, and
-    -- nothing stale: an expectation over an hour old is dropped everywhere.
-    with latest as (
-        select distinct on (x.key, x.field) x.key, x.field, x.value
+    -- Every value the hub is still awaiting for a field, not only the newest
+    -- (#128). A delivery made under one value and answered after the field
+    -- changed again is exactly the row nothing else can place, and each of
+    -- these values was sent to this system for this record, so any of them
+    -- identifies the same record. Nothing stale: an expectation over an hour
+    -- old is dropped everywhere.
+    with awaited as (
+        select x.key, x.field,
+               bool_or(x.value is not distinct from (p_row -> x.field)) as sent
           from hub.expect x
          where x.system = p_system and x.entity = p_entity
            and x.created_at >= now() - interval '1 hour'
-         order by x.key, x.field, x.seq desc
+         group by x.key, x.field
     )
     select array_agg(t.key) into keys from (
-        select l.key from latest l group by l.key
+        select a.key from awaited a group by a.key
         -- Field '*' is a delete on its way: no insert answers that.
-        having bool_and(l.field <> '*' and (p_row -> l.field) is not distinct from l.value)
+        having bool_and(a.field <> '*' and a.sent)
     ) t;
     if keys is null then
         return null;
@@ -304,16 +309,23 @@ begin
             elsif hits is not null then
                 hk := jsonb_build_object(kc, hits[1] -> kc);
                 linked := true;
-            else
-                hk := jsonb_build_object(kc, nextval('hub.record_id'));
             end if;
-        end if;
-        -- Before a person is asked: is this the hub's own delivery coming
-        -- back under a key it could not recognise? (#122)
-        if why in ('ambiguous', 'taken') then
-            hk := hub.awaited(p_entity, p_system, p_row);
-            if hk is not null then
-                linked := true;
+            -- Before a person is asked, and before a record is made: is this
+            -- the hub's own delivery coming back under a key nothing can
+            -- place? (#122) The rule's answer to "none of them" is a new
+            -- record, which is a decision, not a failure -- and it is the
+            -- wrong one when the hub is awaiting exactly these values from
+            -- this system, which happens whenever the value it was delivered
+            -- under changed before the answer came back (#128).
+            if hk is null then
+                hk := hub.awaited(p_entity, p_system, p_row);
+                if hk is not null then
+                    linked := true;
+                    why := null;
+                end if;
+            end if;
+            if hk is null and why is null then
+                hk := jsonb_build_object(kc, nextval('hub.record_id'));
             end if;
         end if;
         if hk is null then
@@ -757,14 +769,28 @@ begin
                     where c = any(req) and g -> c = 'null'::jsonb) then
             clist := '*';
         end if;
+        -- `_link` says whether the other systems may still find this record by
+        -- what they match on (#120). It was decided when the record was made,
+        -- and a record whose `linkBy` value is *edited* into a collision kept
+        -- a yes it no longer deserves -- measured, the delivery then landed on
+        -- the other record's rows and overwrote a customer's name (#128). So
+        -- it is asked again whenever this revision changes one of those
+        -- fields, in the same statement: a separate update would be a change
+        -- to the golden record carrying the previous revision's `_changed`,
+        -- and every delivery would run twice.
         execute format('update hub.%I g set %s, _at = g._at || $2, _by = g._by || $3, '
-                       '_rev = g._rev + 1, _changed = $4, _skip = $5 '
+                       '_rev = g._rev + 1, _changed = $4, _skip = $5%s '
                        'from jsonb_populate_record(null::hub.%I, $1) r where %s',
                        p_entity,
                        (select string_agg(format('%I = r.%I', c, c), ', ') from jsonb_object_keys(changed) c),
+                       case when exists (select 1 from hub.system s, unnest(s.link_by) c
+                                          where s.entity = p_entity and changed ? c)
+                            then ', _link = hub.linkable($6, to_jsonb(g) || $1, $1)'
+                            else '' end,
                        p_entity, keyed)
             using k || changed, f_at, f_by, clist,
-                  case when cardinality(lost) > 0 or cardinality(back) > 0 then null else p_system end;
+                  case when cardinality(lost) > 0 or cardinality(back) > 0 then null else p_system end,
+                  p_entity;
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(changed) e
           where s.entity = p_entity and s.system <> p_system and not e.key = any(skip)

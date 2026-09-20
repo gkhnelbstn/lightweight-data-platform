@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 443 tests; the ones that need a database skip without one
+pytest -q                                                  # 446 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -428,7 +428,20 @@ which is the default branch.
   so `hub.resolve` asks the expectations instead (`hub.awaited`, #122): one
   record awaiting exactly these values from this system is the delivery coming
   back. Every field the hub sent must match, and exactly one record may match,
-  or it waits for a person as before.
+  or it waits for a person as before. **The flag follows the value** (#128):
+  it was decided once, when the record was made, so a record whose `linkBy`
+  value is later *edited* into a collision kept a yes it no longer deserved --
+  measured live, one poll after the edit a customer's name was overwritten in
+  the shop and echoed into the hub. It is asked again in the same statement
+  that writes a revision touching one of those fields; a separate update would
+  be a change to the golden record carrying the previous revision's
+  `_changed`, and every delivery would run twice. `hub.awaited` is also asked
+  **before a record is made**, not only before a person is: "none of them
+  matched" is a decision, and it is the wrong one when the hub is awaiting
+  exactly these values -- which is what happens when the value a delivery went
+  out under changes before the answer comes back. It looks at every value
+  still awaited for a field, not only the newest, because all of them were
+  sent to that system for that record.
 * **The Integration tab's one write is `hub.link`** (#111, ADR 0022): a held
   row is settled from the screen, and the hub's own refusal is the message. A
   hub card leads with its counts and one bar per hour of what arrived, and
