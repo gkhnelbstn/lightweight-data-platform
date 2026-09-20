@@ -291,6 +291,28 @@ without it: they read the key's column in `_changed` like `*`.
   sends a value the target's constraints refuse, the SeaTunnel job fails.
   Surfacing that is the compiler's and the panel's job.
 
+## A record made beside another one may not be found by what they share (#120)
+
+The delivery matches a target row by `linkBy` while that system's code for the
+record is unknown (#80). That is what finds the row a system had all along at
+the first sync, and it is wrong for exactly one case: a record the hub created
+*because* the value was shared. Live, a shop customer under another customer's
+tax number was settled as a record of its own, and its delivery matched the
+other customer's rows in the CRM and in billing and overwrote their name --
+which those systems then echoed back as an edit.
+
+So the golden record carries `_link`, and the fallback branch of the compiled
+`MERGE` reads it. `hub.linkable` sets it when the record is created: false
+when another record already holds the values some system matches by. Such a
+record goes out as an insert, and the receiving system numbers it itself.
+
+What it costs: the insert coming back cannot be linked automatically either --
+the same value is ambiguous on the way in -- so it waits for a person, who
+now has a button for it (ADR 0022). Linking the delivery's own insert back to
+the record that caused it is the follow-up, and until it exists the wait is
+the honest outcome: two customers that share a tax number are not something a
+rule can tell apart.
+
 ## Consequences
 
 * The conflict rule has a measurable cost: `hub.conflict` is the list of every

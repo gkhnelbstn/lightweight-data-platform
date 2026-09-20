@@ -188,3 +188,27 @@ def test_a_held_row_deleted_is_forgotten(hub):
     send(hub, "billing.customer", "INSERT", 100, **{**BILLING, "tax_id": None}, city=None)
     send(hub, "billing.customer", "DELETE", 110, **{**BILLING, "tax_id": None}, city=None)
     assert held(hub) == []
+
+
+def test_a_record_made_beside_one_with_the_same_tax_id_is_not_delivered_by_it(hub):
+    """#120: the out-flow matches by `linkBy` while a system's code is
+    unknown, which is how the first sync finds the row a system had all
+    along. A record the hub created *beside* one with the same value must not
+    be found that way, or its delivery lands on the other record's row -- as
+    it did live, overwriting a customer's name with another's."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    got = dict(hub.execute("select crm_code, _link from hub.customer order by crm_code"
+                           ).fetchall())
+    assert got == {1: True, 2: False}
+
+
+def test_a_record_whose_value_is_its_own_is_still_found_by_it(hub):
+    """The fallback is not weakened for the case it exists for: a customer
+    nobody else holds is matched by its tax id in the system that has it."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, crm_code=2, name="Other", tax_id="222")
+    got = dict(hub.execute("select crm_code, _link from hub.customer order by crm_code"
+                           ).fetchall())
+    assert got == {1: True, 2: True}

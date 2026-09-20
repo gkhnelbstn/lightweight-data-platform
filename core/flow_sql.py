@@ -59,14 +59,22 @@ def merge(target: Target, keyed: list[tuple[str, str]], carried: list[tuple[str,
     """`keyed` and `carried` are (target column, hub column). `assigned` are
     key columns the target fills itself; `linked` the target columns of the
     pair's `linkBy`; `replace_only` a flow of one kind of row (`match`), which
-    is created whenever its value changes."""
+    is created whenever its value changes.
+
+    The `linkBy` fallback carries the hub's `_link` with it (#120). It is what
+    finds the row a system had all along, before the hub knows its code -- and
+    a record the hub created *beside* one with the same value must not be
+    matched by it, or the delivery lands on the other record's row."""
     q = lambda c: _q(target, c)  # noqa: E731
     written = [t for t, _ in keyed + carried] + list(match)
     using = ", ".join(f"{_param(target, c)} AS {q(c)}" for c in written) + \
         f", {_param(target, '_changed')} AS _changed"
     on = " AND ".join(f"t.{q(c)} = s.{q(c)}" for c in [t for t, _ in keyed] + list(match))
     if assigned and linked:
+        using += f", {_param(target, '_link')} AS _link"
+        allowed = "s._link = 1" if target.engine == "sqlserver" else 's."_link"'
         on = (f"({on} OR ({' AND '.join(f's.{q(c)} IS NULL' for c in sorted(assigned))} AND "
+              + f"{allowed} AND "
               + " AND ".join(f"t.{q(c)} = s.{q(c)}" for c in linked) + "))")
     new = " OR ".join(["s._changed = '*'"] + [
         _has(target, f",{s},", "s._changed") for _, s in keyed])
