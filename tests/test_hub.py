@@ -446,3 +446,50 @@ def test_each_row_says_what_the_hub_did_with_it(hub):
     update(hub, "billing", 210, ACME, {**ACME, "name": "Acme Ltd"})       # echo
     assert outcomes(hub, "crm") == ["created", "applied"]
     assert outcomes(hub, "billing") == ["echo", "lost", "echo"]
+
+
+def api(cx):
+    """A one-way source: it receives nothing, so nothing is ever awaited from
+    it -- which is all `fields` had to say (ADR 0027)."""
+    from core import hub as h
+    h.register_system(cx, "customer", "api", [])
+
+
+def test_nothing_is_awaited_from_a_system_that_receives_nothing(hub):
+    api(hub)
+    send(hub, "crm", "INSERT", 100, **ACME)
+    assert expected(hub, "api") == [] and expected(hub, "billing") != []
+
+
+def test_a_poll_that_repeats_a_record_is_not_an_edit(hub):
+    """An API answers with the record as it is now, so every poll carries
+    every field. The previous poll is the before image, and a field that did
+    not move between two polls is not an edit."""
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 160, code=1, name="Acme", active=True)
+    assert golden(hub)[:2] == ("Acme", True)
+    assert hub.execute("select _rev from hub.customer where code = 1").fetchone() == (0,)
+    assert conflicts(hub) == []
+
+
+def test_an_api_never_written_back_does_not_dispute_a_field_every_poll(hub):
+    """Nothing writes to an API, so a value another system won stays wrong in
+    its answer for ever. Read as an edit, that would be one conflict row per
+    record per poll; read against the previous poll, it is no edit at all."""
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    update(hub, "crm", 200, {"code": 1, "name": "Acme"}, {"code": 1, "name": "Acme Ltd"})
+    send(hub, "api", "POLL", 260, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 320, code=1, name="Acme", active=True)
+    assert golden(hub)[0] == "Acme Ltd"
+    assert conflicts(hub) == []
+
+
+def test_a_change_in_the_api_is_one_edit(hub):
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 200, code=1, name="Acme Bakery", active=True)
+    assert golden(hub)[:2] == ("Acme Bakery", True)
+    assert hub.execute("select _rev, _changed from hub.customer where code = 1"
+                       ).fetchone() == (1, ",name,")

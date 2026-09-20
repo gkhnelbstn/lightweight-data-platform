@@ -45,8 +45,19 @@ def env(flow: flowmod.Flow, name: str) -> dict:
     in (ADR 0021). `read_limit.rows_per_second` is SeaTunnel's own throttle,
     and it is what keeps a first snapshot from taking the source's disk."""
     rows = flow.job.get("rowsPerSecond")
+    # A polling source sleeps between listings and can take a checkpoint only
+    # between them, so its checkpoints are spaced by the poll rather than by
+    # the three seconds a CDC flow uses. Measured: with them closer together
+    # they queue behind the sleep and one expires, and SeaTunnel answers that
+    # by failing the whole job ("Checkpoint expired before completing").
+    poll = flow.job.get("pollSeconds")
     return {"job.mode": "STREAMING", "parallelism": 1, "job.name": name,
-            "checkpoint.interval": flow.job.get("checkpointInterval", CHECKPOINT_MS),
+            "checkpoint.interval": flow.job.get(
+                "checkpointInterval", 2 * poll * 1000 if poll else CHECKPOINT_MS),
+            # ...and one that outlasts a sleeping reader: the barrier waits
+            # for the poll in flight, and the default 30 s is the poll plus a
+            # slow answer on a bad day.
+            **({"checkpoint.timeout": max(60_000, 6 * poll * 1000)} if poll else {}),
             **({"read_limit.rows_per_second": rows} if rows else {})}
 
 
@@ -106,6 +117,32 @@ def _cdc_source(contract: dict, slot: str) -> dict:
                              "decoding.plugin.name": "pgoutput"}}
 
 
+POLL_SECONDS = 60
+
+
+def _api_source(contract: dict, spec: dict, flow: flowmod.Flow) -> dict:
+    """An HTTP endpoint, polled (ADR 0027).
+
+    There is no change log to read, so there is no CDC connector to use: the
+    job asks for the listing every `pollSeconds` and the hub decides what each
+    answer means. SeaTunnel is told the shape of the answer, because it parses
+    the JSON itself -- and only the fields this flow carries, plus the one
+    saying when the record changed.
+    """
+    server = next(s for s in contract["servers"] if s.get("type") == "api")
+    props = _properties(contract)
+    wanted = set(flow.mapping.columns.values()) | {spec["changedAt"]}
+    return {"Http": {
+        "plugin_output": "src",
+        "url": server["location"],
+        "method": "GET",
+        "format": "json",
+        "content_field": spec["contentField"],
+        "poll_interval_millis": flow.job.get("pollSeconds", POLL_SECONDS) * 1000,
+        "schema": {"fields": {n: flowmod.API_TYPES[p["physicalType"]]
+                              for n, p in props.items() if n in wanted}}}}
+
+
 def _where(conditions: list[str]) -> str:
     return f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -129,10 +166,17 @@ def inbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
     part of a record leaves the others null, and those nulls are not values.
     `match` takes one kind of row from a table with several per record."""
     hub, entity = by_id[flow.target], by_id[flow.target]["schema"][0]["name"]
+    source = by_id[flow.mapping.reference]
+    api = flowmod.api_of(source)
     cols = list(flow.mapping.columns)
     unmapped = _unmapped(flow)
     extra = ["unmapped"] if unmapped else []
-    sql = (f"SELECT row_kind, source_ms, {_literal(flow.mapping.reference)} AS system, "
+    # A poll has no row kind and no commit time of its own: every record the
+    # listing carries is a POLL, and when it changed is a field of it
+    # (ADR 0027). A CDC source gets both from the connector.
+    said = (f"'POLL' AS row_kind, {api['changedAt']} AS source_ms" if api
+            else "row_kind, source_ms")
+    sql = (f"SELECT {said}, {_literal(flow.mapping.reference)} AS system, "
            f"{_literal(','.join(cols))} AS fields, {_projection(flow)}"
            + (f", {unmapped} AS unmapped" if unmapped else "") + " FROM dual"
            + _where([f"{c} = {_literal(v)}" for c, v in flow.match.items()]))
@@ -141,14 +185,16 @@ def inbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
               f"({', '.join('?' * (len(cols) + len(extra) + 4))})")
     return {
         "env": env(flow, flow.id),
-        "source": [_cdc_source(by_id[flow.mapping.reference], f"{flow.id}_slot")],
-        "transform": [
+        "source": [_api_source(source, api, flow) if api
+                   else _cdc_source(source, f"{flow.id}_slot")],
+        "transform": ([] if api else [
             {"Metadata": {"plugin_input": "src", "plugin_output": "meta",
                           "metadata_fields": {"SourceTimestamp": "source_ms"}}},
             {"RowKindExtractor": {"plugin_input": "meta", "plugin_output": "log",
                                   "custom_field_name": "row_kind",
-                                  "transform_type": "FULL"}},
-            {"Sql": {"plugin_input": "log", "plugin_output": "out", "query": sql}}],
+                                  "transform_type": "FULL"}}]) + [
+            {"Sql": {"plugin_input": "src" if api else "log",
+                     "plugin_output": "out", "query": sql}}],
         "sink": [{"Jdbc": {"plugin_input": "out", **_jdbc(_server(hub)),
                            "query": insert}}]}
 

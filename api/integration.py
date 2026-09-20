@@ -183,8 +183,12 @@ def integration() -> dict:
             row["in" if into else "out"].append(
                 {"flow": f.id, "match": f.match, "job": running.get(f.id)})
             # The table changed under the flow: refused on --apply, shown here
-            # while it runs (core/flow_schema.py).
-            host = (flow_schema.server_of(f, by_id) or {}).get("host")
+            # while it runs (core/flow_schema.py). An API source has no table
+            # and no server to ask (ADR 0027), so there is nothing to drift.
+            server = flow_schema.server_of(f, by_id)
+            if server is None:
+                continue
+            host = server.get("host")
             if host in unreachable:
                 continue
             try:
