@@ -28,7 +28,8 @@ datacontract/datacontract-cli/issues/1593
 opendatadiscovery/odd-platform/issues/1882
 opendatadiscovery/odd-platform/issues/1880
 opendatadiscovery/odd-platform/issues/1898
-microsoft/presidio/pulls/2250'
+microsoft/presidio/pulls/2250
+apache/seatunnel/pulls/12412'
 for r in $repos; do
   printf '%-52s ' "$r"
   gh api "repos/$r" -q '"\(.state) merged=\(.merged // "-")"'
@@ -43,12 +44,15 @@ done
 | #5 | presidio#2250 | `vkn_is_valid` and the inner `Vkn` recognizer |
 | #8 | odd-platform#1880 | the `api` stage of `deploy/Dockerfile.odd-platform` |
 | #19 | odd-platform#1898 | `deploy/odd-platform-lineage-icon.mjs` |
+| #126 | apache/seatunnel#12412 | the `Http` patch in `deploy/Dockerfile.seatunnel` |
 
-Two more are ours to *file* rather than to watch, and both have their text
-written: `docs/upstream/` holds the SeaTunnel report, and presidio#1995
-(TCKN) is already merged and released.
+Nothing is left to *file*: the SeaTunnel report went as apache/seatunnel#12411
+with its fix as #12412 (the text is in `docs/upstream/`), presidio#1995 (TCKN)
+is merged and released, and presidio#2250 (VKN) is the row above. So the whole
+list is now a waiting game, which is what the loop is for.
 
-Last checked 2026-09-21: all six still open.
+
+Last checked 2026-09-21: all seven still open.
 
 ## Pull requests as a triage surface
 

@@ -1,8 +1,10 @@
 # For apache/seatunnel: the Http source sleeps holding the checkpoint lock
 
-Draft of a bug report to file upstream. Nothing in it is specific to this
-platform; the patch we carry is in `deploy/Dockerfile.seatunnel` and the
-measurement is in issue #126.
+**Filed, 2026-09-21: apache/seatunnel#12411, with the fix as
+apache/seatunnel#12412.** This is the text that went, kept because the patch
+we carry outlives the memory of why. Nothing in it is specific to this
+platform; the patch is in `deploy/Dockerfile.seatunnel` and the measurement is
+in issue #126.
 
 ---
 
