@@ -174,6 +174,59 @@ begin
     values (p_system, p_entity, p_key, p_field, p_value);
 end $$;
 
+-- The record whose delivery this row is, when no rule can say so (#122).
+--
+-- A record the hub created beside one that shares its `linkBy` value goes out
+-- as an insert and the system numbers it itself. That insert comes back under
+-- a key the hub has never seen, carrying the very value the rule cannot tell
+-- apart -- so the rule holds it, and a person is asked about the hub's own
+-- write. The hub knows better: it recorded field by field what it sent to
+-- that system (`hub.expect`), and an insert carrying exactly those values is
+-- that delivery.
+--
+-- Exactly one record, and every field the hub sent matching: two customers
+-- with one name and one tax number, created in the same minute, are genuinely
+-- indistinguishable and still wait for a person. A record that already has a
+-- key of this system is awaiting no insert and is not a candidate.
+create or replace function hub.awaited(p_entity text, p_system text, p_row jsonb)
+returns jsonb language plpgsql as $$
+declare
+    e     hub.entity;
+    kc    text;
+    ac    text;
+    keys  jsonb[];
+    hits  jsonb[];
+begin
+    select * into e from hub.entity x where x.name = p_entity;
+    kc := e.key[1];
+    ac := e.keys ->> split_part(p_system, '.', 1);
+    -- The newest value awaited per field, as `hub.consume` would read it, and
+    -- nothing stale: an expectation over an hour old is dropped everywhere.
+    with latest as (
+        select distinct on (x.key, x.field) x.key, x.field, x.value
+          from hub.expect x
+         where x.system = p_system and x.entity = p_entity
+           and x.created_at >= now() - interval '1 hour'
+         order by x.key, x.field, x.seq desc
+    )
+    select array_agg(t.key) into keys from (
+        select l.key from latest l group by l.key
+        -- Field '*' is a delete on its way: no insert answers that.
+        having bool_and(l.field <> '*' and (p_row -> l.field) is not distinct from l.value)
+    ) t;
+    if keys is null then
+        return null;
+    end if;
+    execute format('select array_agg(jsonb_build_object(%L, g.%I)) from hub.%I g '
+                   'where jsonb_build_object(%L, g.%I) = any($1) and g.%I is null',
+                   kc, kc, p_entity, kc, kc, ac)
+        into hits using keys;
+    if hits is null or cardinality(hits) <> 1 then
+        return null;
+    end if;
+    return hits[1];
+end $$;
+
 -- The golden key of the record a row belongs to, for a system with keys of
 -- its own; null when the row is held instead. A key seen before answers at
 -- once, a deleted record's too. An unseen one is matched by the system's
@@ -251,6 +304,14 @@ begin
                 linked := true;
             else
                 hk := jsonb_build_object(kc, nextval('hub.record_id'));
+            end if;
+        end if;
+        -- Before a person is asked: is this the hub's own delivery coming
+        -- back under a key it could not recognise? (#122)
+        if why in ('ambiguous', 'taken') then
+            hk := hub.awaited(p_entity, p_system, p_row);
+            if hk is not null then
+                linked := true;
             end if;
         end if;
         if hk is null then

@@ -306,12 +306,36 @@ So the golden record carries `_link`, and the fallback branch of the compiled
 when another record already holds the values some system matches by. Such a
 record goes out as an insert, and the receiving system numbers it itself.
 
-What it costs: the insert coming back cannot be linked automatically either --
-the same value is ambiguous on the way in -- so it waits for a person, who
-now has a button for it (ADR 0022). Linking the delivery's own insert back to
-the record that caused it is the follow-up, and until it exists the wait is
-the honest outcome: two customers that share a tax number are not something a
-rule can tell apart.
+What it costs: the insert coming back cannot be linked by the rule either --
+the same value is ambiguous on the way in -- so a person had to settle it,
+with the button ADR 0022 gives them. The section below is how that cost was
+paid back.
+
+## The hub's own insert finds its way back (#122)
+
+A record that goes out as an insert returns through CDC under a key the hub
+has never seen, carrying the value that made it a record of its own. No rule
+can place it -- that is the whole reason it exists -- so it waited for a
+person, once per system it had been delivered to.
+
+The rule is not the only thing the hub knows. It recorded, field by field,
+what it sent to that system (`hub.expect`, which is how an echo is
+recognised). So before holding a row as `ambiguous` or `taken`,
+`hub.resolve` asks `hub.awaited`: a record of this entity awaiting exactly
+these values from this system, with no key of this system yet. One such
+record links it; none or several keep the old behaviour.
+
+The two limits are the point. **Every** field the hub sent must match, not
+some: two customers with one name and one tax number, created in the same
+minute, are genuinely indistinguishable, and a rule that took the first of
+them would be the quiet duplicate this design refuses. And a record that
+already carries this system's key is awaiting no insert, so it is not a
+candidate -- which is what keeps `taken` meaning what it says.
+
+Nothing is consumed here. The link is returned, and `hub.merge` then reads
+the row as any other echo: each field it sent is consumed in the per-field
+loop, and the only change written is the system's own key. A delivery coming
+back is byte for byte the linked first sync it already handled.
 
 ## Consequences
 
