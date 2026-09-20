@@ -13,6 +13,43 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
+## The upstream trackers
+
+Several issues here exist only to be closed by somebody else's release: a
+patch we carry, a workaround we keep, a contribution in flight. ADR 0011's
+rule is that closing one by *deleting* our code is the best outcome
+available, so they are worth re-checking rather than re-deriving.
+
+One command says which are ready:
+
+```bash
+repos='opendatadiscovery/odd-collectors/pulls/136
+datacontract/datacontract-cli/issues/1593
+opendatadiscovery/odd-platform/issues/1882
+opendatadiscovery/odd-platform/issues/1880
+opendatadiscovery/odd-platform/issues/1898
+microsoft/presidio/pulls/2250'
+for r in $repos; do
+  printf '%-52s ' "$r"
+  gh api "repos/$r" -q '"\(.state) merged=\(.merged // "-")"'
+done
+```
+
+| ours | upstream | what we delete when it lands |
+|---|---|---|
+| #1 | odd-collectors#136 | `deploy/Dockerfile.odd-collector` |
+| #2 | datacontract-cli#1593 | the window we build ourselves, into the contract |
+| #3 | odd-platform#1882 | the note that the score cannot go to ODD's metrics API |
+| #5 | presidio#2250 | `vkn_is_valid` and the inner `Vkn` recognizer |
+| #8 | odd-platform#1880 | the `api` stage of `deploy/Dockerfile.odd-platform` |
+| #19 | odd-platform#1898 | `deploy/odd-platform-lineage-icon.mjs` |
+
+Two more are ours to *file* rather than to watch, and both have their text
+written: `docs/upstream/` holds the SeaTunnel report, and presidio#1995
+(TCKN) is already merged and released.
+
+Last checked 2026-09-21: all six still open.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
