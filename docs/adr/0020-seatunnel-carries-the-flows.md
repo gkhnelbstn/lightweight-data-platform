@@ -219,8 +219,10 @@ own comment says the window between two polls is tight enough to need a
 `Thread.sleep(0L)`; a poll interval turns it into one narrow window every ten
 seconds, and `synchronized` is not fair. `Object.wait(long)` releases the
 monitor while it waits, so the patch is one word, carried in
-`deploy/Dockerfile.seatunnel` behind an anchor. `dev` has the same code, so
-there is nothing upstream to cherry-pick.
+`deploy/Dockerfile.seatunnel` behind an anchor. `dev` had the same code, so
+there was nothing upstream to cherry-pick; it is now reported as
+apache/seatunnel#12411 with the one-line fix as apache/seatunnel#12412, and
+the text that went is in `docs/upstream/`.
 
 **A change to a key column is a delete and an insert, on both engines** (#129).
 Measured after the question was raised by `match`, which pins one of a table's
