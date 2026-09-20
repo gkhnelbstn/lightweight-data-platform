@@ -337,6 +337,36 @@ the row as any other echo: each field it sent is consumed in the per-field
 loop, and the only change written is the system's own key. A delivery coming
 back is byte for byte the linked first sync it already handled.
 
+## The flag has to follow the value (#128)
+
+`_link` was set once, by `hub.linkable`, on the create path. So it answered
+"was this value shared **when the record was made**?" while the delivery asks
+"is it shared **now**?". A record whose `linkBy` value is edited into a
+collision kept a yes it no longer deserved, and the fallback was allowed
+again.
+
+Measured on the demo, and it cost a customer their name: a record made with a
+tax number nobody else had, its number then changed to another customer's, and
+one revision later the delivery matched by that number and overwrote the other
+customer's row in the shop -- which the shop echoed back into the golden
+record. #120's corruption exactly, reached by an edit rather than a creation.
+
+So the flag is asked again whenever a revision changes one of the fields some
+system matches by, in the same statement that writes the revision. Not a
+statement of its own: the golden record is read by CDC, and an update that
+changed only `_link` would carry the previous revision's `_changed` out to
+every system a second time.
+
+The same collision cost a duplicate, by a second route. The hub had delivered
+the record to a system under the **old** value and that system had numbered
+it; the value changed before the insert came back; the rule then matched
+nothing, and "nothing matched" meant "a new record". `hub.awaited` is now
+asked before a record is made, not only before a person is, and it looks at
+every value still awaited for a field rather than only the newest -- every
+one of them was sent to that system for that record, so any of them
+identifies it. The answer is recognised as the hub's own delivery, and the
+customer stays one customer.
+
 ## Consequences
 
 * The conflict rule has a measurable cost: `hub.conflict` is the list of every

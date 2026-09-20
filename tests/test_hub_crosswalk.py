@@ -263,3 +263,54 @@ def test_a_poll_held_for_a_person_is_not_remembered_as_a_before_image(hub):
     send(hub, "crm.account", "DELETE", 120, **{**CRM, "crm_code": 2, "name": "Acme branch"})
     send(hub, "billing.customer", "POLL", 130, **polled, city="İzmir")
     assert held(hub) == [] and records(hub) == [(1, "B-7", "Acme LLC", "İzmir")]
+
+
+def change(cx, system, ms, old, new):
+    send(cx, system, "UPDATE_BEFORE", ms, **old)
+    send(cx, system, "UPDATE_AFTER", ms, **new)
+
+
+def links(cx):
+    return dict(cx.execute("select crm_code, _link from hub.customer "
+                           "where crm_code is not null order by crm_code").fetchall())
+
+
+def test_a_record_edited_into_a_collision_stops_being_found_by_its_value(hub):
+    """#128: `_link` was decided when the record was made, so a record whose
+    tax number was later edited into another's kept a yes it no longer
+    deserved -- and its next delivery went out matching by that number, onto
+    the other record's rows. Measured live: a customer's name was overwritten
+    in the shop and echoed back into the hub, one poll after the edit."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, crm_code=2, name="Other", tax_id="222")
+    assert links(hub) == {1: True, 2: True}
+    change(hub, "crm.account", 110, {"crm_code": 2, "name": "Other", "tax_id": "222"},
+           {"crm_code": 2, "name": "Other", "tax_id": "111"})
+    assert links(hub) == {1: True, 2: False}
+
+
+def test_a_value_edited_back_out_of_a_collision_is_a_way_of_matching_again(hub):
+    """The flag follows the value both ways: it is a fact about the records,
+    not a mark the record carries for ever."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, crm_code=2, name="Other", tax_id="111")
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    assert links(hub) == {1: True, 2: False}
+    change(hub, "crm.account", 110, {"crm_code": 2, "name": "Other", "tax_id": "111"},
+           {"crm_code": 2, "name": "Other", "tax_id": "333"})
+    assert links(hub) == {1: True, 2: True}
+
+
+def test_a_delivery_answered_after_its_value_changed_is_still_the_hubs_own(hub):
+    """#128: the hub delivered the record to billing under one tax number, and
+    the CRM changed the number before billing's insert came back. The rule
+    then matches nothing -- the answer carries the old value -- and a new
+    record was made for a customer the hub already had, with a second code in
+    every other system. The expectation for the value it was delivered under
+    is still there, so the answer is still recognised as the hub's own."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    change(hub, "crm.account", 105, {**CRM}, {**CRM, "tax_id": "999"})
+    send(hub, "billing.customer", "INSERT", 110, billing_code="B-7",
+         name="Acme", tax_id="111", city=None)
+    assert held(hub) == []
+    assert records(hub) == [(1, "B-7", "Acme", None)]
