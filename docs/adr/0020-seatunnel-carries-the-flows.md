@@ -210,6 +210,18 @@ over for one `UPDATE` on SQL Server:
 | commit time | `tran_end_time` `1789819613703` | `SourceTimestamp` `1789819613703`, **with #10667 carried** |
 | before image | `__$operation = 3` | `UPDATE_BEFORE`, then `UPDATE_AFTER` |
 
+**The `Http` source sleeps holding the checkpoint lock** (#126). `pollNext`
+takes `output.getCheckpointLock()` around the whole poll, and the wait between
+listings is inside it -- so a streaming job's checkpoint barrier, which needs
+that same lock (`SourceFlowLifeCycle#triggerBarrier`), never got it and the
+job was failed at the timeout while the reader was still polling. The engine's
+own comment says the window between two polls is tight enough to need a
+`Thread.sleep(0L)`; a poll interval turns it into one narrow window every ten
+seconds, and `synchronized` is not fair. `Object.wait(long)` releases the
+monitor while it waits, so the patch is one word, carried in
+`deploy/Dockerfile.seatunnel` behind an anchor. `dev` has the same code, so
+there is nothing upstream to cherry-pick.
+
 **A change to a key column is a delete and an insert, on both engines** (#129).
 Measured after the question was raised by `match`, which pins one of a table's
 several rows per record (#79) and relies on this: a change of the pinned value

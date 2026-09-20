@@ -39,6 +39,7 @@ python core/sync_mssql.py --interval 30                    # SQL Server CDC -> P
 python core/hub.py --init                                  # the two-way integration hub
 python core/flow_jobs.py --check --contracts demo/integration  # refuse bad flows
 python core/flow_jobs.py --apply --contracts demo/integration  # hub + SeaTunnel jobs (needs --profile flows)
+psql -U postgres -f demo/integration/loyalty_setup.sql      # the demo's API source (#97)
 python demo/integration/verify.py                          # drive the two-way demo and assert it
 python demo/integration/outage.py before|after             # the restart drill, ADR 0023
 python core/flow_jobs.py --apply --resnapshot ...          # start flows from scratch, knowingly
@@ -484,9 +485,15 @@ which is the default branch.
   (`2 x pollSeconds` unless the flow says otherwise), because a polling reader
   can take one only between listings and closer together they queue behind the
   sleep until one expires, which SeaTunnel answers by failing the whole job.
-  No demo flow ships yet: SeaTunnel 2.3.13's `Http` source does not survive
-  its own checkpoint in streaming mode, whatever the interval and timeout
-  (#126), and a flow that dies after two minutes is not a demo.
+  The `Http` source needed a patch of our own to get here (#126,
+  `deploy/Dockerfile.seatunnel`): it waits out `poll_interval_millis` holding
+  the checkpoint lock, which is the lock the barrier needs, so a streaming
+  job's checkpoint never completed and SeaTunnel failed the job while the
+  reader was demonstrably still polling. `Object.wait` frees the monitor
+  while it waits and `Thread.sleep` does not, so the fix is that word.
+  Raising the interval or the timeout cannot help a contended lock. The
+  demo's API is `demo/integration/loyalty_api.py`, the app image with a
+  different command, seeded by `demo/integration/loyalty_setup.sql`.
 * **A discussion about an asset is a Slack thread, and nothing else.** ODD's
   Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
   channel list is empty until a workspace is connected:

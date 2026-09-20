@@ -30,7 +30,8 @@ def test_flows_are_grouped_by_system_table_even_with_everything_down(monkeypatch
     assert got["seatunnel_error"]
     [hub] = got["hubs"]
     assert hub["hub_error"] == "OSError: down"
-    assert hub["codes"] == {"crm": "crm_code", "billing": "billing_code", "shop": "shop_code"}
+    assert hub["codes"] == {"crm": "crm_code", "billing": "billing_code",
+                            "shop": "shop_code", "loyalty": "loyalty_code"}
     address = next(s for s in hub["systems"] if s["table"] == "crm.account_address")
     assert sorted(f["flow"] for f in address["in"]) == [
         "crm_invoice_address_to_hub", "crm_shipping_address_to_hub"]

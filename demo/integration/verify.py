@@ -23,6 +23,8 @@ from core.sync_mssql import mssql_connect
 
 HUB = os.getenv("HUB_DSN", "host=db dbname=hub user=postgres password=postgres")
 SHOP = os.getenv("SHOP_DSN", "host=db dbname=shop user=postgres password=postgres")
+LOYALTY = os.getenv("LOYALTY_DSN",
+                    "host=db dbname=loyalty user=postgres password=postgres")
 CRM = {"host": "mssql", "database": "crm"}
 BILLING = {"host": "mssql", "database": "billing"}
 LEDGER = {"host": "mssql", "database": "ledger"}
@@ -80,7 +82,11 @@ def crm_address(code, kind):
 
 
 def inbox() -> int:
-    return hub("select count(*) from hub.customer_inbox")[0][0]
+    """Rows that did something. The loyalty scheme is polled (ADR 0027), so
+    its rows never stop arriving; one that repeats a member changes nothing
+    and must not make a settled hub look like a loop."""
+    return hub("select count(*) from hub.customer_inbox "
+               "where outcome is distinct from 'unchanged'")[0][0]
 
 
 def shop_row(tax):
@@ -95,6 +101,35 @@ def shop_row(tax):
 def shop_sql(statement: str, *args) -> None:
     with psycopg.connect(SHOP, autocommit=True) as cx:
         cx.execute(statement, args)
+
+
+def loyalty_sql(statement: str, *args) -> None:
+    with psycopg.connect(LOYALTY, autocommit=True) as cx:
+        cx.execute(statement, args)
+
+
+def member(field: str, no: int = 9000):
+    rows = hub(f"select {field} from hub.customer where loyalty_code = %s", no)
+    return rows[0][0] if rows else None
+
+
+def polled() -> None:
+    """An API source, one way (#97, ADR 0027). The loyalty scheme has no
+    change log, so the flow polls its listing: every member, every time. What
+    must hold is that a poll repeating a member is not an edit -- the previous
+    poll is the before image -- and that a real change still arrives."""
+    wait("a member the other systems hold is found by its tax number, and "
+         "brings the tier no other system keeps",
+         lambda: member("tier") is not None)
+    was = member("_rev")
+    time.sleep(25)
+    assert member("_rev") == was, "a poll that repeated every member moved the record"
+    print(f"  ok  polls that repeat a member change nothing (revision {was})")
+    now = "Platin" if member("tier") != "Platin" else "Altın"
+    loyalty_sql("update member set tier = %s where member_no = 9000", now)
+    wait("a change in the loyalty scheme reaches the hub", lambda: member("tier") == now)
+    assert member("_rev") == was + 1, "one change, one revision"
+    print("  ok  and one change is one revision")
 
 
 def linked(tax) -> bool:
@@ -230,6 +265,7 @@ def main() -> None:
          and not sql(CRM, "select 1 from dbo.account where TAX_NO = ?", other))
 
     totals()
+    polled()
 
     # The last delivery's echo is still on its way; it is recognised, but it
     # lands. Let it, then watch: a loop keeps writing, a settled pair does not.

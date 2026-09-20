@@ -126,20 +126,21 @@ its last answer -- one poll's worth of "no news", not data.
 * The poll interval is a load question for the other side, so it is a flow
   setting (`job: {pollSeconds}`) and is editable on the Integration tab
   (ADR 0026).
-* **Nothing runs it yet.** Measured on a demo API built for this: the flow
-  compiles, the poll arrives, a member the other systems held was found by
-  its tax number and brought the tier no other system keeps, fourteen polls
-  in a minute moved nothing, and a real change reached the hub in 40 s as one
-  revision. Then SeaTunnel 2.3.13's `Http` source failed its checkpoint --
-  "Checkpoint expired before completing" -- and it did so again at every
-  interval and timeout tried, including one well over the poll. That is
-  #126, and until it is answered there is no flow to ship: a source that
-  stops after two minutes is not an integration. The half that is ours is
-  here, and it is what the tests hold.
-* The hub's inbox will never go quiet while an API flow runs, so the demo's
-  echo-loop check will have to count rows that *did* something: a poll
-  repeating a member is `unchanged`, and a settled pair still has to stop
-  writing.
+* **It took a patch of our own to run at all** (#126). SeaTunnel 2.3.13's
+  `Http` source waits out `poll_interval_millis` holding the checkpoint lock,
+  which is the lock the barrier needs, so the checkpoint never completed and
+  the job was failed at the timeout while the reader was still polling.
+  Raising the interval or the timeout cannot help a contended lock.
+  `Object.wait` frees the monitor while it waits, `Thread.sleep` does not,
+  and that word is the whole patch -- carried in
+  `deploy/Dockerfile.seatunnel` behind an anchor, like ADR 0011's.
+* The hub's inbox never goes quiet while an API flow runs, so the demo's
+  echo-loop check counts rows that *did* something: a poll repeating a member
+  is `unchanged`, and a settled pair still has to stop writing.
+* `demo/integration/loyalty_api.py` is the demo's API: the app image with a
+  different command, like `sync-mssql` (ADR 0020). Its records live in a
+  database of its own, which no flow reads -- `demo/integration/verify.py`
+  changes a member there and watches the hub.
 
 ## On upgrade
 

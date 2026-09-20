@@ -13,8 +13,14 @@
 #   applying. Verified against SQL Server: `SourceTimestamp` equals
 #   `cdc.lsn_time_mapping.tran_end_time` to the millisecond.
 #
-# Delete the `src` and `build` stages, and the two COPY lines from `build`,
-# when a SeaTunnel release carries #10667.
+# * Patched again, and this one is ours: the `Http` source waits out
+#   `poll_interval_millis` holding the checkpoint lock, so a streaming job's
+#   checkpoint never completes and SeaTunnel fails the job. `Object.wait`
+#   frees the monitor while it waits; `Thread.sleep` does not. Issue #126.
+#
+# Delete the `src` and `build` stages, and the COPY lines from `build`, when a
+# SeaTunnel release carries #10667 *and* the Http reader stops sleeping under
+# the checkpoint lock.
 #
 #   docker build -f deploy/Dockerfile.seatunnel -t ldp/seatunnel deploy
 ARG SEATUNNEL_VERSION=2.3.13
@@ -28,8 +34,21 @@ RUN git clone -q --filter=blob:none --no-checkout https://github.com/apache/seat
     && git fetch -q origin 6dee790d77830f43690d9e2cf0593d27c8b1c242 \
     && git -c user.name=ldp -c user.email=ldp@localhost \
          cherry-pick 6dee790d77830f43690d9e2cf0593d27c8b1c242
+# ...and one gap of upstream's own, which has no commit to take: the `Http`
+# source waits out `poll_interval_millis` holding the checkpoint lock, which
+# is the lock the barrier needs, so a streaming job's checkpoint never
+# completes and SeaTunnel fails the job (#126). `Object.wait` releases the
+# monitor while it waits and `Thread.sleep` does not, so the fix is the word.
+# The monitor is held there -- `pollNext` takes it around the whole poll -- so
+# this is legal, and a spurious wake-up only polls early. The anchor fails the
+# build rather than letting a patch that no longer applies pass unnoticed,
+# exactly as the ODD one does (ADR 0011).
+RUN f=seatunnel-connectors-v2/connector-http/connector-http-base/src/main/java/org/apache/seatunnel/connectors/seatunnel/http/source/HttpSourceReader.java; \
+    test "$(grep -c 'Thread.sleep(httpParameter.getPollIntervalMillis());' $f)" = "1" \
+      || { echo "the Http poll sleep moved; see ADR 0020 and issue #126"; exit 1; }; \
+    sed -i 's/Thread\.sleep(httpParameter\.getPollIntervalMillis());/output.getCheckpointLock().wait(httpParameter.getPollIntervalMillis());/' $f
 
-# --- only the two jars the commit changes ------------------------------------
+# --- only the jars the patches change ----------------------------------------
 FROM maven:3.9-eclipse-temurin-8 AS build
 ARG SEATUNNEL_VERSION
 COPY --from=src /src /src
@@ -38,8 +57,13 @@ RUN --mount=type=cache,target=/root/.m2 \
     mvn -q -B -Drevision=${SEATUNNEL_VERSION} -DskipTests -Dmaven.test.skip=true \
         -Dspotless.check.skip=true -Dspotless.apply.skip=true -Dcheckstyle.skip=true \
         -Dlicense.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true \
-        -pl seatunnel-core/seatunnel-starter,seatunnel-connectors-v2/connector-cdc/connector-cdc-base \
+        -pl seatunnel-core/seatunnel-starter,seatunnel-connectors-v2/connector-cdc/connector-cdc-base,seatunnel-connectors-v2/connector-http/connector-http-base \
         -am install
+# The Http connector's jar carries the Scala version in its name and the
+# distribution's does not, so it is renamed here rather than guessed in a
+# COPY. The glob matches the shaded jar only -- Maven's untouched one is
+# `original-`-prefixed -- and `cp` fails loudly if that ever stops being true.
+RUN cp seatunnel-connectors-v2/connector-http/connector-http-base/target/connector-http-base-*.jar        /connector-http-base-${SEATUNNEL_VERSION}.jar
 
 FROM apache/seatunnel:${SEATUNNEL_VERSION} AS dist
 
@@ -58,7 +82,6 @@ COPY --from=dist ["/opt/seatunnel/connectors/connector-cdc-sqlserver-${SEATUNNEL
                   "/opt/seatunnel/connectors/connector-cdc-mongodb-${SEATUNNEL_VERSION}.jar", \
                   "/opt/seatunnel/connectors/connector-jdbc-${SEATUNNEL_VERSION}.jar", \
                   "/opt/seatunnel/connectors/connector-mongodb-${SEATUNNEL_VERSION}.jar", \
-                  "/opt/seatunnel/connectors/connector-http-base-${SEATUNNEL_VERSION}.jar", \
                   "connectors/"]
 COPY --from=dist ["/opt/seatunnel/lib/seatunnel-transforms-v2.jar", \
                   "/opt/seatunnel/lib/seatunnel-hadoop3-3.1.4-uber.jar", \
@@ -67,3 +90,4 @@ COPY --from=dist ["/opt/seatunnel/lib/seatunnel-transforms-v2.jar", \
                   "lib/"]
 COPY --from=build /src/seatunnel-core/seatunnel-starter/target/seatunnel-starter.jar starter/
 COPY --from=build /src/seatunnel-connectors-v2/connector-cdc/connector-cdc-base/target/connector-cdc-base-${SEATUNNEL_VERSION}.jar connectors/
+COPY --from=build /connector-http-base-${SEATUNNEL_VERSION}.jar connectors/
