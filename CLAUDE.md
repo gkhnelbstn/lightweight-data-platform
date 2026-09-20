@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 442 tests; the ones that need a database skip without one
+pytest -q                                                  # 443 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -337,7 +337,16 @@ which is the default branch.
   only its part: its delete empties the part, and an empty part goes out as a
   delete of that row -- only when the revision *names* the field. A `*` with
   the part empty is the owner arriving first, and deleting there deletes the
-  address on its way in (#80's live run).
+  address on its way in (#80's live run). **What it pins must be part of the
+  table's key.** Changing it is then a key change, and CDC reports that as a
+  delete and an insert: the flow that had the row empties its part, the flow
+  that gains it fills its own -- measured on **SQL Server**, `ADDR_TYPE` moved
+  from `INV` to `SHP` and back, both ways clean through to billing's two
+  columns. Whether Postgres logical decoding reports a key change the same way
+  is untested and nothing pins one there yet. On any
+  other column the same change is an ordinary update, and each flow's filter
+  passes one image of it: half an event each, and the part left behind is
+  never emptied. `core/flows.py` refuses it.
 * **Systems with different codes** (#80): the hub contract's `keys` names each
   system's code column, the record's key is the hub's own, and the codes are
   golden columns because the SeaTunnel delivery cannot look anything up. An
