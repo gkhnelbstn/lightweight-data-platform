@@ -394,6 +394,11 @@ which is the default branch.
   which job made it. ODD 0.29.0 answers 500 for any table whose columns ever
   changed; the one-line fix is compiled in `deploy/Dockerfile.odd-platform`'s
   `api` stage (ADR 0011).
+* The app image runs `uvicorn` without `--reload`, and `core/`, `api/` and
+  the contracts are **mounted**. So an edit on the host is on disk inside the
+  container and not in the running process: `docker compose restart app`, or
+  the screen keeps answering with the code from before the edit. Measured
+  twice, both times as a feature that "did not work".
 * **A contract's checks can be run from the screen** (`api/runs.py`, #113):
   the same `core/runner.py` run the schedule makes, for today and one
   contract, started in a thread and watched by the panel. One at a time per
