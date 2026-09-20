@@ -348,5 +348,8 @@
   "{{n}} of them match": "{{n}} tanesi eşleşiyor",
   "{{n}} tables changed underneath": "{{n}} tablo altından değişti",
   "{{running}} of {{total}}": "{{total}} akıştan {{running}} tanesi",
-  "{{s}} s after its commit": "kaydedildikten {{s}} sn sonra"
+  "{{s}} s after its commit": "kaydedildikten {{s}} sn sonra",
+  "Run the checks now": "Kontrolleri şimdi çalıştır",
+  "Running. It takes as long as the checks take.": "Çalışıyor. Kontroller ne kadar sürerse o kadar sürer.",
+  "{{failed}} of {{total}} failing, {{errored}} could not run · score {{score}}": "{{total}} kontrolden {{failed}} tanesi hatalı, {{errored}} tanesi çalışamadı · puan {{score}}"
 }

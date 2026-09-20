@@ -17,12 +17,13 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 417 tests; the ones that need a database skip without one
+pytest -q                                                  # 422 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
 python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
+# ...or the Run button on a contract in the Data Quality panel (#113)
 python core/runner.py --odd-url http://odd-platform:8080   # ...and send it to ODD
 python demo/medallion.py                                   # rebuild the demo warehouse
 python demo/medallion.py --with-history                    # ...and give dim.customer a second version to keep
@@ -393,6 +394,12 @@ which is the default branch.
   which job made it. ODD 0.29.0 answers 500 for any table whose columns ever
   changed; the one-line fix is compiled in `deploy/Dockerfile.odd-platform`'s
   `api` stage (ADR 0011).
+* **A contract's checks can be run from the screen** (`api/runs.py`, #113):
+  the same `core/runner.py` run the schedule makes, for today and one
+  contract, started in a thread and watched by the panel. One at a time per
+  contract -- a second run writes the same day twice. The state is in the API
+  process, so a restart forgets a run in flight; what it had already written
+  is in `check_results` either way.
 * **The Integration tab's one write is `hub.link`** (#111, ADR 0022): a held
   row is settled from the screen, and the hub's own refusal is the message. A
   hub card leads with its counts and one bar per hour of what arrived, and
