@@ -117,6 +117,20 @@ def load(directory: Path = FLOWS) -> list[Flow]:
             for p in sorted(directory.glob("*.yaml"))]
 
 
+def api_of(contract: dict | None) -> dict | None:
+    """The `api` custom property, when this contract is an HTTP source.
+
+    An API answers with the record as it is now: no change log, so no before
+    image and no commit time of its own (ADR 0027). `contentField` is the
+    JSON path to the records in the answer, and `changedAt` the field
+    carrying when that record last changed, in epoch milliseconds.
+    """
+    for prop in (contract or {}).get("customProperties") or []:
+        if prop.get("property") == "api":
+            return prop.get("value") or {}
+    return None
+
+
 def hub_of(contract: dict | None) -> dict | None:
     """The `hub` custom property, when this contract is a hub's golden record."""
     for prop in (contract or {}).get("customProperties") or []:
@@ -303,7 +317,8 @@ def _crosswalk_problems(cid: str, keys: dict, required: set[str], key: set[str],
 
 
 # The SeaTunnel settings a flow may state, and what each one must be.
-JOB_SETTINGS = {"checkpointInterval": (1_000, 600_000), "rowsPerSecond": (1, 1_000_000)}
+JOB_SETTINGS = {"checkpointInterval": (1_000, 600_000), "rowsPerSecond": (1, 1_000_000),
+                "pollSeconds": (1, 86_400)}
 
 
 def _job_problems(flow: Flow) -> list[str]:
@@ -317,6 +332,53 @@ def _job_problems(flow: Flow) -> list[str]:
         if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
             out.append(f"{flow.id}: {name} is {value!r}; it is a whole number "
                        f"between {low} and {high}")
+    return out
+
+
+# What an API record may carry: SeaTunnel is told the shape of the answer,
+# and a type it cannot read is a job that fails at the first poll.
+API_TYPES = {"text": "string", "varchar": "string", "string": "string",
+             "int": "int", "integer": "int", "bigint": "bigint",
+             "boolean": "boolean"}
+
+
+def _api_problems(flow: Flow, source: dict, target: dict) -> list[str]:
+    """An HTTP source is a poll, one way, and it must be able to say when a
+    record changed (ADR 0027)."""
+    spec = api_of(source)
+    out: list[str] = []
+    if api_of(target) is not None:
+        return [f"{flow.id}: {flow.target} is an API, and nothing here writes "
+                f"to one; an API source goes one way, into a hub (ADR 0027)"]
+    if spec is None:
+        return out
+    if hub_of(target) is None:
+        out.append(f"{flow.id}: an API source goes into a hub and nowhere "
+                   f"else, because that is what decides what a poll means")
+    props = _properties(source)
+    if not spec.get("contentField"):
+        out.append(f"{flow.id}: {source['id']} does not say contentField, the "
+                   f"JSON path to the records in the answer")
+    at = spec.get("changedAt")
+    if not at:
+        out.append(f"{flow.id}: {source['id']} does not say changedAt. The hub "
+                   f"decides a conflict by commit time, and poll time is when "
+                   f"we noticed -- an API given it would win every dispute it "
+                   f"takes part in, including the ones where its value is the "
+                   f"stale one (ADR 0027)")
+    elif at not in props:
+        out.append(f"{flow.id}: changedAt names {at!r}, which {source['id']} "
+                   f"does not declare")
+    elif props[at].get("physicalType") not in ("bigint", "int", "integer"):
+        out.append(f"{flow.id}: changedAt {at!r} is "
+                   f"{props[at].get('physicalType')!r}; it is epoch "
+                   f"milliseconds, a whole number, because converting a "
+                   f"timestamp is the API's half of the job, not ours")
+    out += [f"{flow.id}: {source['id']} declares {n!r} as "
+            f"{p.get('physicalType')!r}, which an API answer cannot carry "
+            f"({', '.join(sorted(set(API_TYPES)))})"
+            for n, p in props.items() if n in flow.mapping.columns.values()
+            and p.get("physicalType") not in API_TYPES]
     return out
 
 
@@ -337,6 +399,7 @@ def problems(flows: list[Flow], by_id: dict[str, dict]) -> list[str]:
                     f"platform loads" for ref in missing]
             continue
         source, target = by_id[flow.mapping.reference], by_id[flow.target]
+        out += _api_problems(flow, source, target)
         here = _properties(target)
         if hub_of(target) is not None:
             # Several systems, and several tables of one system, fill a hub;

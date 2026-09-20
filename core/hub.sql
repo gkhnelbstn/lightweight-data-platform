@@ -35,7 +35,9 @@ create table if not exists hub.system (
 alter table hub.system add column if not exists fields text[];
 
 -- An update arrives as two rows, the before image first. It waits here for
--- its after image.
+-- its after image. An API source keeps its last poll here too: a poll has no
+-- before image of its own, so the previous one is it (ADR 0027). One row per
+-- system and record either way; the only difference is how long it waits.
 create table if not exists hub.pending_before (
     system text  not null,
     entity text  not null,
@@ -488,6 +490,20 @@ begin
          where p.system = p_system and p.entity = p_entity and p.key = k
         returning p.row into before;
         after := p_row;
+    elsif kind = 'POLL' then
+        -- An API answers with the record as it is now, and has no change log
+        -- behind it (ADR 0027): no before image, so the previous poll is one.
+        -- Without it every poll is an edit of every field -- harmless where
+        -- the hub agrees, and where another system changed a value the API
+        -- was never written back, one `hub.conflict` row per record per poll,
+        -- the loser always the same stale value.
+        delete from hub.pending_before p
+         where p.system = p_system and p.entity = p_entity and p.key = k
+        returning p.row into before;
+        insert into hub.pending_before values (p_system, p_entity, k, p_row)
+            on conflict (system, entity, key) do update set row = excluded.row;
+        after := p_row;
+        kind := 'UPDATE_AFTER';
     elsif kind = 'INSERT' then
         after := p_row;
     elsif kind = 'DELETE' and exists (select 1 from unnest(req) r where not p_row ? r) then

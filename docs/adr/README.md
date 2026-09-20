@@ -54,3 +54,4 @@ upstream feature that would let it be deleted.
 | [0024](0024-aggregates-are-summed-where-they-land.md) | An aggregate is summed where its rows land, and goes one way | SeaTunnel's SQL gains aggregation |
 | [0025](0025-the-golden-record-is-odds-master-data.md) | The golden record is ODD's master data, published one way | ODD gains read-only lookup tables |
 | [0026](0026-a-flow-is-configured-on-the-screen.md) | A flow is configured on the screen, and states two things about how it runs | SeaTunnel gains ordered parallel readers per key |
+| [0027](0027-an-api-source-is-a-poll.md) | An API source is a poll, one way, and it must say when a record changed | SeaTunnel grows an incremental API source, or an API is expected to be written back |

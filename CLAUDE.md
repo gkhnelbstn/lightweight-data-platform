@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 427 tests; the ones that need a database skip without one
+pytest -q                                                  # 438 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -434,6 +434,21 @@ which is the default branch.
   because SeaTunnel answers an empty username with "Unable to create a
   source". `stop()` waits for the job to be gone, or the apply after it reads
   "already running" and starts nothing.
+* **An API source is a poll, and it goes one way** (#97, ADR 0027): an HTTP
+  endpoint has no change log, so there is no CDC connector to point at it --
+  SeaTunnel's `Http` source asks for the listing every `pollSeconds`, into a
+  hub and nowhere else. The contract carries `api: {contentField, changedAt}`
+  beside a `type: api` server, and `changedAt` is **epoch milliseconds**: the
+  hub decides a conflict by commit time, and poll time is when we noticed,
+  which would win every dispute an API takes part in. An API that cannot say
+  it is refused. The previous poll is the before image
+  (`hub.pending_before`), so a repeated poll is not an edit, and a field
+  another system won is not disputed again at every poll -- nothing writes
+  back to an API, so its answer stays stale for ever. Nothing deletes: a
+  record that stops being listed is not an event, and a paging error reads
+  exactly like every record having vanished. The source is registered as
+  receiving no fields (`hub.system.fields = '{}'`), which is already how the
+  hub stops awaiting a delivery that will never be made.
 * **A discussion about an asset is a Slack thread, and nothing else.** ODD's
   Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
   channel list is empty until a workspace is connected:
