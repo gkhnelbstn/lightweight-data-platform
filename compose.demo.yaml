@@ -86,6 +86,22 @@ services:
     ports: !reset []
     profiles: ["demo"]
 
+  # The fourth system of the integration demo, and the only one the platform
+  # may not read directly (#97, ADR 0027): a loyalty scheme that exposes its
+  # members over HTTP. The app image with a different command, like
+  # `sync-mssql`; its own database is seeded by
+  # demo/integration/loyalty_setup.sql and nothing of ours reads it.
+  loyalty:
+    extends:
+      file: compose.yaml
+      service: app
+    depends_on:
+      db: { condition: service_healthy }
+    command: ["uvicorn", "demo.integration.loyalty_api:app",
+              "--host", "0.0.0.0", "--port", "8099"]
+    ports: !reset ["8099:8099"]
+    profiles: ["demo"]
+
   # The runtime of the integration flows (ADR 0020, 0021): one SeaTunnel
   # cluster, the jobs submitted by `core/flow_jobs.py --apply`. Its own web UI
   # is on 8081 (ODD has 8080). Opt-in, because an idle cluster is ~450 MiB:

@@ -24,13 +24,15 @@ schema:
       - {name: crm_code, physicalType: int, description: "The CRM's account code for this customer."}
       - {name: billing_code, physicalType: text, description: "Billing's customer code for this customer."}
       - {name: shop_code, physicalType: bigint, description: "The shop's customer number for this customer."}
+      - {name: loyalty_code, physicalType: bigint, description: "The loyalty scheme's member number for this customer."}
       - {name: name, physicalType: text, required: true, description: "Name, whichever system set it last."}
       - {name: tax_id, physicalType: text, classification: pii, description: "Tax identifier."}
       - {name: active, physicalType: boolean, required: true, description: "Whether the customer is active."}
       - {name: invoice_city, physicalType: text, description: "Invoice address city: a column in billing, a row in the CRM."}
       - {name: shipping_city, physicalType: text, description: "Shipping address city: a column in billing, a row in the CRM."}
+      - {name: tier, physicalType: text, description: "Loyalty tier, which only the loyalty scheme keeps."}
 customProperties:
   - property: hub
     value:
       authority: crm.account
-      keys: {crm: crm_code, billing: billing_code, shop: shop_code}
+      keys: {crm: crm_code, billing: billing_code, shop: shop_code, loyalty: loyalty_code}
