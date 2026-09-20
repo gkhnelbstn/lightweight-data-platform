@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 422 tests; the ones that need a database skip without one
+pytest -q                                                  # 425 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -405,6 +405,14 @@ which is the default branch.
   contract -- a second run writes the same day twice. The state is in the API
   process, so a restart forgets a run in flight; what it had already written
   is in `check_results` either way.
+* **A record created beside one that shares its `linkBy` value carries
+  `_link = false`** (#120, ADR 0021): the out-flow's `MERGE` falls back to
+  matching by `linkBy` while a system's code is unknown, and for such a record
+  that fallback lands on the *other* record's row -- measured live, it
+  overwrote a customer's name with another's and the systems echoed it back.
+  `hub.linkable` sets the flag when the record is created; the delivery then
+  inserts and the system numbers it itself. Its insert coming back is
+  ambiguous for the same reason, so it waits for a person.
 * **The Integration tab's one write is `hub.link`** (#111, ADR 0022): a held
   row is settled from the screen, and the hub's own refusal is the message. A
   hub card leads with its counts and one bar per hour of what arrived, and

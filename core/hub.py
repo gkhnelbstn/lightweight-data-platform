@@ -33,7 +33,7 @@ HUB_SQL = Path(__file__).with_name("hub.sql")
 
 # The golden record's bookkeeping. Not part of any system's shape, never
 # delivered, and never a column name a contract may use.
-META = ("_at", "_by", "_rev", "_changed", "_skip")
+META = ("_at", "_by", "_rev", "_changed", "_skip", "_link")
 
 
 def init(cx: psycopg.Connection) -> None:
@@ -70,12 +70,17 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
         "create table if not exists hub.{} ({}, _at jsonb not null default '{{}}', "
         "_by jsonb not null default '{{}}', _rev bigint not null default 0, "
         "_changed text not null default '*', _skip text, "
+        "_link boolean not null default true, "
         "primary key ({}))").format(
             golden, cols, sql.SQL(", ").join(map(sql.Identifier, key))))
     # What each revision changed and where it came from: a delivery writes
     # only those fields, and not back to their source (ADR 0021).
+    # `_link` says whether the systems may match this record by the pair's
+    # `linkBy` while its code there is unknown (#120): true for every record
+    # that was already here, which is the behaviour they had.
     cx.execute(sql.SQL("alter table hub.{} add column if not exists _changed text "
-                       "not null default '*', add column if not exists _skip text"
+                       "not null default '*', add column if not exists _skip text, "
+                       "add column if not exists _link boolean not null default true"
                        ).format(golden))
     cx.execute(sql.SQL("alter table hub.{} replica identity full").format(golden))
     cx.execute(sql.SQL(

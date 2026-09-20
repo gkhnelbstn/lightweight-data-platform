@@ -186,7 +186,8 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
     default_schema = "dbo" if engine == "sqlserver" else "public"
     where = flow_sql.Target(
         engine, f"{server.get('schema', default_schema)}.{target['schema'][0]['physicalName']}",
-        {n: p.get("physicalType") for n, p in props.items()} | {"_changed": "text"})
+        {n: p.get("physicalType") for n, p in props.items()}
+        | {"_changed": "text", "_link": "boolean"})
     cols = flow.mapping.columns                      # target column: hub column
     keyed = [(t, s) for t, s in cols.items() if t in key]
     carried = [(t, s) for t, s in cols.items() if t not in key]
@@ -212,6 +213,8 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
     # row is created when its value changes. The statements are the engine's
     # (core/flow_sql.py).
     linked = [t for t, s in cols.items() if s in link_by]
+    # The MERGE reads `_link` only when it may fall back to `linkBy` (#120).
+    guarded = bool(linked) and bool({t for t, _ in keyed} & flow.filled_by_target)
     merge = flow_sql.merge(where, keyed, carried, flow.match, assigned, linked,
                            replace_only=bool(flow.match))
     delete = flow_sql.delete(where, keyed, flow.match)
@@ -228,7 +231,8 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
         {"RowKindExtractor": {"plugin_input": "dead", "plugin_output": "dead_rows",
                               "custom_field_name": "row_kind"}},
         {"Sql": {"plugin_input": "live", "plugin_output": "upserts",
-                 "query": f"SELECT {_projection(flow)}{constants}, _changed FROM dual"
+                 "query": f"SELECT {_projection(flow)}{constants}, _changed"
+                          + (", _link" if guarded else "") + " FROM dual"
                           + _where([ours, touched] + waits + present)}},
         {"Sql": {"plugin_input": "dead_rows", "plugin_output": "deletes",
                  "query": f"SELECT {keys_only} FROM dual" + _where([ours] + key_known)}}]

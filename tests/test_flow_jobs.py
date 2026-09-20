@@ -43,7 +43,7 @@ def test_the_shop_is_written_with_the_guarded_postgres_merge(compiled):
     assert merge.startswith('MERGE INTO "public"."customer" AS t USING (SELECT '
                             'CAST(? AS bigint) AS "customer_no"')
     assert ('ON (t."customer_no" = s."customer_no" OR (s."customer_no" IS NULL AND '
-            't."vat_number" = s."vat_number"))') in merge
+            's."_link" AND t."vat_number" = s."vat_number"))') in merge
     assert "IS DISTINCT FROM" in merge
     assert 'THEN INSERT ("full_name", "vat_number", "is_active", "city")' in merge
     assert delete == 'DELETE FROM "public"."customer" WHERE "customer_no" = CAST(? AS bigint)'
@@ -166,7 +166,7 @@ def test_a_record_billing_has_not_numbered_yet_is_found_by_its_rule(compiled):
     along."""
     merge = compiled["hub_to_billing"]["sink"][0]["query"]
     assert ("ON (t.[CustomerCode] = s.[CustomerCode] OR (s.[CustomerCode] IS NULL "
-            "AND t.[TaxId] = s.[TaxId]))") in merge
+            "AND s._link = 1 AND t.[TaxId] = s.[TaxId]))") in merge
     assert "[CustomerCode]" not in merge.split("THEN INSERT")[1]
 
 
@@ -196,3 +196,18 @@ def test_a_flows_settings_reach_seatunnels_env(compiled):
     assert flow_jobs.env(plain, "y") == {
         "job.mode": "STREAMING", "parallelism": 1, "job.name": "y",
         "checkpoint.interval": flow_jobs.CHECKPOINT_MS}
+
+
+def test_only_a_flow_that_can_fall_back_to_linkby_reads_the_hubs_permission(compiled):
+    """#120: the fallback is what finds the row a system had all along. A
+    record the hub created beside one with the same value may not be found
+    that way, so the hub says per record whether it may -- and only the flows
+    that can fall back ask."""
+    billing = compiled["hub_to_billing"]
+    assert "_changed, _link FROM dual" in billing["transform"][3]["query"]
+    assert "? AS _link" in billing["sink"][0]["query"]
+    # The CRM's address flow has no code of its own to wait for, so it never
+    # falls back and never reads it.
+    address = compiled["hub_to_crm_invoice_address"]
+    assert "_link" not in address["transform"][3]["query"]
+    assert "_link" not in address["sink"][0]["query"]

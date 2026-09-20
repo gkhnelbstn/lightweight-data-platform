@@ -285,6 +285,43 @@ begin
     end loop;
 end $$;
 
+-- May the other systems find this record by the values they match on?
+--
+-- No, when another record already holds them (#120). The out-flow's MERGE
+-- falls back to matching by `linkBy` while a system's code is unknown -- that
+-- is how the first sync finds the row a system had all along -- and for a
+-- record deliberately created beside one with the same tax number that
+-- fallback lands on the *other* record's row and overwrites it. Such a record
+-- goes out as an insert instead, and the system numbers it itself.
+create or replace function hub.linkable(p_entity text, p_row jsonb, p_key jsonb)
+returns boolean language plpgsql as $$
+declare
+    e     hub.entity;
+    rule  text[];
+    probe jsonb;
+    taken int;
+begin
+    select * into e from hub.entity x where x.name = p_entity;
+    for rule in select distinct s.link_by from hub.system s
+                 where s.entity = p_entity and s.link_by is not null
+    loop
+        probe := (select jsonb_object_agg(c, p_row -> c) from unnest(rule) c);
+        continue when probe is null
+                   or exists (select 1 from jsonb_each(probe) v where v.value = 'null');
+        execute format(
+            'select count(*) from hub.%I g, jsonb_populate_record(null::hub.%I, $1) r, '
+            'jsonb_populate_record(null::hub.%I, $2) k where %s and g.%I is distinct from k.%I',
+            p_entity, p_entity, p_entity,
+            (select string_agg(format('g.%I = r.%I', c, c), ' and ') from unnest(rule) c),
+            e.key[1], e.key[1])
+            into taken using probe, p_key;
+        if taken > 0 then
+            return false;
+        end if;
+    end loop;
+    return true;
+end $$;
+
 -- A person's decision on held rows: this system's key is that record, or,
 -- with no record given, a record of its own.
 create or replace function hub.link(p_entity text, p_system text, p_local jsonb,
@@ -349,7 +386,7 @@ declare
     -- Fields S won while a delivery of another value to S is still on its
     -- way: that delivery lands after, so S must get its own value again.
     back    text[] := '{}';
-    meta    text[] := array['_at', '_by', '_rev', '_changed', '_skip'];
+    meta    text[] := array['_at', '_by', '_rev', '_changed', '_skip', '_link'];
     clist   text;
     -- A system with keys of its own (#80): the golden column holding them,
     -- every such column (none is a field), and how this row was placed.
@@ -524,7 +561,8 @@ begin
         execute format('insert into hub.%I select * from jsonb_populate_record(null::hub.%I, $1)',
                        p_entity, p_entity)
             using after || jsonb_build_object('_at', f_at, '_by', f_by, '_rev', 0,
-                                              '_changed', '*', '_skip', p_system);
+                                              '_changed', '*', '_skip', p_system,
+                                              '_link', hub.linkable(p_entity, after, k));
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(after) e
           where s.entity = p_entity and s.system <> p_system and not e.key = any(skip)
