@@ -135,8 +135,9 @@ def test_a_person_decides_what_the_rule_cannot(hub):
     # New to everyone else, and the CRM already has it.
     assert hub.execute("select _changed, _skip from hub.customer where crm_code = 2"
                        ).fetchone() == ("*", "crm.account")
-    # Two records now share the tax identifier, so billing's cannot pick one.
-    send(hub, "billing.customer", "INSERT", 110, **BILLING, city=None)
+    # Two records now share the tax identifier, so billing's cannot pick one --
+    # and the hub awaits neither of these values from billing (#122).
+    send(hub, "billing.customer", "INSERT", 110, **{**BILLING, "name": "Acme LLC"}, city=None)
     assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]
     first = hub.execute("select customer_id from hub.customer where crm_code = 1").fetchone()[0]
     hub.execute("select hub.link('customer', 'billing.customer', '{\"billing_code\": \"B-7\"}', "
@@ -212,3 +213,31 @@ def test_a_record_whose_value_is_its_own_is_still_found_by_it(hub):
     got = dict(hub.execute("select crm_code, _link from hub.customer order by crm_code"
                            ).fetchall())
     assert got == {1: True, 2: True}
+
+
+def test_the_hubs_own_insert_finds_the_record_that_caused_it(hub):
+    """#122: the record made beside one with the same tax id goes out as an
+    insert, and billing numbers it itself. The rule cannot place that insert
+    -- the value it matches by is the shared one -- but the hub awaits those
+    exact values from billing, and that is the delivery coming back."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    send(hub, "billing.customer", "INSERT", 110, billing_code="B-9",
+         name="Acme branch", tax_id="111", city=None)
+    assert held(hub) == [] and conflicts(hub) == []
+    assert records(hub) == [(1, None, "Acme", None), (2, "B-9", "Acme branch", None)]
+    # Nothing but the link changed: the same quiet echo as a linked first sync.
+    assert hub.execute("select _changed, _skip from hub.customer where crm_code = 2"
+                       ).fetchone() == (",billing_code,", "billing.customer")
+
+
+def test_two_records_awaiting_the_same_values_still_wait_for_a_person(hub):
+    """Two customers with one name and one tax number, created in the same
+    minute, are genuinely indistinguishable: an insert matching both is not
+    placed by guessing which delivery it answers."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    send(hub, "billing.customer", "INSERT", 110, **BILLING, city=None)
+    assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]

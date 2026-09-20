@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 425 tests; the ones that need a database skip without one
+pytest -q                                                  # 427 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -411,8 +411,12 @@ which is the default branch.
   that fallback lands on the *other* record's row -- measured live, it
   overwrote a customer's name with another's and the systems echoed it back.
   `hub.linkable` sets the flag when the record is created; the delivery then
-  inserts and the system numbers it itself. Its insert coming back is
-  ambiguous for the same reason, so it waits for a person.
+  inserts and the system numbers it itself. That insert comes back under a key
+  nothing can place -- the value it would be matched by is the shared one --
+  so `hub.resolve` asks the expectations instead (`hub.awaited`, #122): one
+  record awaiting exactly these values from this system is the delivery coming
+  back. Every field the hub sent must match, and exactly one record may match,
+  or it waits for a person as before.
 * **The Integration tab's one write is `hub.link`** (#111, ADR 0022): a held
   row is settled from the screen, and the hub's own refusal is the message. A
   hub card leads with its counts and one bar per hour of what arrived, and
