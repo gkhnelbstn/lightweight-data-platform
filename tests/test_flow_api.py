@@ -134,3 +134,16 @@ def test_an_api_source_goes_into_a_hub_and_nowhere_else():
     by_id, loaded = check(hub=table)
     assert any("goes into a hub and nowhere else" in p
                for p in flows.problems(loaded, by_id))
+
+
+def test_the_checkpoints_are_spaced_by_the_poll(job):
+    """A polling source sleeps between listings and can take a checkpoint only
+    between them. Measured: closer together they queue behind the sleep, one
+    expires, and SeaTunnel answers that by failing the whole job."""
+    assert job["env"]["checkpoint.interval"] == 40_000
+
+
+def test_a_checkpoint_closer_together_than_the_poll_is_refused():
+    by_id, loaded = check(doc={**FLOW, "job": {"pollSeconds": 20,
+                                               "checkpointInterval": 5_000}})
+    assert any("queue behind the sleep" in p for p in flows.problems(loaded, by_id))

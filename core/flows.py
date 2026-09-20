@@ -374,6 +374,14 @@ def _api_problems(flow: Flow, source: dict, target: dict) -> list[str]:
                    f"{props[at].get('physicalType')!r}; it is epoch "
                    f"milliseconds, a whole number, because converting a "
                    f"timestamp is the API's half of the job, not ours")
+    poll = flow.job.get("pollSeconds")
+    every = flow.job.get("checkpointInterval")
+    if poll and every and every <= poll * 1000:
+        out.append(f"{flow.id}: checkpointInterval is {every} ms and the poll "
+                   f"is {poll * 1000} ms. A polling source can take a "
+                   f"checkpoint only between listings, so closer together "
+                   f"they queue behind the sleep and one expires -- which "
+                   f"SeaTunnel answers by failing the job")
     out += [f"{flow.id}: {source['id']} declares {n!r} as "
             f"{p.get('physicalType')!r}, which an API answer cannot carry "
             f"({', '.join(sorted(set(API_TYPES)))})"

@@ -89,8 +89,13 @@ def register(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> None:
                           and not (keys and n in key)])
             into = {f.mapping.reference for f in flows if f.target == cid}
             out = {f.target for f in flows if f.mapping.reference == cid}
-            for system in sorted(into & out):
-                # What it receives: the hub columns its flows back read.
+            for system in sorted(into):
+                # What it receives: the hub columns its flows back read. A
+                # one-way source receives none (an API, ADR 0027), and an
+                # empty list is already how the hub stops awaiting a delivery
+                # that will never be made -- it is still registered, because
+                # its `linkBy` rule is what places a row under a code the hub
+                # has not seen.
                 fields = sorted({src for f in flows
                                  if f.mapping.reference == cid and f.target == system
                                  for src in f.mapping.columns.values()})
@@ -98,7 +103,7 @@ def register(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> None:
                                 and f.mapping.reference == system and f.target == cid), None)
                 hub.register_system(cx, entity, system, fields, link_by)
         print(f"hub {cid}: {entity} on {server['host']}/{server['database']}, "
-              f"systems {sorted(into & out)}")
+              f"systems {sorted(into)}")
     for flow in flows:
         if flow.aggregates:
             server = flow_aggregate.landing(by_id)

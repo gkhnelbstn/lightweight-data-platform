@@ -93,9 +93,29 @@ that did not move between two polls is then not an edit, exactly as it is not
 for a CDC source, and the first poll after a real change in the API is one
 edit of one field.
 
+It is remembered **only once the row is placed**. A poll still waiting in
+`hub.unmatched` has changed nothing yet, and kept as a before image it makes
+the next answer -- the same one, because nothing changed in the system either
+-- look like no news: the record it finally finds is linked and left empty, or
+never created at all. Measured on the demo before the order was fixed.
+
 This is the answer to both of #97's "must not happen": a poll that returns
 the same record twice is not two edits, and a paging error that returns
 nothing is not a delete, because nothing here deletes.
+
+### Its checkpoints are spaced by its poll
+
+A polling reader sleeps between listings and can take a checkpoint only
+between them. With checkpoints closer together than the poll they queue
+behind the sleep, one expires, and SeaTunnel answers that by failing the
+whole job -- measured, with `checkpoint.interval` at the three seconds a CDC
+flow uses and a ten-second poll. So an API flow's interval defaults to twice
+its poll and a shorter stated one is refused, and its `checkpoint.timeout`
+outlasts a poll in flight.
+
+There is little to resume anyway: the next poll returns the whole listing, so
+an API flow that restarts from scratch loses nothing but the before image of
+its last answer -- one poll's worth of "no news", not data.
 
 ## Consequences
 
@@ -106,14 +126,27 @@ nothing is not a delete, because nothing here deletes.
 * The poll interval is a load question for the other side, so it is a flow
   setting (`job: {pollSeconds}`) and is editable on the Integration tab
   (ADR 0026).
-* `demo/integration/loyalty_api.py` is the demo's API: the app image with a
-  different command, like `sync-mssql` (ADR 0020). Zero new infrastructure.
+* **Nothing runs it yet.** Measured on a demo API built for this: the flow
+  compiles, the poll arrives, a member the other systems held was found by
+  its tax number and brought the tier no other system keeps, fourteen polls
+  in a minute moved nothing, and a real change reached the hub in 40 s as one
+  revision. Then SeaTunnel 2.3.13's `Http` source failed its checkpoint --
+  "Checkpoint expired before completing" -- and it did so again at every
+  interval and timeout tried, including one well over the poll. That is
+  #126, and until it is answered there is no flow to ship: a source that
+  stops after two minutes is not an integration. The half that is ours is
+  here, and it is what the tests hold.
+* The hub's inbox will never go quiet while an API flow runs, so the demo's
+  echo-loop check will have to count rows that *did* something: a poll
+  repeating a member is `unchanged`, and a settled pair still has to stop
+  writing.
 
 ## On upgrade
 
 * SeaTunnel's `Http` source gained `poll_interval_millis` before 2.3.13 and
   the option names are checked against the connector jar, not the website.
-  Check them again on a SeaTunnel bump.
+  Check them again on a SeaTunnel bump -- and check #126 first: a bump is the
+  most likely thing to fix it.
 * If SeaTunnel ever grows an incremental API source (a cursor the server
   honours), the poll here becomes a full listing that is cheaper to replace
   than to keep.

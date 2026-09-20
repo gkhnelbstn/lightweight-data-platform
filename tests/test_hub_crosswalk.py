@@ -241,3 +241,25 @@ def test_two_records_awaiting_the_same_values_still_wait_for_a_person(hub):
     hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
     send(hub, "billing.customer", "INSERT", 110, **BILLING, city=None)
     assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]
+
+
+def test_a_poll_held_for_a_person_is_not_remembered_as_a_before_image(hub):
+    """#97, ADR 0027: a poll waiting in `hub.unmatched` has changed nothing
+    yet. Kept as the before image of the next poll, its values would look
+    unchanged -- and the record it finally found would be linked and left
+    empty, because the next poll is the same answer: nothing changed in the
+    system either. A poll is remembered only once it is placed."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    # Two records share the tax number and the hub awaits neither of these
+    # values from billing (#122), so the poll cannot pick one.
+    polled = {**BILLING, "name": "Acme LLC"}
+    send(hub, "billing.customer", "POLL", 110, **polled, city="İzmir")
+    assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]
+    # The branch closes; one record is left, and the next poll -- the same
+    # answer, because nothing changed in billing -- is placed and brings its
+    # city with it.
+    send(hub, "crm.account", "DELETE", 120, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    send(hub, "billing.customer", "POLL", 130, **polled, city="İzmir")
+    assert held(hub) == [] and records(hub) == [(1, "B-7", "Acme LLC", "İzmir")]

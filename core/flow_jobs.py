@@ -45,8 +45,19 @@ def env(flow: flowmod.Flow, name: str) -> dict:
     in (ADR 0021). `read_limit.rows_per_second` is SeaTunnel's own throttle,
     and it is what keeps a first snapshot from taking the source's disk."""
     rows = flow.job.get("rowsPerSecond")
+    # A polling source sleeps between listings and can take a checkpoint only
+    # between them, so its checkpoints are spaced by the poll rather than by
+    # the three seconds a CDC flow uses. Measured: with them closer together
+    # they queue behind the sleep and one expires, and SeaTunnel answers that
+    # by failing the whole job ("Checkpoint expired before completing").
+    poll = flow.job.get("pollSeconds")
     return {"job.mode": "STREAMING", "parallelism": 1, "job.name": name,
-            "checkpoint.interval": flow.job.get("checkpointInterval", CHECKPOINT_MS),
+            "checkpoint.interval": flow.job.get(
+                "checkpointInterval", 2 * poll * 1000 if poll else CHECKPOINT_MS),
+            # ...and one that outlasts a sleeping reader: the barrier waits
+            # for the poll in flight, and the default 30 s is the poll plus a
+            # slow answer on a bad day.
+            **({"checkpoint.timeout": max(60_000, 6 * poll * 1000)} if poll else {}),
             **({"read_limit.rows_per_second": rows} if rows else {})}
 
 

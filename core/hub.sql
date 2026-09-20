@@ -461,6 +461,9 @@ declare
     -- What became of this row, for the Integration tab's history.
     echoed  boolean := false;
     outcome text;
+    -- The key an API's poll was read under, while it is still that system's
+    -- own: what the next poll of the same record is compared against.
+    polled  jsonb;
     -- Fields whose value the flow's value map did not know (#84).
     unmapped text[] := array(select jsonb_array_elements_text(coalesce(p_row -> '_unmapped', '[]')));
 begin
@@ -500,8 +503,7 @@ begin
         delete from hub.pending_before p
          where p.system = p_system and p.entity = p_entity and p.key = k
         returning p.row into before;
-        insert into hub.pending_before values (p_system, p_entity, k, p_row)
-            on conflict (system, entity, key) do update set row = excluded.row;
+        polled := k;
         after := p_row;
         kind := 'UPDATE_AFTER';
     elsif kind = 'INSERT' then
@@ -537,6 +539,14 @@ begin
         perform pg_advisory_xact_lock(hashtextextended(p_entity || k::text, 0));
         after := after || k;
         before := before || k;
+    end if;
+    -- A poll is remembered only once its row has a record. One still waiting
+    -- for a person has changed nothing yet, and a before image kept for it
+    -- would make its values look unchanged when it finally arrives -- the
+    -- record would be linked and left empty, or never created at all.
+    if polled is not null then
+        insert into hub.pending_before values (p_system, p_entity, polled, p_row)
+            on conflict (system, entity, key) do update set row = excluded.row;
     end if;
 
     keyed := (select string_agg(format('g.%I is not distinct from r.%I', c, c), ' and ')

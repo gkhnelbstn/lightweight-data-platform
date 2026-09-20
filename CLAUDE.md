@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 438 tests; the ones that need a database skip without one
+pytest -q                                                  # 441 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -448,7 +448,17 @@ which is the default branch.
   record that stops being listed is not an event, and a paging error reads
   exactly like every record having vanished. The source is registered as
   receiving no fields (`hub.system.fields = '{}'`), which is already how the
-  hub stops awaiting a delivery that will never be made.
+  hub stops awaiting a delivery that will never be made. Two measured
+  details: a poll is remembered **only once its row is placed** -- one still
+  waiting in `hub.unmatched` has changed nothing, and a before image kept for
+  it makes the next, identical answer look like no news, so the record is
+  linked and left empty; and an API flow's checkpoints are spaced by its poll
+  (`2 x pollSeconds` unless the flow says otherwise), because a polling reader
+  can take one only between listings and closer together they queue behind the
+  sleep until one expires, which SeaTunnel answers by failing the whole job.
+  No demo flow ships yet: SeaTunnel 2.3.13's `Http` source does not survive
+  its own checkpoint in streaming mode, whatever the interval and timeout
+  (#126), and a flow that dies after two minutes is not a demo.
 * **A discussion about an asset is a Slack thread, and nothing else.** ODD's
   Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
   channel list is empty until a workspace is connected:
