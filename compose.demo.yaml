@@ -99,7 +99,10 @@ services:
       db: { condition: service_healthy }
     command: ["uvicorn", "demo.integration.loyalty_api:app",
               "--host", "0.0.0.0", "--port", "8099"]
-    ports: !reset ["8099:8099"]
+    # `!override`, not `!reset`: reset discards the inherited 8077 *and*
+    # what is written here, so the endpoint was reachable from SeaTunnel
+    # and from nowhere else. Override replaces the list instead.
+    ports: !override ["8099:8099"]
     profiles: ["demo"]
 
   # The runtime of the integration flows (ADR 0020, 0021): one SeaTunnel
