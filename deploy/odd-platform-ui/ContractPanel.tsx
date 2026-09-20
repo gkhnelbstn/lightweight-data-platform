@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Typography } from '@mui/material';
 import {
   AppTabs,
+  Button,
   EmptyContentPlaceholder,
   LabeledInfoItem,
   Table,
@@ -14,7 +15,8 @@ import type {
   ContractProperty,
   RuleType,
 } from './api';
-import { getContractAudit } from './api';
+import { getContractAudit, getRun, startRun } from './api';
+import type { RunState } from './api';
 import { RawSqlRule, RuleBuilder, SyncRuleForm } from './RuleForms';
 import { runStatus, useT, when } from './shared';
 import * as S from './Contracts.styles';
@@ -68,6 +70,7 @@ export const ContractPanel: React.FC<Props> = ({
           })}
         </Typography>
       </div>
+      <RunNow contractId={detail.contract.id} onFinished={saved} />
 
       <AppTabs
         type='secondary'
@@ -91,6 +94,83 @@ export const ContractPanel: React.FC<Props> = ({
       {tab === 3 && <SyncRuleForm detail={detail} onSaved={saved} />}
       {tab === 4 && <AuditTrail key={auditKey} contractId={detail.contract.id} />}
     </S.Panel>
+  );
+};
+
+/**
+ * The other occasion for a run: the data was just fixed, or a rule was just
+ * added, and the schedule is tomorrow (#113). It starts the same run
+ * `core/runner.py` starts -- today, this contract -- and then watches it,
+ * because it takes as long as the checks take.
+ */
+const RunNow: React.FC<{ contractId: string; onFinished: () => void }> = ({
+  contractId,
+  onFinished,
+}) => {
+  const t = useT();
+  const [run, setRun] = useState<RunState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRun(null);
+    setError(null);
+    getRun(contractId).then(setRun).catch(() => undefined);
+  }, [contractId]);
+
+  useEffect(() => {
+    if (run?.state !== 'running') return undefined;
+    const timer = window.setInterval(() => {
+      getRun(contractId)
+        .then(next => {
+          setRun(next);
+          // The results are in the database now, so the panel is stale.
+          if (next.state !== 'running') onFinished();
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [run?.state, contractId, onFinished]);
+
+  const start = async () => {
+    setError(null);
+    try {
+      setRun(await startRun(contractId));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const said =
+    run?.state === 'running'
+      ? t('Running. It takes as long as the checks take.')
+      : run?.state === 'done' && run.result
+        ? t('{{failed}} of {{total}} failing, {{errored}} could not run · score {{score}}', {
+            failed: run.result.failed,
+            total: run.result.total,
+            errored: run.result.errored,
+            score: run.result.score.toFixed(3),
+          })
+        : null;
+
+  return (
+    <S.Actions>
+      <Button
+        buttonType='secondary-m'
+        text={t('Run the checks now')}
+        isLoading={run?.state === 'running'}
+        onClick={start}
+      />
+      {said && (
+        <Typography variant='caption' color='texts.secondary'>
+          {said}
+        </Typography>
+      )}
+      {(error || run?.state === 'failed') && (
+        <Typography variant='caption' color='error.main'>
+          {error ?? run?.error}
+        </Typography>
+      )}
+    </S.Actions>
   );
 };
 

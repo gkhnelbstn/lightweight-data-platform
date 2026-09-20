@@ -662,3 +662,19 @@ export const linkHeld = (
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ hub, system, local, record }),
   });
+
+/** Running one contract's checks now, rather than waiting for the schedule
+ * (api/runs.py, #113). The same run the CLI starts; this only asks for it. */
+export interface RunState {
+  state: 'idle' | 'running' | 'done' | 'failed';
+  started?: string;
+  finished?: string;
+  error?: string;
+  result?: { contract: string; as_of: string; score: number; failed: number; errored: number; total: number };
+}
+
+export const startRun = (contractId: string) =>
+  json<RunState>(`/api/contracts/${encodeURIComponent(contractId)}/run`, { method: 'POST' });
+
+export const getRun = (contractId: string) =>
+  json<RunState>(`/api/contracts/${encodeURIComponent(contractId)}/run`);
