@@ -65,7 +65,7 @@ schema:
       - name: customer_id
         logicalType: integer
         physicalType: bigint
-        description: "The customer this order belongs to. A foreign key into customers; nulls here break every revenue-by-customer report."
+        description: "ERP customer number. The primary key, and what every order and every warehouse dimension joins on."
         required: true
         unique: true
         primaryKey: true
