@@ -95,7 +95,8 @@ RUN zip -qr /odd-platform-ui-${ODD_VERSION}.jar static \
 # Relationships. The fix keeps the newest row. The class is compiled against
 # the platform image's own classes and jars, with the Lombok their build uses,
 # and replaces the one in /app/classes; the build fails if the line moves.
-# Delete this stage and its COPY when upstream fixes it -- tracked in ADR 0011.
+# Reported upstream as odd-platform#1880. Delete this stage and its COPY
+# when a release carries the fix -- tracked in ADR 0011 and issue #8.
 FROM ghcr.io/opendatadiscovery/odd-platform:${ODD_VERSION} AS platform
 FROM eclipse-temurin:17-jdk AS api
 COPY --from=platform /app/classes /app/classes

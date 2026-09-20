@@ -76,8 +76,13 @@ and the Lombok their build declares, then drops the result back into
 `/app/classes`. Still no Gradle, no source tree of theirs vendored, and the
 build fails when the anchor line moves.
 
-**Delete the `api` stage and its `COPY` when upstream fixes it** -- tracked in
-[#107](https://github.com/gkhnelbstn/lightweight-data-platform/issues/107).
+Reported upstream as
+[odd-platform#1880](https://github.com/opendatadiscovery/odd-platform/issues/1880)
+before the patch existed, and the write-up there has the same reproduction.
+
+**Delete the `api` stage and its `COPY` when a release carries the fix** --
+tracked in
+[#8](https://github.com/gkhnelbstn/lightweight-data-platform/issues/8).
 
 ### `deploy/odd-platform-tr.mjs` — Turkish in ODD's language picker
 
