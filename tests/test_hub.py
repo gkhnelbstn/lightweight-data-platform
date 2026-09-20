@@ -493,3 +493,28 @@ def test_a_change_in_the_api_is_one_edit(hub):
     assert golden(hub)[:2] == ("Acme Bakery", True)
     assert hub.execute("select _rev, _changed from hub.customer where code = 1"
                        ).fetchone() == (1, ",name,")
+
+
+def test_a_row_the_hub_did_nothing_with_is_not_kept(hub):
+    """#56: the inbox is a log of what happened, and a polled source writes a
+    row per record per poll whether or not anything did (ADR 0027) -- 2 612 of
+    the demo's 3 473 rows after an hour and a half of one. The trigger drops
+    its own row when the merge did nothing, so the log grows with what
+    changed, and the tab's hourly chart counts arrivals that meant something."""
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 160, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 220, code=1, name="Acme", active=True)
+    kept = hub.execute("select row_kind, outcome from hub.customer_inbox "
+                       "order by id").fetchall()
+    assert kept == [("POLL", "created")]
+
+
+def test_every_other_outcome_is_history(hub):
+    """An echo is not nothing: it says a delivery arrived where it was sent."""
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    update(hub, "crm", 110, ACME, {**ACME, "name": "Acme Ltd"})
+    assert [o for _, o in hub.execute(
+        "select id, outcome from hub.customer_inbox order by id").fetchall()] == [
+        "created", "echo", "before", "applied"]

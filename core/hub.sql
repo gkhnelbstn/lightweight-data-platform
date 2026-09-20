@@ -827,6 +827,7 @@ create or replace function hub.on_inbox() returns trigger language plpgsql as $$
 declare
     r jsonb := to_jsonb(new) - 'id' - 'system' - 'row_kind' - 'source_ms'
                              - 'landed_at' - 'fields' - 'unmapped' - 'outcome';
+    said text;
 begin
     if new.fields is not null then
         r := (select jsonb_object_agg(f, r -> f)
@@ -839,7 +840,21 @@ begin
     end if;
     -- What the hub did with it, kept beside it: a history line reads "an echo
     -- of our own write" or "lost to a later edit", not only "billing updated".
-    execute format('update hub.%I set outcome = $1 where id = $2', tg_table_name)
-        using hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r), new.id;
+    said := hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r);
+    -- ...and a row it did nothing with is not history. A polled source writes
+    -- one per record per poll (ADR 0027) and almost all of them say nothing
+    -- happened: 2 612 of the demo's 3 473 inbox rows, after an hour and a
+    -- half of a ten-second poll of two members. Dropped here rather than kept
+    -- and pruned later, because the log then grows with what changed -- which
+    -- is the shape it should have had -- and because the hourly chart on the
+    -- Integration tab counts these rows, so a poll doing nothing would fill
+    -- it. Whether a flow is alive is its job's to say, and the tab reads that
+    -- from SeaTunnel.
+    if said = 'unchanged' then
+        execute format('delete from hub.%I where id = $1', tg_table_name) using new.id;
+    else
+        execute format('update hub.%I set outcome = $1 where id = $2', tg_table_name)
+            using said, new.id;
+    end if;
     return null;
 end $$;

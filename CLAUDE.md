@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 446 tests; the ones that need a database skip without one
+pytest -q                                                  # 448 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -451,6 +451,17 @@ which is the default branch.
   hub card leads with its counts and one bar per hour of what arrived, and
   each log has a search box. Everything else on the tab stays read-only --
   what a field holds is the flows' to carry.
+* **A row the hub did nothing with is not kept** (#56): `hub.on_inbox` drops
+  its own row when `hub.merge` answers `unchanged`. A polled source writes one
+  per record per poll whether or not anything happened (ADR 0027), and the
+  demo measured 2 612 such rows out of 3 473 after an hour and a half of a
+  ten-second poll of two members -- 17 280 a day, for two. They are dropped
+  rather than kept and pruned later: nothing reads them, the log then grows
+  with what changed, and the tab's hourly chart counts them, so a poll doing
+  nothing would fill it. Whether a flow is alive is its job's to say and the
+  tab reads that from SeaTunnel. Rows already there stay -- an upgrade does
+  not delete anybody's log -- so clear them by hand if the chart looks busy:
+  `delete from hub.<entity>_inbox where outcome = 'unchanged'`.
 * **A flow is edited on the screen, and the file is what changes** (ADR 0026,
   `api/integration_edit.py`, #109): Check runs `core/flows.py`'s refusals
   against the edit without writing, Save round-trips the file with `ruamel` so
