@@ -17,7 +17,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 414 tests; the ones that need a database skip without one
+pytest -q                                                  # 417 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -393,6 +393,11 @@ which is the default branch.
   which job made it. ODD 0.29.0 answers 500 for any table whose columns ever
   changed; the one-line fix is compiled in `deploy/Dockerfile.odd-platform`'s
   `api` stage (ADR 0011).
+* **The Integration tab's one write is `hub.link`** (#111, ADR 0022): a held
+  row is settled from the screen, and the hub's own refusal is the message. A
+  hub card leads with its counts and one bar per hour of what arrived, and
+  each log has a search box. Everything else on the tab stays read-only --
+  what a field holds is the flows' to carry.
 * **A flow is edited on the screen, and the file is what changes** (ADR 0026,
   `api/integration_edit.py`, #109): Check runs `core/flows.py`'s refusals
   against the edit without writing, Save round-trips the file with `ruamel` so

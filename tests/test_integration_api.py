@@ -6,6 +6,7 @@ database -- that absence is the case under test.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -96,3 +97,67 @@ def test_a_record_history_reads_as_what_happened():
     assert out[0]["changes"] == [{"field": "name", "from": None, "to": "Acme"},
                                  {"field": "tax_id", "from": None, "to": api.sample.MASK}]
     assert out[1]["changes"] == [{"field": "name", "from": "Acme", "to": "Acme Ltd"}]
+
+
+# --- settling a held row from the screen (#111) -----------------------------
+
+def _linker(monkeypatch, answer):
+    """The link route against a stand-in hub database."""
+    from api import integration_detail as detail
+
+    class Cursor:
+        def fetchone(self):
+            if isinstance(answer, Exception):
+                raise answer
+            return {"record": answer}
+
+    class Connection:
+        calls: list = []
+
+        def execute(self, sql, params):
+            Connection.calls.append((sql, params))
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(detail, "_hub", lambda hub_id: ({}, "customer", "customer_id",
+                                                        {"crm": "crm_code"}, set()))
+    monkeypatch.setattr(detail, "_connect", lambda contract: Connection())
+    return detail, Connection
+
+
+def test_linking_a_held_row_calls_the_hubs_own_function(monkeypatch):
+    detail, connection = _linker(monkeypatch, {"customer_id": 7})
+    got = detail.link(detail.Link(hub="hub.customer", system="crm.account",
+                                  local={"crm_code": 42}, record={"customer_id": 7}))
+    assert got == {"record": {"customer_id": 7}}
+    sql, params = connection.calls[-1]
+    assert "hub.link" in sql
+    assert params[:2] == ("customer", "crm.account")
+    assert json.loads(params[2]) == {"crm_code": 42} and json.loads(params[3]) == {"customer_id": 7}
+
+
+def test_a_row_with_no_record_named_becomes_one_of_its_own(monkeypatch):
+    detail, connection = _linker(monkeypatch, {"customer_id": 8})
+    detail.link(detail.Link(hub="hub.customer", system="crm.account", local={"crm_code": 43}))
+    assert connection.calls[-1][1][3] is None
+
+
+def test_the_hubs_refusal_is_the_message_not_a_500(monkeypatch):
+    import psycopg
+    boom = psycopg.errors.RaiseException(
+        "hub: record {\"customer_id\": 3} is already 91 in crm.account\nCONTEXT: PL/pgSQL")
+    detail, _ = _linker(monkeypatch, boom)
+    with pytest.raises(Exception) as caught:
+        detail.link(detail.Link(hub="hub.customer", system="crm.account",
+                                local={"crm_code": 44}, record={"customer_id": 3}))
+    assert caught.value.status_code == 400
+    assert "already 91 in crm.account" in caught.value.detail
+    assert "CONTEXT" not in caught.value.detail

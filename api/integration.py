@@ -125,6 +125,14 @@ def hub_state(contract: dict) -> dict:
                 golden, sql.Identifier(key)), (ids,)).fetchall()} if codes else {}
         records = cx.execute(sql.SQL("select count(*) as n from hub.{}").format(golden)
                              ).fetchone()["n"]
+        # One bar per hour, so "is anything arriving" is a glance rather than
+        # a number that could be an hour or a week old. ponytail: a pass over
+        # the inbox, like `arriving` above and cheap for the same reason --
+        # an index on (landed_at) is the fix when it is not.
+        activity = cx.execute(sql.SQL(
+            "select date_trunc('hour', landed_at) as hour, system, count(*) as n "
+            "from hub.{} where landed_at > now() - interval '24 hours' "
+            "group by 1, 2 order by 1").format(inbox)).fetchall()
     hidden = sample.classified(contract)
     for h in held:
         h["row"] = _masked(h["row"], "", hidden)
@@ -141,8 +149,11 @@ def hub_state(contract: dict) -> dict:
         c["kept_at"], c["lost_at"] = _ms(c.pop("kept_ms")), _ms(c.pop("lost_ms"))
         c["kept"], c["lost"] = (_masked(c["kept"], c["field"], hidden),
                                 _masked(c["lost"], c["field"], hidden))
+    for row in activity:
+        row["hour"] = row["hour"].isoformat()
     return {"records": records, "arriving": {r["system"]: r for r in arriving},
-            "conflicts": conflicts, "held": held, "deleted": deleted}
+            "activity": activity, "conflicts": conflicts, "held": held,
+            "deleted": deleted}
 
 
 @router.get("/api/integration")

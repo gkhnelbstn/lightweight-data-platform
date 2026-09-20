@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Typography } from '@mui/material';
-import { AppTabs, Button, EmptyContentPlaceholder, Table } from 'components/shared/elements';
+import { AppTabs, Button, EmptyContentPlaceholder, Input, Table } from 'components/shared/elements';
 import * as Layout from 'components/shared/styled-components/layout';
 import type { Arrival, FlowJob, Hub, IntegrationFlow, IntegrationState, Totals } from './api';
 import { getIntegration, runJobs, seatunnelUrl } from './api';
 import { Code, tr, useT, when } from './shared';
 import { HeldPanel, RecordPanel } from './RecordDetail';
 import { FlowPanel } from './FlowEditor';
+import { HubHealth } from './Health';
 import * as S from './Contracts.styles';
 
 /**
@@ -223,6 +224,7 @@ const HubCard: React.FC<{ hub: Hub }> = ({ hub }) => {
           {t('Hub database unreachable: {{error}}', { error: hub.hub_error })}
         </Typography>
       )}
+      {!hub.hub_error && <HubHealth hub={hub} />}
       <AppTabs
         type='primary'
         selectedTab={tab}
@@ -466,14 +468,53 @@ const Opens: React.FC = () => {
   );
 };
 
+/** A log grows; a person looking at one knows a code, a system or a field.
+ * One box over the row's own words, rather than a filter per column (#111). */
+const Search: React.FC<{ value: string; onChange: (v: string) => void; found: number }> = ({
+  value,
+  onChange,
+  found,
+}) => {
+  const t = useT();
+  return (
+    <S.Actions>
+      <Input
+        variant='main-m'
+        label={t('Search')}
+        placeholder={t('a code, a system, a field')}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+      />
+      {!!value && (
+        <Typography variant='caption' color='texts.secondary'>
+          {t('{{n}} of them match', { n: found })}
+        </Typography>
+      )}
+    </S.Actions>
+  );
+};
+
+/** Everything the row says, as one lower-case string to search in. */
+const searchable = (...parts: unknown[]) =>
+  parts
+    .map(p => (p && typeof p === 'object' ? JSON.stringify(p) : String(p ?? '')))
+    .join(' ')
+    .toLowerCase();
+
 const Conflicts: React.FC<{ hub: Hub }> = ({ hub }) => {
   const t = useT();
   const [open, setOpen] = useState<string | null>(null);
-  const rows = hub.conflicts ?? [];
-  if (!rows.length) return <Quiet text={t('No value has lost a conflict.')} />;
+  const [query, setQuery] = useState('');
+  const all = hub.conflicts ?? [];
+  const rows = all.filter(c =>
+    searchable(c.key, c.codes, c.field, c.kept, c.lost, c.kept_by, c.lost_by, c.reason)
+      .includes(query.toLowerCase())
+  );
+  if (!all.length) return <Quiet text={t('No value has lost a conflict.')} />;
   return (
     <S.Scroll>
       <Opens />
+      <Search value={query} onChange={setQuery} found={rows.length} />
       <S.Cells>
         <thead>
           <tr>
@@ -530,8 +571,12 @@ const Side: React.FC<{ system: string | null; at: string | null }> = ({ system, 
 const Waiting: React.FC<{ hub: Hub }> = ({ hub }) => {
   const t = useT();
   const [open, setOpen] = useState<string | null>(null);
-  const rows = hub.held ?? [];
-  if (!rows.length) return <Quiet text={t('Every row found its record.')} />;
+  const [query, setQuery] = useState('');
+  const all = hub.held ?? [];
+  const rows = all.filter(h =>
+    searchable(h.system, h.local, h.reason, h.row).includes(query.toLowerCase())
+  );
+  if (!all.length) return <Quiet text={t('Every row found its record.')} />;
   return (
     <>
       <Typography variant='body2' color='texts.secondary'>
@@ -539,6 +584,7 @@ const Waiting: React.FC<{ hub: Hub }> = ({ hub }) => {
           'The hub could not tell which record these rows belong to, so it made none: a duplicate made quietly is worse than a wait. A person decides, and what was held follows.'
         )}
       </Typography>
+      <Search value={query} onChange={setQuery} found={rows.length} />
       <S.Scroll>
         <S.Cells>
           <thead>
@@ -588,11 +634,16 @@ const held = (reason: string) => {
 const Deleted: React.FC<{ hub: Hub }> = ({ hub }) => {
   const t = useT();
   const [open, setOpen] = useState<string | null>(null);
-  const rows = hub.deleted ?? [];
-  if (!rows.length) return <Quiet text={t('Nothing deleted.')} />;
+  const [query, setQuery] = useState('');
+  const all = hub.deleted ?? [];
+  const rows = all.filter(d =>
+    searchable(d.key, d.codes, d.deleted_by).includes(query.toLowerCase())
+  );
+  if (!all.length) return <Quiet text={t('Nothing deleted.')} />;
   return (
     <S.Scroll>
       <Opens />
+      <Search value={query} onChange={setQuery} found={rows.length} />
       <S.Cells>
         <thead>
           <tr>
