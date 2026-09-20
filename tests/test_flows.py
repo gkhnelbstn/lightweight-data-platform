@@ -372,3 +372,16 @@ def test_a_setting_outside_its_range_is_refused():
         got = _check(_with(CRM_IN, job={"checkpointInterval": value}),
                      CRM_OUT, BILLING_IN, BILLING_OUT)
         assert any("checkpointInterval is" in p for p in got), (value, got)
+
+
+def test_a_match_on_a_column_outside_the_key_is_refused():
+    """A change of the pinned value must reach both flows whole. A key change
+    does -- CDC reports it as a delete and an insert, measured on SQL Server
+    -- and an ordinary update does not: each flow's filter passes one image of
+    it, so the part left behind is never emptied."""
+    table = copy.deepcopy(ADDRESS)
+    table["schema"][0]["properties"][1].pop("primaryKey")
+    inbound, outbound = _address("INV", "invoice_city")
+    found = _check(inbound, outbound, by_id={**WIDE, "crm.account_address": table})
+    assert any("match pins 'ADDR_TYPE', which is not part of "
+               "crm.account_address's key" in p for p in found)

@@ -212,6 +212,21 @@ def _match_problems(flow: Flow, table: dict, hub: dict, into_hub: bool) -> list[
         covered = {tgt for tgt, src in flow.mapping.columns.items() if src in hub_key}
     out = [f"{flow.id}: match names {c!r}, which {table['id']} does not declare"
            for c in sorted(set(flow.match) - set(_properties(table)))]
+    # A change of the pinned value has to reach both flows whole. It does
+    # when the value is part of the key: the change is then a key change, and
+    # CDC reports it as a delete and an insert -- the flow that had the row
+    # sees the delete and empties its part, the flow that gets it sees the
+    # insert and fills its own (measured on SQL Server). On any other column
+    # it is an ordinary update, and each flow's filter passes one image of it:
+    # the before to the one losing the row, the after to the one gaining it.
+    # Half an event each, and the part that was left behind is never emptied.
+    out += [f"{flow.id}: match pins {c!r}, which is not part of "
+            f"{table['id']}'s key. Changing it would then be an ordinary "
+            f"update, and the two flows would see one image of it each -- "
+            f"the part this flow carries would never be emptied. Pin a key "
+            f"column, so that a change arrives as a delete and an insert"
+            for c in sorted(set(flow.match) & set(_properties(table))
+                            - set(_keys(table)))]
     loose = sorted(set(_keys(table)) - covered - set(flow.match))
     if loose:
         out.append(f"{flow.id}: {table['id']} has several rows per record "
