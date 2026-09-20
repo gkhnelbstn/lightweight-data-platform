@@ -1,0 +1,11 @@
+# What CI needs on top of the two compose files, and nothing else.
+#
+# The flows' smoke test runs `core/flow_jobs.py` on the runner rather than in
+# the app image, so it resolves the hub by the name the *contracts* use --
+# `db:5432`, which is what SeaTunnel inside the network uses too. The runner
+# adds `db` to its hosts file; this publishes the port that name implies.
+# Compose appends published ports rather than replacing them, so 5442 stays
+# and nothing a person runs locally changes.
+services:
+  db:
+    ports: ["5432:5432"]
