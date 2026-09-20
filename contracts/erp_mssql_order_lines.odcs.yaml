@@ -1,6 +1,6 @@
 # The order lines behind the SQL Server sales_orders. Richer than the Postgres
 # copy: it carries unit_price, so the line total can be checked against it.
-apiVersion: v3.0.2
+apiVersion: v3.1.0
 kind: DataContract
 id: erp.mssql.order_lines
 name: Sales Order Lines (SQL Server)
@@ -57,11 +57,17 @@ schema:
         physicalType: bigint
         description: "The order this line belongs to. The join back to sales_orders."
         required: true
+        relationships:
+          - type: foreignKey
+            to: sales_orders.order_id
       - name: product_id
         logicalType: integer
         physicalType: int
         description: "The product on this line. A foreign key into products."
         required: true
+        relationships:
+          - type: foreignKey
+            to: products.product_id
       - name: quantity
         logicalType: integer
         physicalType: int

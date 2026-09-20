@@ -1,0 +1,34 @@
+# The loyalty scheme's members, as its API answers with them (#97, ADR 0027).
+# There is no table here to read: the server is the endpoint, and the two
+# things SeaTunnel needs that ODCS has no field for are the `api` property.
+#
+# `changedAt` is epoch milliseconds. The hub decides a conflict by commit time
+# and an API has none of its own; poll time is when we noticed, which would
+# win every dispute this system takes part in, so a source that cannot say
+# when a record changed is refused rather than given one.
+apiVersion: v3.0.2
+kind: DataContract
+id: loyalty.member
+name: Loyalty members
+version: 1.0.0
+status: active
+servers:
+  - server: loyalty
+    type: api
+    location: "http://loyalty:8099/members"
+schema:
+  - name: member
+    physicalName: member
+    physicalType: table
+    properties:
+      - {name: member_no, physicalType: bigint, primaryKey: true, required: true, description: "The scheme's own member number."}
+      - {name: full_name, physicalType: text, required: true, description: "Member name."}
+      - {name: vkn, physicalType: text, classification: pii, description: "Tax identifier."}
+      - {name: is_active, physicalType: boolean, required: true, description: "Whether the membership is live."}
+      - {name: tier, physicalType: text, required: true, description: "Loyalty tier, which no other system keeps."}
+      - {name: updated_ms, physicalType: bigint, required: true, description: "When the scheme last changed this member, epoch milliseconds."}
+customProperties:
+  - property: api
+    value:
+      contentField: "$.members.*"
+      changedAt: updated_ms

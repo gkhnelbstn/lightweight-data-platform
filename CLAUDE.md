@@ -17,18 +17,20 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 377 tests; the ones that need a database skip without one
+pytest -q                                                  # 448 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
 python core/runner.py --backfill-days 44                   # rebuild the history
 python core/runner.py                                      # the daily unit (today)
+# ...or the Run button on a contract in the Data Quality panel (#113)
 python core/runner.py --odd-url http://odd-platform:8080   # ...and send it to ODD
 python demo/medallion.py                                   # rebuild the demo warehouse
 python demo/medallion.py --with-history                    # ...and give dim.customer a second version to keep
 python integrations/odd/lineage.py --url http://odd-platform:8080   # declared lineage
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
 python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
+python integrations/odd/master_data.py --url http://odd-platform:8080  # golden records -> Master Data
 uvicorn api.main:app --port 8077                           # UI + API
 python core/mapping.py --check                             # validate the declared column mappings
 python core/sync.py --check                                # validate the sync rules
@@ -37,9 +39,12 @@ python core/sync_mssql.py --interval 30                    # SQL Server CDC -> P
 python core/hub.py --init                                  # the two-way integration hub
 python core/flow_jobs.py --check --contracts demo/integration  # refuse bad flows
 python core/flow_jobs.py --apply --contracts demo/integration  # hub + SeaTunnel jobs (needs --profile flows)
+psql -U postgres -f demo/integration/loyalty_setup.sql      # the demo's API source (#97)
 python demo/integration/verify.py                          # drive the two-way demo and assert it
 python demo/integration/outage.py before|after             # the restart drill, ADR 0023
 python core/flow_jobs.py --apply --resnapshot ...          # start flows from scratch, knowingly
+python core/flow_jobs.py --apply --only shop_to_hub ...    # ...or start just these
+# ...or the same four buttons on ODD's Integration tab, which edits the flow files (ADR 0026)
 ```
 
 Both databases come from the environment; nothing hardcodes a DSN:
@@ -52,14 +57,23 @@ export DQ_HOST=dq.local                                            # ODDRN ident
 
 ## Releasing
 
-Everything reaches `main` by PR, squash-merged, and **the PR title is a
-Conventional Commit** (`feat:`, `fix:`, `docs:`, `ci:`...): with a squash
-merge the title is the commit release-please reads, and a title without a type
-releases nothing. `.github/workflows/release-please.yml` then opens a release
-PR (version bump, `CHANGELOG.md`); merging it tags the release and calls
-`release.yml`, which publishes the images and attaches the contracts. A
-GITHUB_TOKEN tag starts no workflow, which is why it is a call and not a tag
-trigger.
+Work goes to **`dev`**, not `main`. A branch opens its PR into `dev` and is
+squash-merged, and **the PR title is a Conventional Commit** (`feat:`,
+`fix:`, `docs:`, `ci:`...). With a squash merge the title is the commit, and
+`pr-title.yml` fails a PR whose title has no type, since such a commit would
+drop out of the release without a word.
+
+A release is a PR from `dev` into `main`, **merged with a merge commit, never
+squashed**. Squashing would fold every commit into one title, and release-please
+reads the commits one by one. `.github/workflows/release-please.yml` then
+opens a release PR on `main` (version bump, `CHANGELOG.md`); merging that tags
+the release and calls `release.yml`, which publishes the images and attaches
+the contracts. A GITHUB_TOKEN tag starts no workflow, which is why it is a
+call and not a tag trigger. After a release, merge `main` back into `dev`, so
+the version and the changelog are the same on both.
+
+`Closes #n` in a PR into `dev` closes nothing until that commit reaches `main`,
+which is the default branch.
 
 ## Invariants — break these and the design stops making sense
 
@@ -173,7 +187,10 @@ trigger.
   (`deploy/odd-platform-integration-tab.mjs`, four anchors in `ToolbarTabs.tsx`
   and `App.tsx`, ADR 0022), and reads `GET /api/integration`, which asks
   SeaTunnel and the hub server-side. `INTEGRATION_DIR` says where the hub
-  contracts are; the demo compose sets it to `demo/integration`.
+  contracts are; the demo compose sets it to `demo/integration`. A log line
+  there opens its record (`api/integration_detail.py`): each field with who
+  set it, and the inbox history with the `outcome` `hub.merge` now returns --
+  an `echo` of the hub's own delivery reads exactly like an edit otherwise.
 * The UI's language is **ODD's own picker**, and Turkish is a carried patch
   (`deploy/odd-platform-tr.mjs`, ADR 0011). The panel shares ODD's i18n
   instance through `shared.tsx`'s `useT`, in its own `ldp` namespace, with
@@ -182,7 +199,10 @@ trigger.
   `tests/test_panel_i18n.py` exists. Contract text is never translated:
   the rule form writes English descriptions into `*.odcs.yaml` (issue #44).
   A dynamic key (`t(c.dimension)`) is outside that test; add its entry to
-  `deploy/odd-platform-ui/tr.json` by hand.
+  `deploy/odd-platform-ui/tr.json` by hand. Text the **server** writes once for
+  everyone -- ODD link names, the alert message -- follows `LDP_LANGUAGE`
+  (`core/language.py`) instead, since no viewer's picker can choose it; so
+  `odd_links` keys a link by what it is (`checks`), never by its words.
 * ODD reports an existing collector's token **masked**, so it cannot be read
   back. `odd-bootstrap.sh` reuses the token from the config it wrote last time
   and rotates only when there is no local copy — creating a collector whose
@@ -266,7 +286,7 @@ trigger.
   for. Issue #50 is the narrower case that *is* a bug.
 * **An integration between two systems is its own file**, one per direction,
   in `contracts/flows/` (ADR 0019): `from`, `to`, `columns`, `values`,
-  `match`, `linkBy`, `filledByTarget`. The two systems' table contracts
+  `match`, `linkBy`, `aggregates`, `filledByTarget`. The two systems' table contracts
   describe their tables and know nothing about it. The subdirectory is
   deliberate -- every contract reader and the CI lint glob
   `contracts/*.odcs.yaml` non-recursively, so a flow is never windowed,
@@ -319,7 +339,19 @@ trigger.
   only its part: its delete empties the part, and an empty part goes out as a
   delete of that row -- only when the revision *names* the field. A `*` with
   the part empty is the owner arriving first, and deleting there deletes the
-  address on its way in (#80's live run).
+  address on its way in (#80's live run). **What it pins must be part of the
+  table's key.** Changing it is then a key change, and CDC reports that as a
+  delete and an insert: the flow that had the row empties its part, the flow
+  that gains it fills its own -- measured, `ADDR_TYPE` moved from `INV` to
+  `SHP` and back, both ways clean through to billing's two columns. **Both
+  engines report a key change that way** (#129, ADR 0020): SQL Server because
+  CDC records it so, Postgres too despite `REPLICA IDENTITY FULL` putting the
+  whole old row in the WAL -- so the rule is not engine-specific. It also
+  means a system that renumbers a record loses the crosswalk for it: the hub
+  sees a delete and another record arriving. On any
+  other column the same change is an ordinary update, and each flow's filter
+  passes one image of it: half an event each, and the part left behind is
+  never emptied. `core/flows.py` refuses it.
 * **Systems with different codes** (#80): the hub contract's `keys` names each
   system's code column, the record's key is the hub's own, and the codes are
   golden columns because the SeaTunnel delivery cannot look anything up. An
@@ -336,8 +368,11 @@ trigger.
   flow under its old id (`hub.job`) from its checkpoint, which the app reads
   from the shared `seatunnel-checkpoints` volume, and refuses when there is
   none or when SQL Server's CDC retention ran out meanwhile: SeaTunnel does
-  both wrong without a word. `--resnapshot` is the knowing way through. ADR
-  0023.
+  both wrong without a word. `--resnapshot` is the knowing way through, and
+  it is also the answer to the third refusal (#125): a checkpoint a crash
+  left half-written is a file like any other, so the flow is resumed from it
+  and SeaTunnel answers the submit with a bare HTTP 500, the `EOFException`
+  reaching only its own server log. ADR 0023.
 * **A table that changed under its flow is refused, never followed**
   (`core/flow_schema.py`): a mapped column missing from the live table, or not
   in its CDC capture instance. Compare captured columns **by id** -- a dropped
@@ -354,9 +389,138 @@ trigger.
   expectation swallowed a later edit to that exact value (an address added
   then removed, a name changed and changed back). "Already had" is the before
   image, or nothing for a new row. #84.
-* `core/flow_jobs.py` compiles only SQL Server *targets*. A Postgres target
-  needs a guarded upsert and a delete branch (ADR 0020), and SeaTunnel's
-  generated upsert there loops for ever -- so it raises instead.
+* **An aggregate is one way and is summed where its rows land** (ADR 0024,
+  #81): `aggregates` turns `columns` into the group. The lines land in the
+  hub's database (`flow.<id>_inbox` -> trigger -> `flow.<id>_lines`), every
+  group a line change touches is **recomputed** into `flow.<id>`, and a second
+  job, `<id>_out`, delivers it -- two jobs, both resumed like any other.
+  Recompute rather than add and subtract: a moved line or a changed key is
+  then just two groups. A flow back is refused: a total has no inverse.
+* **A Postgres target gets a guarded MERGE** (`core/flow_sql.py`, #83):
+  `WHEN MATCHED AND (t.cols) IS DISTINCT FROM (new)`. SQL Server records no
+  change for an update that writes what a row holds; Postgres does, and a
+  pair looped on it (ADR 0020). Its parameters are `CAST(? AS type)` from the
+  target contract -- Postgres will not type a bare `?` in a `SELECT`. A
+  Postgres *source* needs `REPLICA IDENTITY FULL`, no `timestamptz` column
+  (SeaTunnel 2.3.13 refuses the whole table), and its slot: all three are
+  checked before a job is submitted, never done for it.
+* **A contract's foreign keys are ODD's ER diagram** (`relationships` on the
+  property, ODCS 3.1, `integrations/odd/relationships.py`): published with the
+  daily push as an `ENTITY_RELATIONSHIP`, both ends on the ODDRNs odd-collector
+  minted. Not lineage -- a foreign key says which row a row belongs to, not
+  which job made it. ODD 0.29.0 answers 500 for any table whose columns ever
+  changed; the one-line fix is compiled in `deploy/Dockerfile.odd-platform`'s
+  `api` stage (ADR 0011).
+* The app image runs `uvicorn` without `--reload`, and `core/`, `api/` and
+  the contracts are **mounted**. So an edit on the host is on disk inside the
+  container and not in the running process: `docker compose restart app`, or
+  the screen keeps answering with the code from before the edit. Measured
+  twice, both times as a feature that "did not work".
+* **A contract's checks can be run from the screen** (`api/runs.py`, #113):
+  the same `core/runner.py` run the schedule makes, for today and one
+  contract, started in a thread and watched by the panel. One at a time per
+  contract -- a second run writes the same day twice. The state is in the API
+  process, so a restart forgets a run in flight; what it had already written
+  is in `check_results` either way.
+* **A record created beside one that shares its `linkBy` value carries
+  `_link = false`** (#120, ADR 0021): the out-flow's `MERGE` falls back to
+  matching by `linkBy` while a system's code is unknown, and for such a record
+  that fallback lands on the *other* record's row -- measured live, it
+  overwrote a customer's name with another's and the systems echoed it back.
+  `hub.linkable` sets the flag when the record is created; the delivery then
+  inserts and the system numbers it itself. That insert comes back under a key
+  nothing can place -- the value it would be matched by is the shared one --
+  so `hub.resolve` asks the expectations instead (`hub.awaited`, #122): one
+  record awaiting exactly these values from this system is the delivery coming
+  back. Every field the hub sent must match, and exactly one record may match,
+  or it waits for a person as before. **The flag follows the value** (#128):
+  it was decided once, when the record was made, so a record whose `linkBy`
+  value is later *edited* into a collision kept a yes it no longer deserved --
+  measured live, one poll after the edit a customer's name was overwritten in
+  the shop and echoed into the hub. It is asked again in the same statement
+  that writes a revision touching one of those fields; a separate update would
+  be a change to the golden record carrying the previous revision's
+  `_changed`, and every delivery would run twice. `hub.awaited` is also asked
+  **before a record is made**, not only before a person is: "none of them
+  matched" is a decision, and it is the wrong one when the hub is awaiting
+  exactly these values -- which is what happens when the value a delivery went
+  out under changes before the answer comes back. It looks at every value
+  still awaited for a field, not only the newest, because all of them were
+  sent to that system for that record.
+* **The Integration tab's one write is `hub.link`** (#111, ADR 0022): a held
+  row is settled from the screen, and the hub's own refusal is the message. A
+  hub card leads with its counts and one bar per hour of what arrived, and
+  each log has a search box. Everything else on the tab stays read-only --
+  what a field holds is the flows' to carry.
+* **A row the hub did nothing with is not kept** (#56): `hub.on_inbox` drops
+  its own row when `hub.merge` answers `unchanged`. A polled source writes one
+  per record per poll whether or not anything happened (ADR 0027), and the
+  demo measured 2 612 such rows out of 3 473 after an hour and a half of a
+  ten-second poll of two members -- 17 280 a day, for two. They are dropped
+  rather than kept and pruned later: nothing reads them, the log then grows
+  with what changed, and the tab's hourly chart counts them, so a poll doing
+  nothing would fill it. Whether a flow is alive is its job's to say and the
+  tab reads that from SeaTunnel. Rows already there stay -- an upgrade does
+  not delete anybody's log -- so clear them by hand if the chart looks busy:
+  `delete from hub.<entity>_inbox where outcome = 'unchanged'`.
+* **A flow is edited on the screen, and the file is what changes** (ADR 0026,
+  `api/integration_edit.py`, #109): Check runs `core/flows.py`'s refusals
+  against the edit without writing, Save round-trips the file with `ruamel` so
+  its comments survive, and Apply/Stop/Restart call `core/flow_apply.py` --
+  the same functions the CLI calls. A flow states two SeaTunnel settings and
+  no more: `job: {checkpointInterval, rowsPerSecond}`. Not parallelism -- a
+  second reader reorders one record's changes and the hub decides by commit
+  order. The app service now needs `PG_USER`/`MSSQL_USER` and their passwords,
+  since it is the process that fills them; `_fill` refuses an empty one,
+  because SeaTunnel answers an empty username with "Unable to create a
+  source". `stop()` waits for the job to be gone, or the apply after it reads
+  "already running" and starts nothing.
+* **An API source is a poll, and it goes one way** (#97, ADR 0027): an HTTP
+  endpoint has no change log, so there is no CDC connector to point at it --
+  SeaTunnel's `Http` source asks for the listing every `pollSeconds`, into a
+  hub and nowhere else. The contract carries `api: {contentField, changedAt}`
+  beside a `type: api` server, and `changedAt` is **epoch milliseconds**: the
+  hub decides a conflict by commit time, and poll time is when we noticed,
+  which would win every dispute an API takes part in. An API that cannot say
+  it is refused. The previous poll is the before image
+  (`hub.pending_before`), so a repeated poll is not an edit, and a field
+  another system won is not disputed again at every poll -- nothing writes
+  back to an API, so its answer stays stale for ever. Nothing deletes: a
+  record that stops being listed is not an event, and a paging error reads
+  exactly like every record having vanished. The source is registered as
+  receiving no fields (`hub.system.fields = '{}'`), which is already how the
+  hub stops awaiting a delivery that will never be made. Two measured
+  details: a poll is remembered **only once its row is placed** -- one still
+  waiting in `hub.unmatched` has changed nothing, and a before image kept for
+  it makes the next, identical answer look like no news, so the record is
+  linked and left empty; and an API flow's checkpoints are spaced by its poll
+  (`2 x pollSeconds` unless the flow says otherwise), because a polling reader
+  can take one only between listings and closer together they queue behind the
+  sleep until one expires, which SeaTunnel answers by failing the whole job.
+  The `Http` source needed a patch of our own to get here (#126,
+  `deploy/Dockerfile.seatunnel`): it waits out `poll_interval_millis` holding
+  the checkpoint lock, which is the lock the barrier needs, so a streaming
+  job's checkpoint never completed and SeaTunnel failed the job while the
+  reader was demonstrably still polling. `Object.wait` frees the monitor
+  while it waits and `Thread.sleep` does not, so the fix is that word.
+  Raising the interval or the timeout cannot help a contended lock. The
+  demo's API is `demo/integration/loyalty_api.py`, the app image with a
+  different command, seeded by `demo/integration/loyalty_setup.sql`.
+* **A discussion about an asset is a Slack thread, and nothing else.** ODD's
+  Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
+  channel list is empty until a workspace is connected:
+  `deploy/slack-app-manifest.yaml` is the app, `ODD_SLACK_ENABLED` and
+  `ODD_SLACK_TOKEN` in `.env` are the wiring, and the token is the
+  workspace owner's to create. `DATACOLLABORATION_ENABLED: true` with an
+  empty token refuses to start ODD ("Slack OAuth token is empty"), which is
+  why both default to off. Replies arrive at `/api/slack/events`, so they
+  need this platform reachable from Slack; posting does not.
+* **ODD's Master Data page is the hub's golden record, one way** (ADR 0025,
+  `integrations/odd/master_data.py`): a lookup table per hub entity plus
+  `value_maps`, matched by key, classified columns left out. An edit made in
+  ODD is overwritten by the next run -- a record changes in its system. ODD
+  does not quote the names in its own `ALTER TABLE`, so a lookup column named
+  `column` is a 500.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why

@@ -1,0 +1,16 @@
+id: loyalty_to_hub
+from: loyalty.member
+to: hub.customer
+columns: {loyalty_code: member_no, name: full_name, tax_id: vkn,
+          active: is_active, tier: tier}
+# A member the hub has not seen is the customer with its tax number; one
+# nobody holds becomes a record of its own.
+linkBy: [tax_id]
+# There is no flow back: nothing writes to an API (ADR 0027).
+#
+# How often the listing is asked for is a load question for the other side,
+# so it is a job setting like the other two (#109, ADR 0026). Ten seconds
+# here because the demo watches it; a real scheme would not thank us. The
+# checkpoints space themselves by it, and the Http source has to let them
+# through -- which is a patch we carry (#126, deploy/Dockerfile.seatunnel).
+job: {pollSeconds: 10}

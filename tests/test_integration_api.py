@@ -6,6 +6,7 @@ database -- that absence is the case under test.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -29,14 +30,16 @@ def test_flows_are_grouped_by_system_table_even_with_everything_down(monkeypatch
     assert got["seatunnel_error"]
     [hub] = got["hubs"]
     assert hub["hub_error"] == "OSError: down"
-    assert hub["codes"] == {"crm": "crm_code", "billing": "billing_code"}
+    assert hub["codes"] == {"crm": "crm_code", "billing": "billing_code",
+                            "shop": "shop_code", "loyalty": "loyalty_code"}
     address = next(s for s in hub["systems"] if s["table"] == "crm.account_address")
     assert sorted(f["flow"] for f in address["in"]) == [
         "crm_invoice_address_to_hub", "crm_shipping_address_to_hub"]
     assert {f["match"]["ADDR_TYPE"] for f in address["out"]} == {"INV", "SHP"}
     assert all(f["job"] is None for s in hub["systems"] for f in s["in"] + s["out"])
-    # One SQL Server for both systems: asked once, not once per flow.
-    assert len(asked) == 1
+    # Two servers -- SQL Server for the CRM and billing, Postgres for the
+    # shop -- each asked once, not once per flow.
+    assert len(asked) == 2
     assert any("schema not readable" in d for s in hub["systems"] for d in s["drift"])
 
 
@@ -75,3 +78,87 @@ def test_a_failed_job_says_its_root_cause_not_its_stack():
              "\tat com.microsoft.sqlserver.X(X.java:2)")
     assert api.root_cause(trace) == "Invalid column name 'TAX_NO'."
     assert api.root_cause(None) is None
+
+
+def test_a_record_history_reads_as_what_happened():
+    """An update's before and after images are one line of what changed, a
+    classified value stays masked, and each line says what the hub did."""
+    from api.integration_detail import history
+    row = lambda kind, sys, ms, outcome, **v: {  # noqa: E731
+        "row_kind": kind, "system": sys, "source_ms": ms, "landed_at": "t",
+        "fields": "crm_code,name,tax_id", "row": {"crm_code": 1, "outcome": outcome, **v}}
+    rows = [row("INSERT", "crm.account", 1, "created", name="Acme", tax_id="111"),
+            row("UPDATE_BEFORE", "billing.customer", 2, "before", name="Acme", tax_id="111"),
+            row("UPDATE_AFTER", "billing.customer", 2, "echo", name="Acme Ltd", tax_id="111"),
+            row("DELETE", "crm.account", 3, "deleted", name="Acme Ltd", tax_id="111")]
+    out = history(rows, skip={"crm_code"}, hidden={"tax_id"})
+    assert [(h["system"], h["kind"], h["outcome"]) for h in out] == [
+        ("crm.account", "insert", "created"), ("billing.customer", "update", "echo"),
+        ("crm.account", "delete", "deleted")]
+    assert out[0]["changes"] == [{"field": "name", "from": None, "to": "Acme"},
+                                 {"field": "tax_id", "from": None, "to": api.sample.MASK}]
+    assert out[1]["changes"] == [{"field": "name", "from": "Acme", "to": "Acme Ltd"}]
+
+
+# --- settling a held row from the screen (#111) -----------------------------
+
+def _linker(monkeypatch, answer):
+    """The link route against a stand-in hub database."""
+    from api import integration_detail as detail
+
+    class Cursor:
+        def fetchone(self):
+            if isinstance(answer, Exception):
+                raise answer
+            return {"record": answer}
+
+    class Connection:
+        calls: list = []
+
+        def execute(self, sql, params):
+            Connection.calls.append((sql, params))
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(detail, "_hub", lambda hub_id: ({}, "customer", "customer_id",
+                                                        {"crm": "crm_code"}, set()))
+    monkeypatch.setattr(detail, "_connect", lambda contract: Connection())
+    return detail, Connection
+
+
+def test_linking_a_held_row_calls_the_hubs_own_function(monkeypatch):
+    detail, connection = _linker(monkeypatch, {"customer_id": 7})
+    got = detail.link(detail.Link(hub="hub.customer", system="crm.account",
+                                  local={"crm_code": 42}, record={"customer_id": 7}))
+    assert got == {"record": {"customer_id": 7}}
+    sql, params = connection.calls[-1]
+    assert "hub.link" in sql
+    assert params[:2] == ("customer", "crm.account")
+    assert json.loads(params[2]) == {"crm_code": 42} and json.loads(params[3]) == {"customer_id": 7}
+
+
+def test_a_row_with_no_record_named_becomes_one_of_its_own(monkeypatch):
+    detail, connection = _linker(monkeypatch, {"customer_id": 8})
+    detail.link(detail.Link(hub="hub.customer", system="crm.account", local={"crm_code": 43}))
+    assert connection.calls[-1][1][3] is None
+
+
+def test_the_hubs_refusal_is_the_message_not_a_500(monkeypatch):
+    import psycopg
+    boom = psycopg.errors.RaiseException(
+        "hub: record {\"customer_id\": 3} is already 91 in crm.account\nCONTEXT: PL/pgSQL")
+    detail, _ = _linker(monkeypatch, boom)
+    with pytest.raises(Exception) as caught:
+        detail.link(detail.Link(hub="hub.customer", system="crm.account",
+                                local={"crm_code": 44}, record={"customer_id": 3}))
+    assert caught.value.status_code == 400
+    assert "already 91 in crm.account" in caught.value.detail
+    assert "CONTEXT" not in caught.value.detail

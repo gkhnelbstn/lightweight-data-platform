@@ -229,6 +229,34 @@ subscriptions (that needs identity -- ADR 0010) and an alert history page (the
 run log already records what happened; an alert that fired is not a second
 kind of fact).
 
+### Talking about an asset
+
+ODD has a Discussions tab on every data entity, and it is a Slack thread:
+the message is posted into a channel and its replies come back onto the page.
+Slack is the only provider it has, so the tab offers no channel until a
+workspace is connected -- and the token that connects one is a credential
+belonging to whoever owns that workspace, not something this repository can
+carry.
+
+What is here is the wiring and the app. `deploy/slack-app-manifest.yaml`
+creates the Slack app with the four scopes ODD uses (`channels:read` for the
+channel list, `chat:write` for the message, `users:read` for who replied,
+`channels:history` for the replies), and `compose.yaml` reads two variables
+from `.env`:
+
+```
+ODD_SLACK_ENABLED=true
+ODD_SLACK_TOKEN=xoxb-...
+```
+
+Then invite the bot to the channels discussions may go to -- ODD lists only
+the channels it is a member of. Two things are worth knowing before the first
+try: replies arrive through Slack's Events API, which posts to
+`/api/slack/events` on this platform, so on a laptop messages go out and
+replies do not come back until the platform is reachable from Slack; and
+`DATACOLLABORATION_ENABLED: true` with an empty token stops ODD from starting
+at all, which is why both variables default to off.
+
 ### Which dashboards break
 
 A quality failure is only interesting if you can follow it. The demo now

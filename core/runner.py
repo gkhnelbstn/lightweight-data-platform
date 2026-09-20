@@ -280,13 +280,14 @@ def push_to_odd(contract: dict, results: dict, url: str) -> int:
     from integrations.odd.from_datacontract import (build, dataset_oddrn,
                                                     ensure_datasource, post)
     from integrations.odd.mapper import entity_list
+    from integrations.odd.relationships import entities as foreign_keys
 
     from integrations.odd.curate import ensure_terms, fill
     from integrations.odd.entity_page import sync_links
 
     ds = dataset_oddrn(contract, "erp")
-    body = entity_list(build(contract, results, ds), HOST).model_dump(
-        mode="json", exclude_none=True)
+    body = entity_list(build(contract, results, ds) + foreign_keys(contract),
+                       HOST).model_dump(mode="json", exclude_none=True)
     ensure_datasource(url)
     post(url, body)
     # Everything a catalogue is for and a collector cannot know -- owner,
@@ -454,6 +455,21 @@ def main() -> None:
             note = f" errored={r['errored']}" if r["errored"] else ""
             print(f"{flag:<4} {r['as_of']} {r['contract']:<20} "
                   f"score={r['score']:.4f} failed={r['failed']}/{r['total']}{note}")
+    if a.odd_url:
+        publish_master_data(a.odd_url)
+
+
+def publish_master_data(url: str) -> None:
+    """The hub's golden records on ODD's Master Data page, once per run.
+    Not worth failing the run over, and nothing to do without a hub."""
+    from pathlib import Path
+
+    from integrations.odd import master_data
+    try:
+        for table in master_data.tables(Path(os.getenv("INTEGRATION_DIR", "contracts"))):
+            print(f"MASTER {master_data.publish(url, table)}", flush=True)
+    except Exception as e:
+        print(f"WARN master data not published ({e})", flush=True)
 
 
 if __name__ == "__main__":

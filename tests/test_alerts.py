@@ -14,6 +14,14 @@ from core import alerts
 TODAY = date(2026, 9, 14)
 
 
+@pytest.fixture(autouse=True)
+def english(monkeypatch):
+    """The phrases below are English; the demo compose runs the app with
+    `LDP_LANGUAGE: tr`, and `docker compose exec app pytest` inherits it."""
+    from core import language
+    monkeypatch.setattr(language, "LANGUAGE", "en")
+
+
 def test_a_run_with_nothing_new_says_nothing():
     """The common case. `compose` returning None is what stops the POST."""
     assert alerts.compose(TODAY, [{"id": "erp.customers"}], [], {}, []) is None
@@ -66,3 +74,13 @@ def test_a_healthy_rule_and_an_unknown_engine_stay_quiet():
 
 def test_no_url_means_no_alerting_and_no_error():
     assert alerts.send("anything", url="") is False
+
+
+def test_the_message_is_written_in_the_deployments_language(monkeypatch):
+    """Issue #44: written once for everyone, so the deployment picks it."""
+    from core import language
+    monkeypatch.setattr(language, "LANGUAGE", "tr")
+    text = alerts.compose(TODAY, [{"id": "erp.customers"}], [],
+                          {"erp.customers": ["a", "b", "c", "d"]}, [])
+    assert "Kontrat kalitesi" in text and "1 kontrat" in text
+    assert "erp.customers içinde yeni hatalar: a, b, c (+1 tane daha)" in text

@@ -30,10 +30,35 @@ from pathlib import Path
 
 import yaml
 
+from core import flow_sql
 from core import flows as flowmod
 from core.mapping import _properties
 
 CHECKPOINT_MS = int(os.getenv("FLOW_CHECKPOINT_MS", "3000"))
+
+
+def env(flow: flowmod.Flow, name: str) -> dict:
+    """SeaTunnel's job settings: the two a flow may state, and the rest fixed.
+
+    `parallelism` is deliberately not one of them -- a second reader reorders
+    one key's changes, and the hub decides by the order they were committed
+    in (ADR 0021). `read_limit.rows_per_second` is SeaTunnel's own throttle,
+    and it is what keeps a first snapshot from taking the source's disk."""
+    rows = flow.job.get("rowsPerSecond")
+    # A polling source sleeps between listings and can take a checkpoint only
+    # between them, so its checkpoints are spaced by the poll rather than by
+    # the three seconds a CDC flow uses. Measured: with them closer together
+    # they queue behind the sleep and one expires, and SeaTunnel answers that
+    # by failing the whole job ("Checkpoint expired before completing").
+    poll = flow.job.get("pollSeconds")
+    return {"job.mode": "STREAMING", "parallelism": 1, "job.name": name,
+            "checkpoint.interval": flow.job.get(
+                "checkpointInterval", 2 * poll * 1000 if poll else CHECKPOINT_MS),
+            # ...and one that outlasts a sleeping reader: the barrier waits
+            # for the poll in flight, and the default 30 s is the poll plus a
+            # slow answer on a bad day.
+            **({"checkpoint.timeout": max(60_000, 6 * poll * 1000)} if poll else {}),
+            **({"read_limit.rows_per_second": rows} if rows else {})}
 
 
 def _literal(v) -> str:
@@ -92,6 +117,32 @@ def _cdc_source(contract: dict, slot: str) -> dict:
                              "decoding.plugin.name": "pgoutput"}}
 
 
+POLL_SECONDS = 60
+
+
+def _api_source(contract: dict, spec: dict, flow: flowmod.Flow) -> dict:
+    """An HTTP endpoint, polled (ADR 0027).
+
+    There is no change log to read, so there is no CDC connector to use: the
+    job asks for the listing every `pollSeconds` and the hub decides what each
+    answer means. SeaTunnel is told the shape of the answer, because it parses
+    the JSON itself -- and only the fields this flow carries, plus the one
+    saying when the record changed.
+    """
+    server = next(s for s in contract["servers"] if s.get("type") == "api")
+    props = _properties(contract)
+    wanted = set(flow.mapping.columns.values()) | {spec["changedAt"]}
+    return {"Http": {
+        "plugin_output": "src",
+        "url": server["location"],
+        "method": "GET",
+        "format": "json",
+        "content_field": spec["contentField"],
+        "poll_interval_millis": flow.job.get("pollSeconds", POLL_SECONDS) * 1000,
+        "schema": {"fields": {n: flowmod.API_TYPES[p["physicalType"]]
+                              for n, p in props.items() if n in wanted}}}}
+
+
 def _where(conditions: list[str]) -> str:
     return f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -115,10 +166,17 @@ def inbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
     part of a record leaves the others null, and those nulls are not values.
     `match` takes one kind of row from a table with several per record."""
     hub, entity = by_id[flow.target], by_id[flow.target]["schema"][0]["name"]
+    source = by_id[flow.mapping.reference]
+    api = flowmod.api_of(source)
     cols = list(flow.mapping.columns)
     unmapped = _unmapped(flow)
     extra = ["unmapped"] if unmapped else []
-    sql = (f"SELECT row_kind, source_ms, {_literal(flow.mapping.reference)} AS system, "
+    # A poll has no row kind and no commit time of its own: every record the
+    # listing carries is a POLL, and when it changed is a field of it
+    # (ADR 0027). A CDC source gets both from the connector.
+    said = (f"'POLL' AS row_kind, {api['changedAt']} AS source_ms" if api
+            else "row_kind, source_ms")
+    sql = (f"SELECT {said}, {_literal(flow.mapping.reference)} AS system, "
            f"{_literal(','.join(cols))} AS fields, {_projection(flow)}"
            + (f", {unmapped} AS unmapped" if unmapped else "") + " FROM dual"
            + _where([f"{c} = {_literal(v)}" for c, v in flow.match.items()]))
@@ -126,16 +184,17 @@ def inbound(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict:
               f"{', '.join(cols + extra)}) values "
               f"({', '.join('?' * (len(cols) + len(extra) + 4))})")
     return {
-        "env": {"job.mode": "STREAMING", "checkpoint.interval": CHECKPOINT_MS,
-                "parallelism": 1, "job.name": flow.id},
-        "source": [_cdc_source(by_id[flow.mapping.reference], f"{flow.id}_slot")],
-        "transform": [
+        "env": env(flow, flow.id),
+        "source": [_api_source(source, api, flow) if api
+                   else _cdc_source(source, f"{flow.id}_slot")],
+        "transform": ([] if api else [
             {"Metadata": {"plugin_input": "src", "plugin_output": "meta",
                           "metadata_fields": {"SourceTimestamp": "source_ms"}}},
             {"RowKindExtractor": {"plugin_input": "meta", "plugin_output": "log",
                                   "custom_field_name": "row_kind",
-                                  "transform_type": "FULL"}},
-            {"Sql": {"plugin_input": "log", "plugin_output": "out", "query": sql}}],
+                                  "transform_type": "FULL"}}]) + [
+            {"Sql": {"plugin_input": "src" if api else "log",
+                     "plugin_output": "out", "query": sql}}],
         "sink": [{"Jdbc": {"plugin_input": "out", **_jdbc(_server(hub)),
                            "query": insert}}]}
 
@@ -167,13 +226,14 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
     """
     target = by_id[flow.target]
     server = _server(target)
-    if server["type"] != "sqlserver":
-        raise NotImplementedError(
-            f"{flow.id}: only SQL Server targets are compiled yet; a Postgres "
-            f"target needs the guarded upsert of ADR 0020")
     props = _properties(target)
     key = [n for n, p in props.items() if p.get("primaryKey")]
-    table = f"{server.get('schema', 'dbo')}.{target['schema'][0]['physicalName']}"
+    engine = "sqlserver" if server["type"] == "sqlserver" else "postgres"
+    default_schema = "dbo" if engine == "sqlserver" else "public"
+    where = flow_sql.Target(
+        engine, f"{server.get('schema', default_schema)}.{target['schema'][0]['physicalName']}",
+        {n: p.get("physicalType") for n, p in props.items()}
+        | {"_changed": "text", "_link": "boolean"})
     cols = flow.mapping.columns                      # target column: hub column
     keyed = [(t, s) for t, s in cols.items() if t in key]
     carried = [(t, s) for t, s in cols.items() if t not in key]
@@ -194,31 +254,16 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
     # and deleting the target's row then deletes the address on its way in.
     named = "(" + " OR ".join(
         f"POSITION({_literal(',' + s + ',')}, _changed) > 0" for _, s in carried) + ")"
-    new = " OR ".join(["s._changed = '*'"] + [
-        f"CHARINDEX({_literal(',' + s + ',')}, s._changed) > 0" for _, s in keyed])
-
-    written = list(cols) + list(flow.match)
-    using = ", ".join(f"? AS [{c}]" for c in written) + ", ? AS _changed"
-    on = " AND ".join(f"t.[{c}] = s.[{c}]" for c in [t for t, _ in keyed] + list(flow.match))
+    # A missing record is created only by a revision that is new to everyone
+    # ('*'): otherwise it was deleted here and not yet in the hub. A kind of
+    # row is created when its value changes. The statements are the engine's
+    # (core/flow_sql.py).
     linked = [t for t, s in cols.items() if s in link_by]
-    if assigned and linked:
-        on = (f"({on} OR ({' AND '.join(f's.[{c}] IS NULL' for c in sorted(assigned))} AND "
-              + " AND ".join(f"t.[{c}] = s.[{c}]" for c in linked) + "))")
-    sets = ", ".join(
-        f"t.[{t}] = CASE WHEN {new} OR CHARINDEX({_literal(',' + s + ',')}, "
-        f"s._changed) > 0 THEN s.[{t}] ELSE t.[{t}] END" for t, s in carried)
-    inserted = [c for c in written if c not in assigned]
-    merge = (f"MERGE {table} WITH (HOLDLOCK) AS t USING (SELECT {using}) AS s ON {on} "
-             + (f"WHEN MATCHED THEN UPDATE SET {sets} " if sets else "")
-             # A missing record is created only by a revision that is new to
-             # everyone ('*'): otherwise it was deleted here and not yet in
-             # the hub. A kind of row is created when its value changes.
-             + ("WHEN NOT MATCHED " if flow.match else f"WHEN NOT MATCHED AND ({new}) ")
-             + f"THEN INSERT ({', '.join(f'[{c}]' for c in inserted)}) "
-               f"VALUES ({', '.join(f's.[{c}]' for c in inserted)});")
-    delete = (f"DELETE FROM {table} WHERE "
-              + " AND ".join([f"[{t}] = ?" for t, _ in keyed]
-                             + [f"[{c}] = {_literal(v)}" for c, v in flow.match.items()]))
+    # The MERGE reads `_link` only when it may fall back to `linkBy` (#120).
+    guarded = bool(linked) and bool({t for t, _ in keyed} & flow.filled_by_target)
+    merge = flow_sql.merge(where, keyed, carried, flow.match, assigned, linked,
+                           replace_only=bool(flow.match))
+    delete = flow_sql.delete(where, keyed, flow.match)
     keys_only = ", ".join(f"{s} AS {t}" for t, s in keyed)
     key_known = [f"{s} IS NOT NULL" for _, s in keyed]
 
@@ -232,7 +277,8 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
         {"RowKindExtractor": {"plugin_input": "dead", "plugin_output": "dead_rows",
                               "custom_field_name": "row_kind"}},
         {"Sql": {"plugin_input": "live", "plugin_output": "upserts",
-                 "query": f"SELECT {_projection(flow)}{constants}, _changed FROM dual"
+                 "query": f"SELECT {_projection(flow)}{constants}, _changed"
+                          + (", _link" if guarded else "") + " FROM dual"
                           + _where([ours, touched] + waits + present)}},
         {"Sql": {"plugin_input": "dead_rows", "plugin_output": "deletes",
                  "query": f"SELECT {keys_only} FROM dual" + _where([ours] + key_known)}}]
@@ -247,8 +293,7 @@ def outbound(flow: flowmod.Flow, by_id: dict[str, dict],
                                        + [f"{s} IS NULL" for _, s in carried])}})
         sink.append({"Jdbc": {"plugin_input": "emptied", **jdbc, "query": delete}})
     return {
-        "env": {"job.mode": "STREAMING", "checkpoint.interval": CHECKPOINT_MS,
-                "parallelism": 1, "job.name": flow.id},
+        "env": env(flow, flow.id),
         "source": [_cdc_source(by_id[flow.mapping.reference], f"{flow.id}_slot")],
         "transform": transform,
         "sink": sink}
@@ -274,6 +319,11 @@ def _rest(config: dict) -> dict:
 def jobs(by_id: dict[str, dict], flows: list[flowmod.Flow]) -> dict[str, dict]:
     out = {}
     for flow in flows:
+        if flow.aggregates:
+            from core import flow_aggregate
+            out.update({name: _rest(config) for name, config
+                        in flow_aggregate.jobs(flow, by_id).items()})
+            continue
         into_hub = flowmod.hub_of(by_id.get(flow.target)) is not None
         pair = next((f for f in flows if (f.mapping.reference, f.target, f.match)
                      == (flow.target, flow.mapping.reference, flow.match)), None)
@@ -295,12 +345,21 @@ def main() -> None:
     ap.add_argument("--resnapshot", action="store_true",
                     help="with --apply: start flows from scratch rather than from "
                          "their checkpoints (ADR 0023 says what that costs)")
+    # Every flow is still read and still refused as a set -- which systems echo
+    # the hub's writes is a property of the whole of them (ADR 0021) -- and
+    # only these are started or stopped. The Integration tab has had this since
+    # #109; the CLI needs it to bring one pair up without the engines the
+    # others want.
+    ap.add_argument("--only", help="with --apply or --stop: these job names, "
+                                   "comma-separated, rather than all of them")
     args = ap.parse_args()
+    only = {n.strip() for n in args.only.split(",")} if args.only else None
 
     by_id, flows = load(args.contracts)
     if args.stop:
         from core import flow_apply
-        flow_apply.stop({f.id for f in flows})
+        for line in flow_apply.stop(only or {f.id for f in flows}):
+            print(line)
         return
     found = flowmod.problems(flows, by_id)
     for line in found:
@@ -313,7 +372,12 @@ def main() -> None:
         print(json.dumps(jobs(by_id, flows), indent=2))
     else:
         from core import flow_apply
-        flow_apply.apply(by_id, flows, jobs(by_id, flows), resnapshot=args.resnapshot)
+        said, refused = flow_apply.apply(by_id, flows, jobs(by_id, flows),
+                                         resnapshot=args.resnapshot, only=only)
+        for line in said:
+            print(line)
+        if refused:
+            raise SystemExit("\n".join(f"REFUSED: {r}" for r in refused))
 
 
 if __name__ == "__main__":

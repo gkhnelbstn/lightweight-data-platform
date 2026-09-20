@@ -75,6 +75,15 @@ services:
       SPRING_DATASOURCE_USERNAME: odd-platform
       SPRING_DATASOURCE_PASSWORD: odd-platform-password
       AUTH_TYPE: DISABLED
+      # Discussions about an asset. ODD posts them into a Slack channel and
+      # shows the thread back, and Slack is the only provider it has -- so
+      # without a workspace the Discussions tab has no channel to offer.
+      # deploy/slack-app-manifest.yaml is the app; its token is the
+      # workspace owner's to create and goes in `.env`, never in this file.
+      # Off until both are set: with `enabled: true` and an empty token ODD
+      # refuses to start ("Slack OAuth token is empty").
+      DATACOLLABORATION_ENABLED: ${ODD_SLACK_ENABLED:-false}
+      DATACOLLABORATION_SLACK_OAUTH_TOKEN: ${ODD_SLACK_TOKEN:-}
     ports: ["8080:8080"]
     restart: always
     healthcheck:
@@ -139,6 +148,10 @@ services:
     environment:
       ERP_DSN: postgresql://postgres:postgres@db:5432/erp
       DQ_DSN: postgresql://postgres:postgres@db:5432/dq
+      # The language of what the server writes once for everyone -- the link
+      # names in ODD, the alert message (core/language.py, issue #44). The UI
+      # itself follows ODD's own picker, per viewer.
+      LDP_LANGUAGE: tr
       ODD_PG_HOST: db
       DQ_HOST: dq.local
       # test_medallion_scd2.py's fixture defaults to localhost, which is `db`

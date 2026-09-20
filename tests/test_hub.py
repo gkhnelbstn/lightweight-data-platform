@@ -426,3 +426,95 @@ def test_an_hour_old_awaited_value_goes_whatever_record_it_is_for(hub):
     send(hub, "billing", "INSERT", 100, **ACME)
     assert hub.execute("select count(*) from hub.expect where key = '{\"code\": 99}'"
                        ).fetchone()[0] == 0
+
+
+# --- what became of each row, for the tab's history ------------------------
+
+def outcomes(cx, system):
+    return [r[0] for r in cx.execute(
+        "select outcome from hub.customer_inbox where system = %s and row_kind <> "
+        "'UPDATE_BEFORE' order by id", (system,)).fetchall()]
+
+
+def test_each_row_says_what_the_hub_did_with_it(hub):
+    """A history line reads "our own write coming back" or "lost to a later
+    edit", not only "billing updated the name"."""
+    send(hub, "crm", "INSERT", 100, **ACME)                               # created
+    send(hub, "billing", "INSERT", 105, **ACME)                           # our delivery, back
+    update(hub, "crm", 200, ACME, {**ACME, "name": "Acme Ltd"})           # applied
+    update(hub, "billing", 150, ACME, {**ACME, "name": "Acme stale"})     # lost
+    update(hub, "billing", 210, ACME, {**ACME, "name": "Acme Ltd"})       # echo
+    assert outcomes(hub, "crm") == ["created", "applied"]
+    assert outcomes(hub, "billing") == ["echo", "lost", "echo"]
+
+
+def api(cx):
+    """A one-way source: it receives nothing, so nothing is ever awaited from
+    it -- which is all `fields` had to say (ADR 0027)."""
+    from core import hub as h
+    h.register_system(cx, "customer", "api", [])
+
+
+def test_nothing_is_awaited_from_a_system_that_receives_nothing(hub):
+    api(hub)
+    send(hub, "crm", "INSERT", 100, **ACME)
+    assert expected(hub, "api") == [] and expected(hub, "billing") != []
+
+
+def test_a_poll_that_repeats_a_record_is_not_an_edit(hub):
+    """An API answers with the record as it is now, so every poll carries
+    every field. The previous poll is the before image, and a field that did
+    not move between two polls is not an edit."""
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 160, code=1, name="Acme", active=True)
+    assert golden(hub)[:2] == ("Acme", True)
+    assert hub.execute("select _rev from hub.customer where code = 1").fetchone() == (0,)
+    assert conflicts(hub) == []
+
+
+def test_an_api_never_written_back_does_not_dispute_a_field_every_poll(hub):
+    """Nothing writes to an API, so a value another system won stays wrong in
+    its answer for ever. Read as an edit, that would be one conflict row per
+    record per poll; read against the previous poll, it is no edit at all."""
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    update(hub, "crm", 200, {"code": 1, "name": "Acme"}, {"code": 1, "name": "Acme Ltd"})
+    send(hub, "api", "POLL", 260, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 320, code=1, name="Acme", active=True)
+    assert golden(hub)[0] == "Acme Ltd"
+    assert conflicts(hub) == []
+
+
+def test_a_change_in_the_api_is_one_edit(hub):
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 200, code=1, name="Acme Bakery", active=True)
+    assert golden(hub)[:2] == ("Acme Bakery", True)
+    assert hub.execute("select _rev, _changed from hub.customer where code = 1"
+                       ).fetchone() == (1, ",name,")
+
+
+def test_a_row_the_hub_did_nothing_with_is_not_kept(hub):
+    """#56: the inbox is a log of what happened, and a polled source writes a
+    row per record per poll whether or not anything did (ADR 0027) -- 2 612 of
+    the demo's 3 473 rows after an hour and a half of one. The trigger drops
+    its own row when the merge did nothing, so the log grows with what
+    changed, and the tab's hourly chart counts arrivals that meant something."""
+    api(hub)
+    send(hub, "api", "POLL", 100, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 160, code=1, name="Acme", active=True)
+    send(hub, "api", "POLL", 220, code=1, name="Acme", active=True)
+    kept = hub.execute("select row_kind, outcome from hub.customer_inbox "
+                       "order by id").fetchall()
+    assert kept == [("POLL", "created")]
+
+
+def test_every_other_outcome_is_history(hub):
+    """An echo is not nothing: it says a delivery arrived where it was sent."""
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "billing", "INSERT", 105, **ACME)
+    update(hub, "crm", 110, ACME, {**ACME, "name": "Acme Ltd"})
+    assert [o for _, o in hub.execute(
+        "select id, outcome from hub.customer_inbox order by id").fetchall()] == [
+        "created", "echo", "before", "applied"]

@@ -14,7 +14,7 @@
 #   {{scope}}  -- the daily window. `datacontract test --filter` is the
 #                 standard's answer and it is broken in 1.1.3, so core/runner.py
 #                 still supplies the window; see its docstring.
-apiVersion: v3.0.2
+apiVersion: v3.1.0
 kind: DataContract
 id: erp.sales_orders
 name: Sales Orders
@@ -69,6 +69,9 @@ schema:
         physicalType: bigint
         description: "The customer this order belongs to. A foreign key into customers; nulls here break every revenue-by-customer report."
         required: true
+        relationships:
+          - type: foreignKey
+            to: customers.customer_id
       - name: order_date
         logicalType: date
         physicalType: date

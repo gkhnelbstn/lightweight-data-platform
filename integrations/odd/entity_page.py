@@ -44,6 +44,7 @@ import urllib.error
 import urllib.request
 
 from core import store
+from core.language import say
 
 # Where a person's browser reaches the panel. Not the compose service name:
 # these URLs are followed from outside the network, not from inside it -- and
@@ -60,7 +61,7 @@ def _get(url: str) -> dict:
 
 
 def _send(url: str, body: dict, method: str = "POST"):
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+    req = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(),
                                  method=method,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -83,7 +84,7 @@ def entity_id(url: str, oddrn: str) -> int | None:
         for item in results.get("items", []):
             if item.get("oddrn") == oddrn:
                 return item["id"]
-        if not (results.get("page_info") or {}).get("has_next"):
+        if not (results.get("page_info") or {}).get("hasNext"):
             return None
         page += 1
 
@@ -107,15 +108,18 @@ def desired_links(contract: dict) -> list[dict]:
     are deliberately not made: 257 checks a day is 257 entity lookups and 257
     links to keep, for a hop the filtered list already makes in one.
     """
+    # `key` is what the link is, `name` what it says: the name follows the
+    # deployment's language (core/language.py), so it cannot be what
+    # `odd_links` finds the link by -- a new language would add a second set.
     links = [
-        {"name": "Kontroller", "url":
-            f"{UI_URL}{PANEL}?dq_checks_contract={contract['id']}"},
-        {"name": "Veri kalitesi (kontrat)", "url":
-            f"{UI_URL}{PANEL}?dq_contract={contract['id']}"},
+        {"key": "checks", "name": say("Checks"),
+         "url": f"{UI_URL}{PANEL}?dq_checks_contract={contract['id']}"},
+        {"key": "contract", "name": say("Data quality (contract)"),
+         "url": f"{UI_URL}{PANEL}?dq_contract={contract['id']}"},
     ]
     for prop in contract.get("customProperties") or []:
         if prop.get("property") == "syncTo":
-            links.append({"name": "Senkron kurali",
+            links.append({"key": "sync", "name": say("Replication rule"),
                           "url": f"{UI_URL}{PANEL}?dq_tab=Replication"})
     return links
 
@@ -139,10 +143,12 @@ def sync_links(url: str, contract: dict, oddrn: str) -> int:
             (contract["id"],)).fetchall()}
 
     made = 0
-    for link in desired_links(contract):
-        if link["name"] in known:
+    for wanted in desired_links(contract):
+        key = wanted["key"]
+        link = {"name": wanted["name"], "url": wanted["url"]}
+        if key in known:
             try:
-                _send(f"{base}/{known[link['name']]}", link, method="PUT")
+                _send(f"{base}/{known[key]}", link, method="PUT")
                 made += 1
                 continue
             except urllib.error.HTTPError as e:
@@ -159,6 +165,6 @@ def sync_links(url: str, contract: dict, oddrn: str) -> int:
                    values (%s, %s, %s)
                    on conflict (contract_id, name) do update
                      set link_id = excluded.link_id""",
-                (contract["id"], link["name"], new_id))
+                (contract["id"], key, new_id))
         made += 1
     return made

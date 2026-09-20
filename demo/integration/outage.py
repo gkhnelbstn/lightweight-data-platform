@@ -54,7 +54,9 @@ def after() -> None:
 
     start = time.monotonic()
     by_id, flows = flow_jobs.load(Path("demo/integration"))
-    flow_apply.apply(by_id, flows, flow_jobs.jobs(by_id, flows))
+    said, refused = flow_apply.apply(by_id, flows, flow_jobs.jobs(by_id, flows))
+    for line in said + [f"REFUSED: {r}" for r in refused]:
+        print(line)
     v.wait("the edit made while down reaches the CRM, not reverted",
            lambda: v.crm_row(code) == ("Edited meanwhile", "Y"), seconds=120)
     v.wait("the delete made while down reaches the CRM", lambda: v.crm_row(gone_code) is None)

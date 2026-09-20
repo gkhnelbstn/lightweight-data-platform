@@ -35,7 +35,9 @@ create table if not exists hub.system (
 alter table hub.system add column if not exists fields text[];
 
 -- An update arrives as two rows, the before image first. It waits here for
--- its after image.
+-- its after image. An API source keeps its last poll here too: a poll has no
+-- before image of its own, so the previous one is it (ADR 0027). One row per
+-- system and record either way; the only difference is how long it waits.
 create table if not exists hub.pending_before (
     system text  not null,
     entity text  not null,
@@ -174,6 +176,64 @@ begin
     values (p_system, p_entity, p_key, p_field, p_value);
 end $$;
 
+-- The record whose delivery this row is, when no rule can say so (#122).
+--
+-- A record the hub created beside one that shares its `linkBy` value goes out
+-- as an insert and the system numbers it itself. That insert comes back under
+-- a key the hub has never seen, carrying the very value the rule cannot tell
+-- apart -- so the rule holds it, and a person is asked about the hub's own
+-- write. The hub knows better: it recorded field by field what it sent to
+-- that system (`hub.expect`), and an insert carrying exactly those values is
+-- that delivery.
+--
+-- Exactly one record, and every field the hub sent matching: two customers
+-- with one name and one tax number, created in the same minute, are genuinely
+-- indistinguishable and still wait for a person. A record that already has a
+-- key of this system is awaiting no insert and is not a candidate.
+create or replace function hub.awaited(p_entity text, p_system text, p_row jsonb)
+returns jsonb language plpgsql as $$
+declare
+    e     hub.entity;
+    kc    text;
+    ac    text;
+    keys  jsonb[];
+    hits  jsonb[];
+begin
+    select * into e from hub.entity x where x.name = p_entity;
+    kc := e.key[1];
+    ac := e.keys ->> split_part(p_system, '.', 1);
+    -- Every value the hub is still awaiting for a field, not only the newest
+    -- (#128). A delivery made under one value and answered after the field
+    -- changed again is exactly the row nothing else can place, and each of
+    -- these values was sent to this system for this record, so any of them
+    -- identifies the same record. Nothing stale: an expectation over an hour
+    -- old is dropped everywhere.
+    with awaited as (
+        select x.key, x.field,
+               bool_or(x.value is not distinct from (p_row -> x.field)) as sent
+          from hub.expect x
+         where x.system = p_system and x.entity = p_entity
+           and x.created_at >= now() - interval '1 hour'
+         group by x.key, x.field
+    )
+    select array_agg(t.key) into keys from (
+        select a.key from awaited a group by a.key
+        -- Field '*' is a delete on its way: no insert answers that.
+        having bool_and(a.field <> '*' and a.sent)
+    ) t;
+    if keys is null then
+        return null;
+    end if;
+    execute format('select array_agg(jsonb_build_object(%L, g.%I)) from hub.%I g '
+                   'where jsonb_build_object(%L, g.%I) = any($1) and g.%I is null',
+                   kc, kc, p_entity, kc, kc, ac)
+        into hits using keys;
+    if hits is null or cardinality(hits) <> 1 then
+        return null;
+    end if;
+    return hits[1];
+end $$;
+
 -- The golden key of the record a row belongs to, for a system with keys of
 -- its own; null when the row is held instead. A key seen before answers at
 -- once, a deleted record's too. An unseen one is matched by the system's
@@ -249,7 +309,22 @@ begin
             elsif hits is not null then
                 hk := jsonb_build_object(kc, hits[1] -> kc);
                 linked := true;
-            else
+            end if;
+            -- Before a person is asked, and before a record is made: is this
+            -- the hub's own delivery coming back under a key nothing can
+            -- place? (#122) The rule's answer to "none of them" is a new
+            -- record, which is a decision, not a failure -- and it is the
+            -- wrong one when the hub is awaiting exactly these values from
+            -- this system, which happens whenever the value it was delivered
+            -- under changed before the answer came back (#128).
+            if hk is null then
+                hk := hub.awaited(p_entity, p_system, p_row);
+                if hk is not null then
+                    linked := true;
+                    why := null;
+                end if;
+            end if;
+            if hk is null and why is null then
                 hk := jsonb_build_object(kc, nextval('hub.record_id'));
             end if;
         end if;
@@ -285,6 +360,43 @@ begin
     end loop;
 end $$;
 
+-- May the other systems find this record by the values they match on?
+--
+-- No, when another record already holds them (#120). The out-flow's MERGE
+-- falls back to matching by `linkBy` while a system's code is unknown -- that
+-- is how the first sync finds the row a system had all along -- and for a
+-- record deliberately created beside one with the same tax number that
+-- fallback lands on the *other* record's row and overwrites it. Such a record
+-- goes out as an insert instead, and the system numbers it itself.
+create or replace function hub.linkable(p_entity text, p_row jsonb, p_key jsonb)
+returns boolean language plpgsql as $$
+declare
+    e     hub.entity;
+    rule  text[];
+    probe jsonb;
+    taken int;
+begin
+    select * into e from hub.entity x where x.name = p_entity;
+    for rule in select distinct s.link_by from hub.system s
+                 where s.entity = p_entity and s.link_by is not null
+    loop
+        probe := (select jsonb_object_agg(c, p_row -> c) from unnest(rule) c);
+        continue when probe is null
+                   or exists (select 1 from jsonb_each(probe) v where v.value = 'null');
+        execute format(
+            'select count(*) from hub.%I g, jsonb_populate_record(null::hub.%I, $1) r, '
+            'jsonb_populate_record(null::hub.%I, $2) k where %s and g.%I is distinct from k.%I',
+            p_entity, p_entity, p_entity,
+            (select string_agg(format('g.%I = r.%I', c, c), ' and ') from unnest(rule) c),
+            e.key[1], e.key[1])
+            into taken using probe, p_key;
+        if taken > 0 then
+            return false;
+        end if;
+    end loop;
+    return true;
+end $$;
+
 -- A person's decision on held rows: this system's key is that record, or,
 -- with no record given, a record of its own.
 create or replace function hub.link(p_entity text, p_system text, p_local jsonb,
@@ -316,9 +428,12 @@ begin
     return p_record;
 end $$;
 
+-- It said nothing before; it says what became of the row now (a changed
+-- return type is a new function, so the old one goes first).
+drop function if exists hub.merge(text, text, text, bigint, jsonb);
 create or replace function hub.merge(p_entity text, p_system text, p_kind text,
                                      p_ms bigint, p_row jsonb)
-returns void language plpgsql as $$
+returns text language plpgsql as $$
 declare
     keycols text[];
     req     text[];
@@ -346,7 +461,7 @@ declare
     -- Fields S won while a delivery of another value to S is still on its
     -- way: that delivery lands after, so S must get its own value again.
     back    text[] := '{}';
-    meta    text[] := array['_at', '_by', '_rev', '_changed', '_skip'];
+    meta    text[] := array['_at', '_by', '_rev', '_changed', '_skip', '_link'];
     clist   text;
     -- A system with keys of its own (#80): the golden column holding them,
     -- every such column (none is a field), and how this row was placed.
@@ -355,6 +470,12 @@ declare
     skip    text[];
     linked  boolean := false;
     fresh   boolean := false;
+    -- What became of this row, for the Integration tab's history.
+    echoed  boolean := false;
+    outcome text;
+    -- The key an API's poll was read under, while it is still that system's
+    -- own: what the next poll of the same record is compared against.
+    polled  jsonb;
     -- Fields whose value the flow's value map did not know (#84).
     unmapped text[] := array(select jsonb_array_elements_text(coalesce(p_row -> '_unmapped', '[]')));
 begin
@@ -378,12 +499,25 @@ begin
     if kind = 'UPDATE_BEFORE' then
         insert into hub.pending_before values (p_system, p_entity, k, p_row)
             on conflict (system, entity, key) do update set row = excluded.row;
-        return;
+        return 'before';
     elsif kind = 'UPDATE_AFTER' then
         delete from hub.pending_before p
          where p.system = p_system and p.entity = p_entity and p.key = k
         returning p.row into before;
         after := p_row;
+    elsif kind = 'POLL' then
+        -- An API answers with the record as it is now, and has no change log
+        -- behind it (ADR 0027): no before image, so the previous poll is one.
+        -- Without it every poll is an edit of every field -- harmless where
+        -- the hub agrees, and where another system changed a value the API
+        -- was never written back, one `hub.conflict` row per record per poll,
+        -- the loser always the same stale value.
+        delete from hub.pending_before p
+         where p.system = p_system and p.entity = p_entity and p.key = k
+        returning p.row into before;
+        polled := k;
+        after := p_row;
+        kind := 'UPDATE_AFTER';
     elsif kind = 'INSERT' then
         after := p_row;
     elsif kind = 'DELETE' and exists (select 1 from unnest(req) r where not p_row ? r) then
@@ -412,11 +546,19 @@ begin
                                    then jsonb_build_object('_unmapped', to_jsonb(unmapped))
                                    else '{}' end) r;
         if k is null then
-            return;
+            return 'held';
         end if;
         perform pg_advisory_xact_lock(hashtextextended(p_entity || k::text, 0));
         after := after || k;
         before := before || k;
+    end if;
+    -- A poll is remembered only once its row has a record. One still waiting
+    -- for a person has changed nothing yet, and a before image kept for it
+    -- would make its values look unchanged when it finally arrives -- the
+    -- record would be linked and left empty, or never created at all.
+    if polled is not null then
+        insert into hub.pending_before values (p_system, p_entity, polled, p_row)
+            on conflict (system, entity, key) do update set row = excluded.row;
     end if;
 
     keyed := (select string_agg(format('g.%I is not distinct from r.%I', c, c), ' and ')
@@ -435,10 +577,13 @@ begin
 
     -- A delete: the latest commit decides, against the newest field.
     if after is null then
-        if hub.consume(p_system, p_entity, k, '*', null) or g is null then
-            return;
+        if hub.consume(p_system, p_entity, k, '*', null) then
+            return 'echo';
+        elsif g is null then
+            return 'unchanged';
         end if;
         gt := (select coalesce(max(v::bigint), 0) from jsonb_each_text(g -> '_at') t(n, v));
+        outcome := case when p_ms >= gt then 'deleted' else 'lost' end;
         if p_ms >= gt then
             -- Name the deleter first, so the delete's before image carries it
             -- and the delivery skips the system that already did it.
@@ -470,7 +615,7 @@ begin
               where not e.key = any(skip)
                 and (s.fields is null or e.key = any(s.fields));
         end if;
-        return;
+        return outcome;
     end if;
 
     -- A record the hub does not have. First, is it our own write coming back?
@@ -479,7 +624,7 @@ begin
         -- Part of a record emptying for a record the hub no longer has: there
         -- is nothing left to empty.
         if p_kind = 'DELETE' then
-            return;
+            return 'unchanged';
         end if;
         for f, a in select e.key, e.value from jsonb_each(after) e loop
             continue when f = any(skip);
@@ -488,7 +633,7 @@ begin
             genuine := true;
         end loop;
         if not genuine then
-            return;
+            return 'echo';
         end if;
         -- Then, was it deleted? The later commit wins against the delete too.
         select t.deleted_ms, t.deleted_by into tdel, tby
@@ -496,7 +641,7 @@ begin
         if tdel is not null and p_ms <= tdel then
             insert into hub.conflict (entity, key, field, kept, kept_by, kept_ms, lost, lost_by, lost_ms)
             values (p_entity, k, '*', null, tby, tdel, after, p_system, p_ms);
-            return;
+            return 'lost';
         end if;
         if tdel is not null then
             if kind = 'UPDATE_AFTER' then
@@ -515,7 +660,8 @@ begin
         execute format('insert into hub.%I select * from jsonb_populate_record(null::hub.%I, $1)',
                        p_entity, p_entity)
             using after || jsonb_build_object('_at', f_at, '_by', f_by, '_rev', 0,
-                                              '_changed', '*', '_skip', p_system);
+                                              '_changed', '*', '_skip', p_system,
+                                              '_link', hub.linkable(p_entity, after, k));
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(after) e
           where s.entity = p_entity and s.system <> p_system and not e.key = any(skip)
@@ -523,13 +669,16 @@ begin
         if fresh then
             perform hub.replay(p_entity, p_system, jsonb_build_object(ac, after -> ac));
         end if;
-        return;
+        return 'created';
     end if;
 
     for f, a in select e.key, e.value from jsonb_each(after) e loop
         continue when f = any(skip);
         -- Our own write, on its way back.
-        continue when hub.consume(p_system, p_entity, k, f, a);
+        if hub.consume(p_system, p_entity, k, f, a) then
+            echoed := true;
+            continue;
+        end if;
         b := before -> f;
         -- A value this system already had -- its before image, or nothing at
         -- all for a new row -- can never come back as a change: delivering it
@@ -620,14 +769,28 @@ begin
                     where c = any(req) and g -> c = 'null'::jsonb) then
             clist := '*';
         end if;
+        -- `_link` says whether the other systems may still find this record by
+        -- what they match on (#120). It was decided when the record was made,
+        -- and a record whose `linkBy` value is *edited* into a collision kept
+        -- a yes it no longer deserves -- measured, the delivery then landed on
+        -- the other record's rows and overwrote a customer's name (#128). So
+        -- it is asked again whenever this revision changes one of those
+        -- fields, in the same statement: a separate update would be a change
+        -- to the golden record carrying the previous revision's `_changed`,
+        -- and every delivery would run twice.
         execute format('update hub.%I g set %s, _at = g._at || $2, _by = g._by || $3, '
-                       '_rev = g._rev + 1, _changed = $4, _skip = $5 '
+                       '_rev = g._rev + 1, _changed = $4, _skip = $5%s '
                        'from jsonb_populate_record(null::hub.%I, $1) r where %s',
                        p_entity,
                        (select string_agg(format('%I = r.%I', c, c), ', ') from jsonb_object_keys(changed) c),
+                       case when exists (select 1 from hub.system s, unnest(s.link_by) c
+                                          where s.entity = p_entity and changed ? c)
+                            then ', _link = hub.linkable($6, to_jsonb(g) || $1, $1)'
+                            else '' end,
                        p_entity, keyed)
             using k || changed, f_at, f_by, clist,
-                  case when cardinality(lost) > 0 or cardinality(back) > 0 then null else p_system end;
+                  case when cardinality(lost) > 0 or cardinality(back) > 0 then null else p_system end,
+                  p_entity;
         perform hub.expect_add(s.system, p_entity, k, e.key, e.value)
            from hub.system s, jsonb_each(changed) e
           where s.entity = p_entity and s.system <> p_system and not e.key = any(skip)
@@ -651,6 +814,10 @@ begin
     if fresh then
         perform hub.replay(p_entity, p_system, jsonb_build_object(ac, after -> ac));
     end if;
+    return case when changed <> '{}' then 'applied'
+                when cardinality(lost) > 0 then 'lost'
+                when echoed then 'echo'
+                else 'unchanged' end;
 end $$;
 
 -- `fields` is the flow's own list, comma-separated. A flow carrying part of a
@@ -659,7 +826,8 @@ end $$;
 create or replace function hub.on_inbox() returns trigger language plpgsql as $$
 declare
     r jsonb := to_jsonb(new) - 'id' - 'system' - 'row_kind' - 'source_ms'
-                             - 'landed_at' - 'fields' - 'unmapped';
+                             - 'landed_at' - 'fields' - 'unmapped' - 'outcome';
+    said text;
 begin
     if new.fields is not null then
         r := (select jsonb_object_agg(f, r -> f)
@@ -670,6 +838,23 @@ begin
         r := r || jsonb_build_object('_unmapped', to_jsonb(
             string_to_array(trim(trailing ',' from new.unmapped), ',')));
     end if;
-    perform hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r);
+    -- What the hub did with it, kept beside it: a history line reads "an echo
+    -- of our own write" or "lost to a later edit", not only "billing updated".
+    said := hub.merge(tg_argv[0], new.system, new.row_kind, new.source_ms, r);
+    -- ...and a row it did nothing with is not history. A polled source writes
+    -- one per record per poll (ADR 0027) and almost all of them say nothing
+    -- happened: 2 612 of the demo's 3 473 inbox rows, after an hour and a
+    -- half of a ten-second poll of two members. Dropped here rather than kept
+    -- and pruned later, because the log then grows with what changed -- which
+    -- is the shape it should have had -- and because the hourly chart on the
+    -- Integration tab counts these rows, so a poll doing nothing would fill
+    -- it. Whether a flow is alive is its job's to say, and the tab reads that
+    -- from SeaTunnel.
+    if said = 'unchanged' then
+        execute format('delete from hub.%I where id = $1', tg_table_name) using new.id;
+    else
+        execute format('update hub.%I set outcome = $1 where id = $2', tg_table_name)
+            using said, new.id;
+    end if;
     return null;
 end $$;

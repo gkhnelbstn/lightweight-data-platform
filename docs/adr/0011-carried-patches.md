@@ -52,6 +52,38 @@ Reported as
 upstream** — tracked in
 [#19](https://github.com/gkhnelbstn/lightweight-data-platform/issues/19).
 
+### `deploy/Dockerfile.odd-platform` — the ER diagram of a versioned table
+
+ODD's Data Modelling > Relationships page, and the Relationships tab of every
+dataset, answered **500** for a relationship whose table had ever changed
+shape:
+
+    java.lang.IllegalStateException: Duplicate key
+      //postgresql/.../tables/sales_orders/columns/customer_id
+      at ReactiveRelationshipsRepositoryImpl.extractErdDetails:248
+
+ODD keeps a `dataset_field` row per structure version, so one column ODDRN
+legitimately has several rows -- `customer_id` had three here, after the
+column was made `NOT NULL`. `extractErdDetails` collects them with
+`Collectors.toMap` and no merge function. The data is stored correctly; this
+is the read path only, and any table whose columns were ever re-typed hits it.
+
+The fix is a merge function that keeps the newest row, and it is one line. It
+is the first patch here that is **not** in the UI, because the bug is not: the
+`api` stage of `deploy/Dockerfile.odd-platform` compiles that single class
+with `javac` against the platform image's own `/app/classes` and `/app/libs`
+and the Lombok their build declares, then drops the result back into
+`/app/classes`. Still no Gradle, no source tree of theirs vendored, and the
+build fails when the anchor line moves.
+
+Reported upstream as
+[odd-platform#1880](https://github.com/opendatadiscovery/odd-platform/issues/1880)
+before the patch existed, and the write-up there has the same reproduction.
+
+**Delete the `api` stage and its `COPY` when a release carries the fix** --
+tracked in
+[#8](https://github.com/gkhnelbstn/lightweight-data-platform/issues/8).
+
 ### `deploy/odd-platform-tr.mjs` — Turkish in ODD's language picker
 
 ODD already switches language, through a picker that lists `LANGUAGES_MAP`

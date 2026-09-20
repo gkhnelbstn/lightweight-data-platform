@@ -1,0 +1,26 @@
+# The accounting package's journal: one entry per invoice, the sum of its
+# lines (#81). Written by the integration, never read back: a total has no
+# inverse.
+apiVersion: v3.0.2
+kind: DataContract
+id: ledger.journal_entry
+name: Ledger journal entries
+version: 1.0.0
+status: active
+servers:
+  - server: ledger
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: ledger
+    schema: dbo
+schema:
+  - name: journal_entry
+    physicalName: journal_entry
+    physicalType: table
+    properties:
+      - {name: EntryNo, physicalType: varchar, primaryKey: true, required: true, description: "The invoice number the entry books."}
+      - {name: CustomerCode, physicalType: varchar, description: "Billing's code of the customer."}
+      - {name: Total, physicalType: "decimal(14,2)", required: true, description: "The sum of the invoice's lines."}
+      - {name: LineCount, physicalType: int, required: true, description: "How many lines the invoice has."}
+      - {name: PostedAt, physicalType: datetime2, required: true, description: "Set by the ledger."}

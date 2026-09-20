@@ -125,6 +125,14 @@ def hub_state(contract: dict) -> dict:
                 golden, sql.Identifier(key)), (ids,)).fetchall()} if codes else {}
         records = cx.execute(sql.SQL("select count(*) as n from hub.{}").format(golden)
                              ).fetchone()["n"]
+        # One bar per hour, so "is anything arriving" is a glance rather than
+        # a number that could be an hour or a week old. ponytail: a pass over
+        # the inbox, like `arriving` above and cheap for the same reason --
+        # an index on (landed_at) is the fix when it is not.
+        activity = cx.execute(sql.SQL(
+            "select date_trunc('hour', landed_at) as hour, system, count(*) as n "
+            "from hub.{} where landed_at > now() - interval '24 hours' "
+            "group by 1, 2 order by 1").format(inbox)).fetchall()
     hidden = sample.classified(contract)
     for h in held:
         h["row"] = _masked(h["row"], "", hidden)
@@ -141,8 +149,11 @@ def hub_state(contract: dict) -> dict:
         c["kept_at"], c["lost_at"] = _ms(c.pop("kept_ms")), _ms(c.pop("lost_ms"))
         c["kept"], c["lost"] = (_masked(c["kept"], c["field"], hidden),
                                 _masked(c["lost"], c["field"], hidden))
+    for row in activity:
+        row["hour"] = row["hour"].isoformat()
     return {"records": records, "arriving": {r["system"]: r for r in arriving},
-            "conflicts": conflicts, "held": held, "deleted": deleted}
+            "activity": activity, "conflicts": conflicts, "held": held,
+            "deleted": deleted}
 
 
 @router.get("/api/integration")
@@ -172,8 +183,12 @@ def integration() -> dict:
             row["in" if into else "out"].append(
                 {"flow": f.id, "match": f.match, "job": running.get(f.id)})
             # The table changed under the flow: refused on --apply, shown here
-            # while it runs (core/flow_schema.py).
-            host = (flow_schema.server_of(f, by_id) or {}).get("host")
+            # while it runs (core/flow_schema.py). An API source has no table
+            # and no server to ask (ADR 0027), so there is nothing to drift.
+            server = flow_schema.server_of(f, by_id)
+            if server is None:
+                continue
+            host = server.get("host")
             if host in unreachable:
                 continue
             try:
@@ -189,5 +204,27 @@ def integration() -> dict:
         except Exception as exc:
             hub["hub_error"] = f"{exc.__class__.__name__}: {exc}"
         hubs.append(hub)
-    return {"hubs": hubs, "problems": flowmod.problems(flows, by_id),
-            "seatunnel_error": st_error}
+    return {"hubs": hubs, "totals": [totals(f, by_id, running) for f in flows if f.aggregates],
+            "problems": flowmod.problems(flows, by_id), "seatunnel_error": st_error}
+
+
+def totals(flow: flowmod.Flow, by_id: dict[str, dict], running: dict) -> dict:
+    """A one-way aggregate (#81): its two jobs, and how many lines and groups
+    are summed where they land (core/flow_aggregate.py)."""
+    from core import flow_aggregate
+    row = {"flow": flow.id, "from": flow.mapping.reference, "to": flow.target,
+           "group": flow.mapping.columns, "aggregates": flow.aggregates,
+           "jobs": {"in": running.get(flow.id), "out": running.get(f"{flow.id}_out")}}
+    server = flow_aggregate.landing(by_id)
+    try:
+        with psycopg.connect(admin_dsn(server["host"], server.get("port", 5432),
+                                       server["database"]), connect_timeout=3) as cx:
+            row["lines"], row["groups"], landed = cx.execute(sql.SQL(
+                "select (select count(*) from flow.{}), (select count(*) from flow.{}), "
+                "(select max(landed_at) from flow.{})").format(
+                    sql.Identifier(f"{flow.id}_lines"), sql.Identifier(flow.id),
+                    sql.Identifier(f"{flow.id}_inbox"))).fetchone()
+        row["landed_at"] = landed.isoformat() if landed else None
+    except Exception as exc:
+        row["error"] = f"{exc.__class__.__name__}: {exc}"
+    return row

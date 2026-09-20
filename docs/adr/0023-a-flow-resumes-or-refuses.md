@@ -47,6 +47,13 @@ Two cases make resuming unsafe, and SeaTunnel reports neither:
   has nothing to check.
 * `--stop` now stops with a savepoint, so the next `--apply` resumes exactly
   there.
+* A checkpoint that exists but cannot be **read** is the third refusal
+  (#125). A process killed between writing a checkpoint and closing the file
+  leaves a truncated one; the file is there, so the flow is resumed from it,
+  and SeaTunnel answers the submit with a bare HTTP 500 while putting the
+  `EOFException` in its own server log. Without a refusal the operator gets a
+  `urllib` traceback and has to go and read that log to learn that the answer
+  is one flag. Found bringing the demo back up after Docker died under it.
 * `--resnapshot` is the deliberate way through a refusal. It starts from
   scratch and says what that costs.
 
@@ -89,7 +96,9 @@ comes to a re-read, which is `--resnapshot`.
 
 * A flow whose compiled job changed since its checkpoint resumes the old
   position under the new job. If SeaTunnel rejects the restore, the way on is
-  `--resnapshot`.
+  `--resnapshot` -- and that rejection is now a refusal rather than a
+  traceback, though it still costs one failed submit to find out: the state is
+  read by SeaTunnel, not by us, so there is nothing to check beforehand.
 * SeaTunnel keeps three checkpoints per job (`max-retained`). The volume is
   what keeps them across a restart; deleting it is the same as losing them.
 

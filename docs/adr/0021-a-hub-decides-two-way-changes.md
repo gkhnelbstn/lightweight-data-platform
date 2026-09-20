@@ -270,12 +270,13 @@ without it: they read the key's column in `_changed` like `*`.
   code someone typed on purpose would be just as silent. On the way out, a hub
   value the target's map lacks still lands as NULL. The maps are checked to be
   inverses, so only a third system's value could get there.
-* Postgres *targets* are not compiled yet. They need the guarded upsert and a
-  delete branch of ADR 0020, and the compiler refuses them rather than emit
-  a looping job.
-* **Many to one is partly built** (#53): several tables into one record
-  (#79) and differing codes (#80) are done. Aggregation, which is one-way only
-  (#81), and a third system (#82) are not.
+* **Many to one is partly built** (#53). Done: several tables into one record
+  (#79), differing codes (#80), and a third system (#82) on a third engine,
+  Postgres (#83). Aggregation, which is one-way only (#81), is not. With three
+  systems, every system has its own code. A conflict on one field between all
+  three converges on the latest commit, and both losers are logged. The first
+  sync took the authority's spelling of a name over two others. Measured by
+  `verify.py`.
 * A system's code is one column. A composite local key waits for a system
   that has one.
 * A system whose codes are typed by people cannot receive new records: there
@@ -289,6 +290,110 @@ without it: they read the key's column in `_changed` like `*`.
 * **Losing systems whose writes are rejected by their own rules.** If the hub
   sends a value the target's constraints refuse, the SeaTunnel job fails.
   Surfacing that is the compiler's and the panel's job.
+
+## A record made beside another one may not be found by what they share (#120)
+
+The delivery matches a target row by `linkBy` while that system's code for the
+record is unknown (#80). That is what finds the row a system had all along at
+the first sync, and it is wrong for exactly one case: a record the hub created
+*because* the value was shared. Live, a shop customer under another customer's
+tax number was settled as a record of its own, and its delivery matched the
+other customer's rows in the CRM and in billing and overwrote their name --
+which those systems then echoed back as an edit.
+
+So the golden record carries `_link`, and the fallback branch of the compiled
+`MERGE` reads it. `hub.linkable` sets it when the record is created: false
+when another record already holds the values some system matches by. Such a
+record goes out as an insert, and the receiving system numbers it itself.
+
+What it costs: the insert coming back cannot be linked by the rule either --
+the same value is ambiguous on the way in -- so a person had to settle it,
+with the button ADR 0022 gives them. The section below is how that cost was
+paid back.
+
+## The hub's own insert finds its way back (#122)
+
+A record that goes out as an insert returns through CDC under a key the hub
+has never seen, carrying the value that made it a record of its own. No rule
+can place it -- that is the whole reason it exists -- so it waited for a
+person, once per system it had been delivered to.
+
+The rule is not the only thing the hub knows. It recorded, field by field,
+what it sent to that system (`hub.expect`, which is how an echo is
+recognised). So before holding a row as `ambiguous` or `taken`,
+`hub.resolve` asks `hub.awaited`: a record of this entity awaiting exactly
+these values from this system, with no key of this system yet. One such
+record links it; none or several keep the old behaviour.
+
+The two limits are the point. **Every** field the hub sent must match, not
+some: two customers with one name and one tax number, created in the same
+minute, are genuinely indistinguishable, and a rule that took the first of
+them would be the quiet duplicate this design refuses. And a record that
+already carries this system's key is awaiting no insert, so it is not a
+candidate -- which is what keeps `taken` meaning what it says.
+
+Nothing is consumed here. The link is returned, and `hub.merge` then reads
+the row as any other echo: each field it sent is consumed in the per-field
+loop, and the only change written is the system's own key. A delivery coming
+back is byte for byte the linked first sync it already handled.
+
+## The flag has to follow the value (#128)
+
+`_link` was set once, by `hub.linkable`, on the create path. So it answered
+"was this value shared **when the record was made**?" while the delivery asks
+"is it shared **now**?". A record whose `linkBy` value is edited into a
+collision kept a yes it no longer deserved, and the fallback was allowed
+again.
+
+Measured on the demo, and it cost a customer their name: a record made with a
+tax number nobody else had, its number then changed to another customer's, and
+one revision later the delivery matched by that number and overwrote the other
+customer's row in the shop -- which the shop echoed back into the golden
+record. #120's corruption exactly, reached by an edit rather than a creation.
+
+So the flag is asked again whenever a revision changes one of the fields some
+system matches by, in the same statement that writes the revision. Not a
+statement of its own: the golden record is read by CDC, and an update that
+changed only `_link` would carry the previous revision's `_changed` out to
+every system a second time.
+
+The same collision cost a duplicate, by a second route. The hub had delivered
+the record to a system under the **old** value and that system had numbered
+it; the value changed before the insert came back; the rule then matched
+nothing, and "nothing matched" meant "a new record". `hub.awaited` is now
+asked before a record is made, not only before a person is, and it looks at
+every value still awaited for a field rather than only the newest -- every
+one of them was sent to that system for that record, so any of them
+identifies it. The answer is recognised as the hub's own delivery, and the
+customer stays one customer.
+
+## A row the hub did nothing with is not history (#56)
+
+The inbox is append-only and nothing prunes it, which was fine while every row
+in it was a change: a system writes when something happens. A polled source
+does not (ADR 0027). It answers with every record every time, so the hub gets
+a row per record per poll and decides, almost always, that nothing happened.
+
+Measured on the demo after the loyalty scheme joined it: 2 612 of 3 473 inbox
+rows, from an hour and a half of a ten-second poll of *two* members. 17 280 a
+day, for two members. The same shape at any real size is the whole table
+again, daily.
+
+Two ways to bound it, and the cheaper one is also the more honest: keep the
+rows and prune them on a schedule, or not write what says nothing. The trigger
+already knows -- `hub.merge` has answered by the time `outcome` is written --
+so it drops its own row instead. The log then grows with what changed, which
+is the shape it should have had, and the tab's hourly chart goes back to
+meaning something: it counts these rows, so a poll doing nothing would have
+filled it. Whether a flow is alive is its job's to say, and the tab reads that
+from SeaTunnel.
+
+Nothing reads an `unchanged` row. The merge is synchronous in the trigger, so
+the inbox is a log for people rather than a queue, and retention here trades
+only against how far back a screen can look. That is also why there is no
+retention rule beyond this one: with the no-ops gone the log grows with real
+changes, and no measurement yet says that is a problem. Rows already there
+stay, because an upgrade should not delete somebody's log.
 
 ## Consequences
 

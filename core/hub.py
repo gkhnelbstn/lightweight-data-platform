@@ -33,7 +33,7 @@ HUB_SQL = Path(__file__).with_name("hub.sql")
 
 # The golden record's bookkeeping. Not part of any system's shape, never
 # delivered, and never a column name a contract may use.
-META = ("_at", "_by", "_rev", "_changed", "_skip")
+META = ("_at", "_by", "_rev", "_changed", "_skip", "_link")
 
 
 def init(cx: psycopg.Connection) -> None:
@@ -57,7 +57,8 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
     record and system.
     """
     clash = sorted(set(columns) & {*META, "id", "system", "row_kind",
-                                   "source_ms", "landed_at", "fields", "unmapped"})
+                                   "source_ms", "landed_at", "fields", "unmapped",
+                                   "outcome"})
     if clash:
         raise ValueError(f"{name}: {', '.join(clash)} is reserved in the hub")
     if not set(key) <= set(columns):
@@ -69,12 +70,17 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
         "create table if not exists hub.{} ({}, _at jsonb not null default '{{}}', "
         "_by jsonb not null default '{{}}', _rev bigint not null default 0, "
         "_changed text not null default '*', _skip text, "
+        "_link boolean not null default true, "
         "primary key ({}))").format(
             golden, cols, sql.SQL(", ").join(map(sql.Identifier, key))))
     # What each revision changed and where it came from: a delivery writes
     # only those fields, and not back to their source (ADR 0021).
+    # `_link` says whether the systems may match this record by the pair's
+    # `linkBy` while its code there is unknown (#120): true for every record
+    # that was already here, which is the behaviour they had.
     cx.execute(sql.SQL("alter table hub.{} add column if not exists _changed text "
-                       "not null default '*', add column if not exists _skip text"
+                       "not null default '*', add column if not exists _skip text, "
+                       "add column if not exists _link boolean not null default true"
                        ).format(golden))
     cx.execute(sql.SQL("alter table hub.{} replica identity full").format(golden))
     cx.execute(sql.SQL(
@@ -82,9 +88,17 @@ def register_entity(cx: psycopg.Connection, name: str, key: list[str],
         "system text not null, row_kind text not null, source_ms bigint not null, "
         "fields text, {}, landed_at timestamptz not null default clock_timestamp())"
     ).format(inbox, cols))
+    # A system joining a hub that already runs brings its code column (#82):
+    # `create table if not exists` would leave both tables without it.
+    for column, kind in columns.items():
+        for table in (golden, inbox):
+            cx.execute(sql.SQL("alter table hub.{} add column if not exists {} {}").format(
+                table, sql.Identifier(column), sql.SQL(kind)))
     cx.execute(sql.SQL("alter table hub.{} add column if not exists fields text").format(inbox))
     # The fields whose value the flow's value map did not know (#84).
     cx.execute(sql.SQL("alter table hub.{} add column if not exists unmapped text").format(inbox))
+    # What the hub did with each row: applied, echo, lost, held... (the tab's history).
+    cx.execute(sql.SQL("alter table hub.{} add column if not exists outcome text").format(inbox))
     cx.execute(sql.SQL("drop trigger if exists merge on hub.{}").format(inbox))
     cx.execute(sql.SQL(
         "create trigger merge after insert on hub.{} for each row "

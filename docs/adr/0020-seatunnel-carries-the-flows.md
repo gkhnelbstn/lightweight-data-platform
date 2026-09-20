@@ -168,6 +168,21 @@ no-op on SQL Server natively. On Postgres it is a no-op only when the write
 is guarded and before images are dropped, which is what a flow compiler has
 to emit for a Postgres target in a pair.
 
+**Built (#83).** `core/flow_sql.py` compiles the Postgres target as a `MERGE`
+(Postgres 15+) of the same shape as SQL Server's. Its `WHEN MATCHED` carries
+`(t.cols) IS DISTINCT FROM (new values)`, its parameters carry their types,
+and deletes are the separate branch described above. The demo's third
+system, a shop on Postgres, runs the whole of `verify.py` with no loop.
+Two things about a Postgres *source* were found on the way, and both are
+checked before a job is submitted (`core/flow_schema.py`, `core/flow_resume.py`):
+
+* SeaTunnel 2.3.13's Postgres CDC will not start on a table with a
+  `timestamptz` column, mapped or not ("Unsupported type: TIMESTAMP_TZ"
+  behind a bare HTTP 500).
+* A resumed job whose slot has gone makes a new one at the current position
+  and skips what changed since its checkpoint. That is refused like a purged
+  SQL Server change (ADR 0023).
+
 ## What this does not decide
 
 * **Conflicts.** Nothing here tested what happens when both sides change the
@@ -194,6 +209,37 @@ over for one `UPDATE` on SQL Server:
 | read time | | `EventTime`: 1.4 s and 2.7 s after the commit in two runs |
 | commit time | `tran_end_time` `1789819613703` | `SourceTimestamp` `1789819613703`, **with #10667 carried** |
 | before image | `__$operation = 3` | `UPDATE_BEFORE`, then `UPDATE_AFTER` |
+
+**The `Http` source sleeps holding the checkpoint lock** (#126). `pollNext`
+takes `output.getCheckpointLock()` around the whole poll, and the wait between
+listings is inside it -- so a streaming job's checkpoint barrier, which needs
+that same lock (`SourceFlowLifeCycle#triggerBarrier`), never got it and the
+job was failed at the timeout while the reader was still polling. The engine's
+own comment says the window between two polls is tight enough to need a
+`Thread.sleep(0L)`; a poll interval turns it into one narrow window every ten
+seconds, and `synchronized` is not fair. `Object.wait(long)` releases the
+monitor while it waits, so the patch is one word, carried in
+`deploy/Dockerfile.seatunnel` behind an anchor. `dev` has the same code, so
+there is nothing upstream to cherry-pick.
+
+**A change to a key column is a delete and an insert, on both engines** (#129).
+Measured after the question was raised by `match`, which pins one of a table's
+several rows per record (#79) and relies on this: a change of the pinned value
+has to reach both flows of the pair whole, and it does only because each of
+them sees a whole event -- the flow that had the row a `DELETE`, the flow that
+gains it an `INSERT`. SQL Server does it because CDC records a key update that
+way; Postgres does it too, which was not obvious, since a table read by a flow
+carries `REPLICA IDENTITY FULL` and the whole old row is therefore in the WAL:
+
+    update shop.customer set customer_no = 7777 where customer_no = 5024
+
+    hub.customer_inbox  DELETE  shop_code 5024  'Anahtar Denemesi'  deleted
+    hub.customer_inbox  INSERT  shop_code 7777  'Anahtar Denemesi'  created
+
+So the rule `core/flows.py` states -- what `match` pins must be part of the
+table's key -- is not engine-specific, and invariant 3 has nothing to say
+here. It also means a system that renumbers a record loses the crosswalk for
+it: the hub sees the record deleted and another one arriving.
 
 * **`EventTime` is when SeaTunnel read the change.** Its source,
   `SeaTunnelRowDebeziumDeserializeSchema`, sets it from `fetchTimestamp`, and

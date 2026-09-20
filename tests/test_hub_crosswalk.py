@@ -135,8 +135,9 @@ def test_a_person_decides_what_the_rule_cannot(hub):
     # New to everyone else, and the CRM already has it.
     assert hub.execute("select _changed, _skip from hub.customer where crm_code = 2"
                        ).fetchone() == ("*", "crm.account")
-    # Two records now share the tax identifier, so billing's cannot pick one.
-    send(hub, "billing.customer", "INSERT", 110, **BILLING, city=None)
+    # Two records now share the tax identifier, so billing's cannot pick one --
+    # and the hub awaits neither of these values from billing (#122).
+    send(hub, "billing.customer", "INSERT", 110, **{**BILLING, "name": "Acme LLC"}, city=None)
     assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]
     first = hub.execute("select customer_id from hub.customer where crm_code = 1").fetchone()[0]
     hub.execute("select hub.link('customer', 'billing.customer', '{\"billing_code\": \"B-7\"}', "
@@ -188,3 +189,128 @@ def test_a_held_row_deleted_is_forgotten(hub):
     send(hub, "billing.customer", "INSERT", 100, **{**BILLING, "tax_id": None}, city=None)
     send(hub, "billing.customer", "DELETE", 110, **{**BILLING, "tax_id": None}, city=None)
     assert held(hub) == []
+
+
+def test_a_record_made_beside_one_with_the_same_tax_id_is_not_delivered_by_it(hub):
+    """#120: the out-flow matches by `linkBy` while a system's code is
+    unknown, which is how the first sync finds the row a system had all
+    along. A record the hub created *beside* one with the same value must not
+    be found that way, or its delivery lands on the other record's row -- as
+    it did live, overwriting a customer's name with another's."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    got = dict(hub.execute("select crm_code, _link from hub.customer order by crm_code"
+                           ).fetchall())
+    assert got == {1: True, 2: False}
+
+
+def test_a_record_whose_value_is_its_own_is_still_found_by_it(hub):
+    """The fallback is not weakened for the case it exists for: a customer
+    nobody else holds is matched by its tax id in the system that has it."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, crm_code=2, name="Other", tax_id="222")
+    got = dict(hub.execute("select crm_code, _link from hub.customer order by crm_code"
+                           ).fetchall())
+    assert got == {1: True, 2: True}
+
+
+def test_the_hubs_own_insert_finds_the_record_that_caused_it(hub):
+    """#122: the record made beside one with the same tax id goes out as an
+    insert, and billing numbers it itself. The rule cannot place that insert
+    -- the value it matches by is the shared one -- but the hub awaits those
+    exact values from billing, and that is the delivery coming back."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    send(hub, "billing.customer", "INSERT", 110, billing_code="B-9",
+         name="Acme branch", tax_id="111", city=None)
+    assert held(hub) == [] and conflicts(hub) == []
+    assert records(hub) == [(1, None, "Acme", None), (2, "B-9", "Acme branch", None)]
+    # Nothing but the link changed: the same quiet echo as a linked first sync.
+    assert hub.execute("select _changed, _skip from hub.customer where crm_code = 2"
+                       ).fetchone() == (",billing_code,", "billing.customer")
+
+
+def test_two_records_awaiting_the_same_values_still_wait_for_a_person(hub):
+    """Two customers with one name and one tax number, created in the same
+    minute, are genuinely indistinguishable: an insert matching both is not
+    placed by guessing which delivery it answers."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    send(hub, "billing.customer", "INSERT", 110, **BILLING, city=None)
+    assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]
+
+
+def test_a_poll_held_for_a_person_is_not_remembered_as_a_before_image(hub):
+    """#97, ADR 0027: a poll waiting in `hub.unmatched` has changed nothing
+    yet. Kept as the before image of the next poll, its values would look
+    unchanged -- and the record it finally found would be linked and left
+    empty, because the next poll is the same answer: nothing changed in the
+    system either. A poll is remembered only once it is placed."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    # Two records share the tax number and the hub awaits neither of these
+    # values from billing (#122), so the poll cannot pick one.
+    polled = {**BILLING, "name": "Acme LLC"}
+    send(hub, "billing.customer", "POLL", 110, **polled, city="İzmir")
+    assert held(hub) == [("billing.customer", {"billing_code": "B-7"}, "ambiguous")]
+    # The branch closes; one record is left, and the next poll -- the same
+    # answer, because nothing changed in billing -- is placed and brings its
+    # city with it.
+    send(hub, "crm.account", "DELETE", 120, **{**CRM, "crm_code": 2, "name": "Acme branch"})
+    send(hub, "billing.customer", "POLL", 130, **polled, city="İzmir")
+    assert held(hub) == [] and records(hub) == [(1, "B-7", "Acme LLC", "İzmir")]
+
+
+def change(cx, system, ms, old, new):
+    send(cx, system, "UPDATE_BEFORE", ms, **old)
+    send(cx, system, "UPDATE_AFTER", ms, **new)
+
+
+def links(cx):
+    return dict(cx.execute("select crm_code, _link from hub.customer "
+                           "where crm_code is not null order by crm_code").fetchall())
+
+
+def test_a_record_edited_into_a_collision_stops_being_found_by_its_value(hub):
+    """#128: `_link` was decided when the record was made, so a record whose
+    tax number was later edited into another's kept a yes it no longer
+    deserved -- and its next delivery went out matching by that number, onto
+    the other record's rows. Measured live: a customer's name was overwritten
+    in the shop and echoed back into the hub, one poll after the edit."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, crm_code=2, name="Other", tax_id="222")
+    assert links(hub) == {1: True, 2: True}
+    change(hub, "crm.account", 110, {"crm_code": 2, "name": "Other", "tax_id": "222"},
+           {"crm_code": 2, "name": "Other", "tax_id": "111"})
+    assert links(hub) == {1: True, 2: False}
+
+
+def test_a_value_edited_back_out_of_a_collision_is_a_way_of_matching_again(hub):
+    """The flag follows the value both ways: it is a fact about the records,
+    not a mark the record carries for ever."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    send(hub, "crm.account", "INSERT", 105, crm_code=2, name="Other", tax_id="111")
+    hub.execute("select hub.link('customer', 'crm.account', '{\"crm_code\": 2}')")
+    assert links(hub) == {1: True, 2: False}
+    change(hub, "crm.account", 110, {"crm_code": 2, "name": "Other", "tax_id": "111"},
+           {"crm_code": 2, "name": "Other", "tax_id": "333"})
+    assert links(hub) == {1: True, 2: True}
+
+
+def test_a_delivery_answered_after_its_value_changed_is_still_the_hubs_own(hub):
+    """#128: the hub delivered the record to billing under one tax number, and
+    the CRM changed the number before billing's insert came back. The rule
+    then matches nothing -- the answer carries the old value -- and a new
+    record was made for a customer the hub already had, with a second code in
+    every other system. The expectation for the value it was delivered under
+    is still there, so the answer is still recognised as the hub's own."""
+    send(hub, "crm.account", "INSERT", 100, **CRM)
+    change(hub, "crm.account", 105, {**CRM}, {**CRM, "tax_id": "999"})
+    send(hub, "billing.customer", "INSERT", 110, billing_code="B-7",
+         name="Acme", tax_id="111", city=None)
+    assert held(hub) == []
+    assert records(hub) == [(1, "B-7", "Acme", None)]

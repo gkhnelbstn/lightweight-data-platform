@@ -67,3 +67,21 @@ def test_the_shipped_contracts_produce_the_links_they_should():
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         expected = 3 if sync_rule(doc) else 2
         assert len(desired_links(doc)) == expected, path.name
+
+
+def test_a_link_is_found_by_what_it_is_and_named_in_the_deployments_language(monkeypatch):
+    """Issue #44: the names follow LDP_LANGUAGE, so `odd_links` keys the links
+    by what they are -- or a language change would add a second set."""
+    from core import language
+    from integrations.odd.entity_page import desired_links
+    contract = {"id": "erp.customers",
+                "customProperties": [{"property": "syncTo", "value": {}}]}
+    monkeypatch.setattr(language, "LANGUAGE", "en")
+    english = desired_links(contract)
+    monkeypatch.setattr(language, "LANGUAGE", "tr")
+    turkish = desired_links(contract)
+    assert [l["key"] for l in english] == [l["key"] for l in turkish] == [
+        "checks", "contract", "sync"]
+    assert [l["name"] for l in turkish] == [
+        "Kontroller", "Veri kalitesi (kontrat)", "Senkron kuralı"]
+    assert english[0]["name"] == "Checks"

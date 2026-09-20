@@ -11,7 +11,7 @@
 #
 # Credentials come from the environment, never from this file:
 #   DATACONTRACT_SQLSERVER_USERNAME / DATACONTRACT_SQLSERVER_PASSWORD
-apiVersion: v3.0.2
+apiVersion: v3.1.0
 kind: DataContract
 id: erp.mssql.sales_orders
 name: Sales Orders (SQL Server)
@@ -98,6 +98,9 @@ schema:
         physicalType: int
         description: "The customer this order belongs to. A foreign key into customers; nulls here break every revenue-by-customer report."
         required: true
+        relationships:
+          - type: foreignKey
+            to: customers.customer_id
       - name: order_date
         logicalType: date
         physicalType: date

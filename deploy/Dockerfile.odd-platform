@@ -11,13 +11,17 @@
 #   * only the UI is rebuilt. The SPA ships as `/app/libs/odd-platform-ui-*.jar`
 #     -- a plain Vite `dist/` under `static/` -- and the platform's own
 #     classpath file names it, so replacing that one file changes the UI and
-#     nothing else. No Gradle, no Java, no backend patch.
+#     nothing else. No Gradle, and until 0.29.0 no Java at all.
 #   * two lines against upstream, applied by a script that fails loudly when
 #     the anchor moves (deploy/odd-platform-dq-panel.mjs). Everything else is
 #     ours, in deploy/odd-platform-ui/.
 #   * one carried bug fix, in the same shape: deploy/odd-platform-lineage-icon.mjs
 #     gives each lineage node its own icon (odd-platform#1898). It is a fix
 #     rather than a feature, so it leaves when upstream takes it.
+#   * one backend class, and only because the bug is on the server: ODD's ER
+#     diagram answers 500 for any table whose columns ever changed (the `api`
+#     stage below). One anchored line, compiled against the image's own
+#     classpath -- still no Gradle, and nothing else in the backend changes.
 #
 # The cost is real and worth stating: this pins an ODD version, and every
 # upgrade means rebuilding and possibly re-reading their page. Retire it the
@@ -83,6 +87,25 @@ COPY --from=ui /src/odd-platform-ui/build/ui/ ./static/
 RUN zip -qr /odd-platform-ui-${ODD_VERSION}.jar static \
     && mv /odd-platform-ui-${ODD_VERSION}.jar /ui.jar
 
+# --- one backend class: the ER diagram of a table whose columns changed -------
+# ODD keeps a `dataset_field` row per structure version, so a column that was
+# ever re-typed or made NOT NULL has several rows under one ODDRN, and
+# extractErdDetails collects them with a `toMap` that has no merge function:
+# `IllegalStateException: Duplicate key`, a 500 on Data Modelling >
+# Relationships. The fix keeps the newest row. The class is compiled against
+# the platform image's own classes and jars, with the Lombok their build uses,
+# and replaces the one in /app/classes; the build fails if the line moves.
+# Reported upstream as odd-platform#1880. Delete this stage and its COPY
+# when a release carries the fix -- tracked in ADR 0011 and issue #8.
+FROM ghcr.io/opendatadiscovery/odd-platform:${ODD_VERSION} AS platform
+FROM eclipse-temurin:17-jdk AS api
+COPY --from=platform /app/classes /app/classes
+COPY --from=platform /app/libs /app/libs
+ADD https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.34/lombok-1.18.34.jar /lombok.jar
+COPY --from=src /src/odd-platform-api/src/main/java/org/opendatadiscovery/oddplatform/repository/reactive/ReactiveRelationshipsRepositoryImpl.java /patch/
+RUN set -e; f=/patch/ReactiveRelationshipsRepositoryImpl.java;     anchor='.collect(Collectors.toMap(DatasetFieldPojo::getOddrn, identity()));';     [ "$(grep -cF "$anchor" $f)" = 1 ] || { echo "ERD anchor moved in $f" >&2; exit 1; };     sed -i 's/Collectors.toMap(DatasetFieldPojo::getOddrn, identity()))/Collectors.toMap(DatasetFieldPojo::getOddrn, identity(), (a, b) -> a.getId() > b.getId() ? a : b))/' $f;     javac --release 17 -nowarn -proc:full -processorpath /lombok.jar       -cp "/app/classes:/app/libs/*:/lombok.jar" -d /out $f
+
 FROM ghcr.io/opendatadiscovery/odd-platform:${ODD_VERSION}
 ARG ODD_VERSION
 COPY --from=pack /ui.jar /app/libs/odd-platform-ui-${ODD_VERSION}.jar
+COPY --from=api /out/ /app/classes/

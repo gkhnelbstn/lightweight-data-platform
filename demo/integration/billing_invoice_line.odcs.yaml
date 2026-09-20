@@ -1,0 +1,24 @@
+# Billing's invoice lines (#81). The accounting package receives them summed,
+# one journal entry per invoice: flows/invoice_totals.yaml.
+apiVersion: v3.0.2
+kind: DataContract
+id: billing.invoice_line
+name: Billing invoice lines
+version: 1.0.0
+status: active
+servers:
+  - server: billing
+    type: sqlserver
+    host: mssql
+    port: 1433
+    database: billing
+    schema: dbo
+schema:
+  - name: invoice_line
+    physicalName: invoice_line
+    physicalType: table
+    properties:
+      - {name: InvoiceNo, physicalType: varchar, primaryKey: true, required: true, description: "Invoice number."}
+      - {name: LineNumber, physicalType: int, primaryKey: true, required: true, description: "Line number within the invoice."}
+      - {name: CustomerCode, physicalType: varchar, required: true, description: "Billing's code of the customer invoiced."}
+      - {name: Amount, physicalType: "decimal(14,2)", required: true, description: "Line amount."}

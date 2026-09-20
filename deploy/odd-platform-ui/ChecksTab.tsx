@@ -144,6 +144,7 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
           { visible: visible.length, total: rows.length }
         )}
       </Typography>
+      <Counts rows={rows} onPick={setStatus} />
 
       <div>
         <Table.HeaderContainer>
@@ -246,5 +247,47 @@ export const ChecksTab: React.FC<Props> = ({ contracts }) => {
         ))}
       </div>
     </>
+  );
+};
+
+/**
+ * What the list adds up to, before anyone filters it (#115).
+ *
+ * The filter above answers "show me the failing ones"; it cannot say how many
+ * there are without being set, and a page that opens on a filtered list hides
+ * its own shape. These are the four numbers that decide what to do next --
+ * and each one sets the filter, so reading and acting are the same click.
+ *
+ * `error` is grey on purpose: a check that could not run is not a check that
+ * failed (invariant 5), and it is out of the score.
+ */
+const Counts: React.FC<{ rows: CheckRow[]; onPick: (status: string) => void }> = ({
+  rows,
+  onPick,
+}) => {
+  const t = useT();
+  const failing = rows.filter(r => r.status === 'fail' && r.state !== 'accepted').length;
+  const errored = rows.filter(r => r.status === 'error').length;
+  const accepted = rows.filter(r => r.state === 'accepted').length;
+  const passing = rows.filter(r => r.status === 'pass').length;
+  const figures: [string, number, string, string][] = [
+    [t('failing'), failing, 'failing', failing ? 'error.main' : 'texts.primary'],
+    [t('could not run'), errored, 'failing', 'texts.secondary'],
+    [t('accepted'), accepted, 'accepted', 'texts.secondary'],
+    [t('passing'), passing, 'passing', 'success.main'],
+  ];
+  return (
+    <S.Actions>
+      {figures.map(([label, n, filter, colour]) => (
+        <S.SortableHeader key={label} type='button' onClick={() => onPick(filter)}>
+          <Typography variant='h4' color={colour}>
+            {n}
+          </Typography>
+          <Typography variant='caption' color='texts.secondary'>
+            {` ${label}`}
+          </Typography>
+        </S.SortableHeader>
+      ))}
+    </S.Actions>
   );
 };

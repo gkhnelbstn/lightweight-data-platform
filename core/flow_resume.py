@@ -43,8 +43,26 @@ def _at(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def unreadable(name: str, code: int) -> str:
+    """A savepoint SeaTunnel could not restore, said in this file's words.
+
+    ADR 0023 refuses a flow with no checkpoint and one whose CDC retention
+    ran out. There is a third case (#125): a checkpoint that exists but was
+    truncated, because the process was killed between writing it and closing
+    the file. `last_checkpoint_ms` sees the file and reports a checkpoint, and
+    the restore then fails -- SeaTunnel answers the submit with a bare HTTP
+    500 and puts the `EOFException` in its own server log, so without this the
+    operator reads a `urllib` traceback and has to go looking.
+    """
+    return (f"{name}: SeaTunnel could not read its checkpoint (HTTP {code}); "
+            f"a checkpoint a crash left half-written looks exactly like one "
+            f"that is fine. --resnapshot is the way through, and ADR 0023 "
+            f"says what it costs")
+
+
 def plan(flow: str, job_id: int | None, checkpoint_ms: int | None,
-         oldest_change_ms: int | None, resnapshot: bool) -> tuple[str, str | None]:
+         oldest_change_ms: int | None, resnapshot: bool,
+         slot_missing: bool = False) -> tuple[str, str | None]:
     """`fresh`, `resume` or `refuse`, and what to say about it."""
     if job_id is None:
         return "fresh", None
@@ -57,12 +75,34 @@ def plan(flow: str, job_id: int | None, checkpoint_ms: int | None,
                           f"would silently re-read the table from scratch: edits made "
                           f"meanwhile would lose to the authority and deletes would be "
                           f"missed. --resnapshot accepts that")
+    if slot_missing:
+        return "refuse", (f"{flow}: its replication slot is gone, and SeaTunnel would "
+                          f"make a new one at the current position: what changed since "
+                          f"the checkpoint would be skipped silently. --resnapshot "
+                          f"re-reads the table instead")
     if oldest_change_ms is not None and oldest_change_ms > checkpoint_ms:
         return "refuse", (f"{flow}: its CDC keeps changes from {_at(oldest_change_ms)} "
                           f"on, but the flow stopped at {_at(checkpoint_ms)}; what "
                           f"changed in between was purged by retention and would be "
                           f"skipped silently. --resnapshot re-reads the table instead")
     return "resume", None
+
+
+def slot_missing(contract: dict, slot: str) -> bool:
+    """For a Postgres source: its slot is what holds the changes the flow
+    has not read. A database recreated, or a slot dropped by hand, loses them
+    -- and a resumed job makes a fresh slot without a word."""
+    server = next((s for s in contract.get("servers") or []
+                   if s.get("type") in ("postgres", "postgresql")), None)
+    if server is None:
+        return False
+    import psycopg
+
+    from core.bootstrap_db import admin_dsn
+    with psycopg.connect(admin_dsn(server["host"], server.get("port", 5432),
+                                   server["database"]), connect_timeout=10) as cx:
+        return cx.execute("select 1 from pg_replication_slots where slot_name = %s",
+                          (slot,)).fetchone() is None
 
 
 def mssql(server: dict, timeout: int = 30):

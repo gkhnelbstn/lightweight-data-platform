@@ -13,6 +13,7 @@
 declare global {
   interface Window {
     __DQ_API__?: string;
+    __SEATUNNEL_UI__?: string;
   }
 }
 
@@ -480,12 +481,200 @@ export interface Hub {
   conflicts?: HubConflict[];
   held?: HeldRow[];
   deleted?: Tombstone[];
+  activity?: Activity[];
+}
+
+/** A one-way aggregate (#81): many rows summed into one, per group. */
+export interface Totals {
+  flow: string;
+  from: string;
+  to: string;
+  group: Record<string, string>;
+  aggregates: Record<string, string>;
+  jobs: { in: FlowJob | null; out: FlowJob | null };
+  lines?: number;
+  groups?: number;
+  landed_at?: string | null;
+  error?: string;
+}
+
+/** Changes that reached the hub, one row per hour and system: the tab's
+ * "is anything arriving" answered as a shape rather than a number (#111). */
+export interface Activity {
+  hour: string;
+  system: string;
+  n: number;
 }
 
 export interface IntegrationState {
   hubs: Hub[];
+  totals?: Totals[];
   problems: string[];
   seatunnel_error: string | null;
 }
 
 export const getIntegration = () => json<IntegrationState>('/api/integration');
+
+/** One record, or one held row, opened from the Integration tab:
+ * api/integration_detail.py. */
+export interface HistoryEntry {
+  at: string;
+  committed_at: string | null;
+  system: string;
+  /** What the hub did with it: applied, echo, lost, held, created, deleted,
+   * unchanged. Null for rows that reached the hub before it was recorded. */
+  outcome: string | null;
+  kind: 'insert' | 'update' | 'delete';
+  changes: { field: string; from: unknown; to: unknown }[];
+}
+
+export interface RecordDetail {
+  key: Record<string, unknown>;
+  codes: Record<string, unknown>;
+  fields: Record<string, { value: unknown; by: string | null; at: string | null }>;
+  deleted: { at: string | null; by: string } | null;
+  history: HistoryEntry[];
+  conflicts: HubConflict[];
+}
+
+export interface HeldDetail {
+  reason: string;
+  at: string;
+  row: Record<string, unknown>;
+  rule: Record<string, unknown>;
+  candidates: {
+    key: Record<string, unknown>;
+    codes: Record<string, unknown>;
+    fields: Record<string, unknown>;
+    link: string;
+  }[];
+  link_new: string;
+}
+
+export const getRecord = (hub: string, key: Record<string, unknown>) =>
+  json<RecordDetail>(
+    `/api/integration/record?hub=${encodeURIComponent(hub)}&key=${encodeURIComponent(JSON.stringify(key))}`
+  );
+
+export const getHeld = (hub: string, system: string, local: Record<string, unknown>) =>
+  json<HeldDetail>(
+    `/api/integration/held?hub=${encodeURIComponent(hub)}&system=${encodeURIComponent(system)}` +
+      `&local=${encodeURIComponent(JSON.stringify(local))}`
+  );
+
+/** A flow as the Integration tab edits it: api/integration_edit.py, #109.
+ * The file is what changes -- the UI is an editor for the contract of the
+ * integration (invariant 1), and SeaTunnel is told by the same code the CLI
+ * runs. */
+export interface FlowDoc {
+  id?: string;
+  from?: string;
+  to?: string;
+  columns?: Record<string, string>;
+  values?: Record<string, Record<string, unknown>>;
+  match?: Record<string, unknown>;
+  linkBy?: string[];
+  filledByTarget?: string[];
+  aggregates?: Record<string, string>;
+  job?: Record<string, number>;
+}
+
+export interface FlowColumn {
+  name: string;
+  type: string | null;
+  required: boolean;
+  key: boolean;
+  classification: string | null;
+  description: string | null;
+}
+
+export interface FlowSide {
+  id: string;
+  name: string | null;
+  hub: boolean;
+  keys: Record<string, string>;
+  columns: FlowColumn[];
+}
+
+export interface FlowDetail {
+  id: string;
+  file: string;
+  doc: FlowDoc;
+  yaml: string;
+  sides: { from: FlowSide | null; to: FlowSide | null };
+  /** What this flow becomes in SeaTunnel's words: one job, two for an
+   * aggregate. */
+  jobs: Record<string, unknown>;
+  /** The job settings a flow may state, and the range each one takes. */
+  settings: Record<string, [number, number]>;
+  state: Record<string, FlowJob | null>;
+  problems: string[];
+  drift: string[];
+}
+
+export const getFlow = (id: string) =>
+  json<FlowDetail>(`/api/integration/flow?id=${encodeURIComponent(id)}`);
+
+export interface SaveResult {
+  saved: boolean;
+  problems: string[];
+  jobs: Record<string, unknown>;
+  yaml?: string;
+}
+
+/** Checking refuses without writing; saving writes the flow file once it
+ * passes. Neither carries a token: nothing here is SQL somebody typed -- the
+ * columns are the contracts' and the values are literals (ADR 0010). */
+export const saveFlow = (id: string, doc: FlowDoc, check: boolean) =>
+  json<SaveResult>('/api/integration/flow', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id, doc, check }),
+  });
+
+export const runJobs = (flow: string | null, action: 'apply' | 'stop' | 'restart' | 'resnapshot') =>
+  json<{ said: string[]; refused: string[] }>('/api/integration/jobs', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ flow, action }),
+  });
+
+/** SeaTunnel's own console. It names jobs by id and draws their vertices,
+ * which is why this tab exists (ADR 0022) -- but it is where the engine's own
+ * detail lives, so the tab links to it rather than pretending it is not
+ * there. Same host, port 8081, unless the deployment says otherwise. */
+export function seatunnelUrl(): string {
+  if (window.__SEATUNNEL_UI__) return window.__SEATUNNEL_UI__.replace(/\/$/, '');
+  return `${window.location.protocol}//${window.location.hostname}:8081`;
+}
+
+/** Settling a held row: which record this system's code belongs to, or none
+ * for a record of its own. The hub's refusals come back as the message
+ * (api/integration_detail.py, #111). */
+export const linkHeld = (
+  hub: string,
+  system: string,
+  local: Record<string, unknown>,
+  record: Record<string, unknown> | null
+) =>
+  json<{ record: Record<string, unknown> }>('/api/integration/link', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hub, system, local, record }),
+  });
+
+/** Running one contract's checks now, rather than waiting for the schedule
+ * (api/runs.py, #113). The same run the CLI starts; this only asks for it. */
+export interface RunState {
+  state: 'idle' | 'running' | 'done' | 'failed';
+  started?: string;
+  finished?: string;
+  error?: string;
+  result?: { contract: string; as_of: string; score: number; failed: number; errored: number; total: number };
+}
+
+export const startRun = (contractId: string) =>
+  json<RunState>(`/api/contracts/${encodeURIComponent(contractId)}/run`, { method: 'POST' });
+
+export const getRun = (contractId: string) =>
+  json<RunState>(`/api/contracts/${encodeURIComponent(contractId)}/run`);
