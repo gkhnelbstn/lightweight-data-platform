@@ -1,7 +1,9 @@
 # Working in this repo
 
 Contract-driven data quality. Read `README.md` first for the why; this file is
-the operating manual.
+the operating manual. **On a machine where none of it is running yet, follow
+`docs/setup.md`** -- every feature as a layer, what it needs, and the command
+that says whether it worked.
 
 **Before changing anything that touches a dependency version, read
 `docs/adr/`.** Every decision here has a record with an *On upgrade* section

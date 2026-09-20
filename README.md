@@ -453,6 +453,11 @@ it, because cancelling an order changed its key.
 runs against, kept separate so that what this project *is* cannot be misread as
 requiring a SQL Server and a BI tool.
 
+What follows is the data-quality half, which is where to start. **Everything
+else — the integration hub, its flows, the API source, Slack, master data,
+the pruning — is in [docs/setup.md](docs/setup.md)**, layer by layer, each
+with the command that says whether it worked.
+
 ```bash
 docker compose up -d db odd-db odd-platform     # wait for ODD to come up
 ./deploy/odd-bootstrap.sh                       # collector tokens + configs
