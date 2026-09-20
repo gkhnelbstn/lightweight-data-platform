@@ -22,6 +22,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 
 import psycopg
@@ -178,7 +179,13 @@ def apply(by_id: dict[str, dict], flows: list[flowmod.Flow],
                     said.append(why)
                 query = f"/submit-job?jobName={name}" + (
                     f"&jobId={job_id}&isStartWithSavePoint=true" if action == "resume" else "")
-                answer = _http("POST", query, _fill(configs[name]))
+                try:
+                    answer = _http("POST", query, _fill(configs[name]))
+                except urllib.error.HTTPError as exc:
+                    if action != "resume":
+                        raise
+                    refused.append(flow_resume.unreadable(name, exc.code))
+                    continue
                 cx.execute("insert into hub.job (flow, job_id) values (%s, %s) "
                            "on conflict (flow) do update set job_id = excluded.job_id, "
                            "submitted_at = now()", (name, int(answer["jobId"])))
