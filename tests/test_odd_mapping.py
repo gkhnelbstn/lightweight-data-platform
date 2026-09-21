@@ -134,16 +134,23 @@ def test_every_test_carries_an_expectation_category():
             assert isinstance(cat, DataQualityTestExpectationCategory)
 
 
-def test_timeliness_is_the_one_non_assertion_category():
+def test_a_category_is_the_kind_of_fact_a_check_watches():
+    """Freshness, volume and structure have an honest ODD row each; a rule
+    about values is an assertion whatever its dimension."""
     entities = build(_contract("erp_postgres.odcs.yaml"),
                      _results([_check(key="fresh", dimension="timeliness"),
-                               _check(key="uniq", dimension="uniqueness")]),
+                               _check(key="count", dimension="coverage"),
+                               _check(key="typed", dimension="conformity",
+                                      type="field_physical_type"),
+                               _check(key="uniq", dimension="uniqueness"),
+                               _check(key="format", dimension="conformity")]),
                      "//x")
-    by_name = {e.name: e for e in entities if e.data_quality_test}
-    assert by_name["fresh"].data_quality_test.expectation.category == \
-        DataQualityTestExpectationCategory.FRESHNESS_ANOMALY
-    assert by_name["uniq"].data_quality_test.expectation.category == \
-        DataQualityTestExpectationCategory.ASSERTION
+    by_name = {e.name: e.data_quality_test.expectation.category
+               for e in entities if e.data_quality_test}
+    C = DataQualityTestExpectationCategory
+    assert by_name == {"fresh": C.FRESHNESS_ANOMALY, "count": C.VOLUME_ANOMALY,
+                       "typed": C.SCHEMA_CHANGE, "uniq": C.ASSERTION,
+                       "format": C.ASSERTION}
 
 
 def test_payload_validates_against_odd_models():
