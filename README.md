@@ -201,8 +201,8 @@ failure and closes itself on the next passing run -- but it lives inside the
 platform, and a quality platform whose failures are only visible to whoever
 happens to look is a reporting tool rather than a control.
 
-`DQ_ALERT_URL` is one Slack or Teams incoming webhook and `core/alerts.py` is
-135 lines. One POST per run, and only for the day just finished -- a backfill
+`DQ_ALERT_URL` is one Slack, Teams or Google Chat incoming webhook -- all three
+accept `{"text": ...}` -- and `core/alerts.py` is 135 lines. One POST per run, and only for the day just finished -- a backfill
 is rebuilding history that has already happened and has nothing to announce.
 
 What it says is the part worth arguing about. **Not "these checks are
@@ -217,6 +217,14 @@ gets muted and then deleted. It reports:
 * replication that is **not moving**, in whichever of the ways it can manage
   that -- a dead apply worker, a table stuck in the initial copy, an
   unreachable source.
+
+ODD raises alerts of its own -- a failed test, a schema change -- and can send
+them to Slack, to e-mail, or as its own JSON to a generic webhook, which a
+Google Chat or Teams webhook refuses. `ODD_ALERTS_TO_CHAT=true` points that
+generic webhook at `/api/alerts/odd` (`api/odd_alerts.py`), which turns each
+alert into one line -- what happened, to which entity, what is downstream, a
+link back -- and sends it to `DQ_ODD_ALERT_URL`, or `DQ_ALERT_URL` when that
+is unset.
 
 An *accepted* failure never alerts, which is what accepting one means
 ([#29](https://github.com/gkhnelbstn/lightweight-data-platform/issues/29)). An

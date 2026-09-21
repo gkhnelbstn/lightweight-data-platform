@@ -37,6 +37,7 @@ from core.scoring import DIMENSION_WEIGHT
 from api.integration import router as integration_router
 from api.integration_detail import router as integration_detail_router
 from api.integration_edit import router as integration_edit_router
+from api.odd_alerts import router as odd_alerts_router
 from api.runs import router as runs_router
 
 @contextlib.asynccontextmanager
@@ -81,6 +82,7 @@ app.include_router(integration_router)
 app.include_router(integration_detail_router)
 app.include_router(integration_edit_router)
 app.include_router(runs_router)
+app.include_router(odd_alerts_router)
 
 DIMENSIONS = sorted(DIMENSION_WEIGHT)
 
