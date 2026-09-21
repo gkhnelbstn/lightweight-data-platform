@@ -130,6 +130,40 @@ the fork, `gkhnelbstn/seatunnel`, as `ldp/2.3.13-source-timestamp`.
 #10667.** Nothing is reported, because nothing needs to be: it is already
 merged.
 
+### `deploy/Dockerfile.odd-collector` — the mssql adapter on a Turkish collation
+
+Measured against a production ERP whose database is `Turkish_CI_AS`. Two
+defects, and either one alone stops the whole pull:
+
+* The adapter spells `information_schema` in lower case. The collation is
+  case-insensitive, but in Turkish the upper case of `i` is `İ`, so the view
+  is not found: `Invalid object name 'information_schema.table_constraints'`.
+* Its primary- and foreign-key CTEs return a column once per constraint it is
+  in, and ODD refuses the push with `IllegalStateException: Duplicate key`.
+
+`deploy/mssql-turkish-collation.patch.py` upper-cases the `INFORMATION_SCHEMA`
+references (the `sys.*` views are lower case and stay so) and adds `DISTINCT`
+to both CTEs. It fails the build when the file stops looking the way it did.
+
+**Delete the patch and its two Dockerfile lines when odd-collector's mssql
+adapter quotes `INFORMATION_SCHEMA` in upper case and de-duplicates key
+columns.** Not reported yet.
+
+### `deploy/Dockerfile.odd-collector` — the Superset adapter on a current Superset
+
+Measured against Superset 5 (abc-bi). The adapter asks for collection URLs
+without their trailing slash (`/dataset`, `/chart`, `/dashboard`,
+`/database/<id>/schemas`); Superset answers each with a 308 to the slashed
+URL, and aiohttp drops the `Authorization` header on the redirect. The 401
+has no `result`, and the pull dies on `KeyError: 'result'`. The same crash
+follows one database Superset cannot open: a Google Sheets connection whose
+key file is gone answers its table listing with `{"error": ...}` and took all
+59 dashboards with it. Three `sed`s: ask for the slash, and read a failed
+listing as no tables.
+
+**Delete the three `sed`s when the adapter requests slashed URLs and
+tolerates a database it cannot list.** Not reported yet.
+
 ### Worked around without a patch
 
 odd-collector's `mssql` adapter enumerates every `BASE TABLE` it can see and
