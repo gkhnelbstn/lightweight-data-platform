@@ -13,7 +13,8 @@ import yaml
 
 from core.scoring import DIMENSION_WEIGHT
 from integrations.odd.curate import (DIMENSION_MEANING, entity_tags,
-                                        metadata_values)
+                                        metadata_values, source_domain,
+                                        tables_by_domain)
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
 ODCS = sorted(CONTRACTS.glob("*.odcs.yaml"))
@@ -83,6 +84,47 @@ def test_metadata_is_all_strings(path: Path):
     for key, value in values.items():
         assert isinstance(value, str), f"{key} is {type(value).__name__}"
         assert value != "", key
+
+
+# --- domains -----------------------------------------------------------------
+
+def _contract(table: str, domain: str, database: str = "erp") -> dict:
+    return {"id": table, "domain": domain,
+            "servers": [{"server": "erp", "type": "postgres", "host": "db",
+                         "database": database, "schema": "public"}],
+            "schema": [{"name": table}]}
+
+
+SOURCE = "//postgresql/host/db/databases/erp"
+
+
+def test_a_source_of_one_domain_is_namespaced_by_it():
+    contracts = [_contract("orders", "sales"), _contract("customers", "sales")]
+    assert source_domain(contracts, SOURCE) == "sales"
+
+
+def test_a_source_spanning_domains_is_namespaced_by_none_of_them():
+    """The namespace shows on every table the source holds. An ERP with
+    contracts in five domains took the first one's, and all 3 700 of its
+    tables read `yard_operations`."""
+    contracts = [_contract("orders", "sales"), _contract("ledger", "finance")]
+    assert source_domain(contracts, SOURCE) is None
+
+
+def test_another_database_does_not_decide_this_ones_domain():
+    contracts = [_contract("orders", "sales"),
+                 _contract("ledger", "finance", database="erp_archive")]
+    assert source_domain(contracts, SOURCE) == "sales"
+
+
+def test_each_domain_holds_exactly_its_contracted_tables():
+    contracts = [_contract("orders", "sales"), _contract("ledger", "finance"),
+                 _contract("customers", "sales")]
+    assert tables_by_domain(contracts) == {
+        "finance": [f"{SOURCE}/schemas/public/tables/ledger"],
+        "sales": [f"{SOURCE}/schemas/public/tables/customers",
+                  f"{SOURCE}/schemas/public/tables/orders"],
+    }
 
 
 def test_a_replicated_contract_publishes_its_sync_rule_as_metadata():

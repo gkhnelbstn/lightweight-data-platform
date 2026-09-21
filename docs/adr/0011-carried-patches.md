@@ -84,6 +84,20 @@ before the patch existed, and the write-up there has the same reproduction.
 tracked in
 [#8](https://github.com/gkhnelbstn/lightweight-data-platform/issues/8).
 
+### `deploy/odd-platform-api/` — ODDRN models the Java generator lacks
+
+ODD's Directory sorts data sources by parsing their ODDRN with
+oddrn-generator-java, and 0.1.21 has no model for `//mssql` or for our own
+`//datafletch` checks. Every SQL Server source and every contract check was
+filed under "Other". The generator finds its models by scanning the
+`org.opendatadiscovery.oddrn.model` package, so the fix is two classes on the
+classpath and no change to the generator: the `api` stage compiles them into
+`/app/classes`.
+
+**Delete `MssqlPathsModel.java` when oddrn-generator-java ships an MSSQL
+model.** `DatafletchPathsModel.java` is ours for as long as the `datafletch`
+ODDRNs are.
+
 ### `deploy/odd-platform-tr.mjs` — Turkish in ODD's language picker
 
 ODD already switches language, through a picker that lists `LANGUAGES_MAP`
