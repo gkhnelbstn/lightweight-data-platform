@@ -34,6 +34,7 @@ from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
                          TABLE_SCOPED_TYPES, load_contracts, run)
 from core.scoring import DIMENSION_WEIGHT
 
+from api.discussions import router as discussions_router
 from api.integration import router as integration_router
 from api.integration_detail import router as integration_detail_router
 from api.integration_edit import router as integration_edit_router
@@ -80,6 +81,7 @@ app.add_middleware(
 app.include_router(integration_router)
 app.include_router(integration_detail_router)
 app.include_router(integration_edit_router)
+app.include_router(discussions_router)
 app.include_router(runs_router)
 
 DIMENSIONS = sorted(DIMENSION_WEIGHT)

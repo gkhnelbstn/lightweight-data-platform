@@ -678,3 +678,49 @@ export const startRun = (contractId: string) =>
 
 export const getRun = (contractId: string) =>
   json<RunState>(`/api/contracts/${encodeURIComponent(contractId)}/run`);
+
+/** Discussions in Google Chat (ADR 0028). A space's webhook never comes back
+ * from the server; `target` is its mask. */
+export interface ChatSpace {
+  id: number;
+  name: string;
+  target: string;
+}
+
+export interface DiscussionMessage {
+  id: number;
+  author: string;
+  body: string;
+  created_at: string;
+  delivered: boolean;
+  error: string | null;
+  space: string | null;
+}
+
+const withToken = (body: unknown, token: string): RequestInit => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+  body: JSON.stringify(body),
+});
+
+export const getChatSpaces = () => json<ChatSpace[]>('/api/discussions/spaces');
+
+export const addChatSpace = (name: string, webhookUrl: string, token: string) =>
+  json<ChatSpace>('/api/discussions/spaces', withToken({ name, webhook_url: webhookUrl }, token));
+
+export const deleteChatSpace = (id: number, token: string) =>
+  json<{ deleted: number }>(`/api/discussions/spaces/${id}/delete`, withToken({}, token));
+
+export const getDiscussion = (entityId: number) =>
+  json<DiscussionMessage[]>(`/api/discussions/${entityId}`);
+
+/** A message is a note, not a statement: it carries no token. */
+export const postDiscussion = (
+  entityId: number,
+  message: { space_id: number; author: string; body: string; entity_name: string }
+) =>
+  json<{ id: number; delivered: boolean; error: string | null }>(`/api/discussions/${entityId}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(message),
+  });
