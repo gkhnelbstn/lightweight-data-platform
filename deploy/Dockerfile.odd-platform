@@ -104,6 +104,13 @@ COPY --from=platform /app/libs /app/libs
 ADD https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.34/lombok-1.18.34.jar /lombok.jar
 COPY --from=src /src/odd-platform-api/src/main/java/org/opendatadiscovery/oddplatform/repository/reactive/ReactiveRelationshipsRepositoryImpl.java /patch/
 RUN set -e; f=/patch/ReactiveRelationshipsRepositoryImpl.java;     anchor='.collect(Collectors.toMap(DatasetFieldPojo::getOddrn, identity()));';     [ "$(grep -cF "$anchor" $f)" = 1 ] || { echo "ERD anchor moved in $f" >&2; exit 1; };     sed -i 's/Collectors.toMap(DatasetFieldPojo::getOddrn, identity()))/Collectors.toMap(DatasetFieldPojo::getOddrn, identity(), (a, b) -> a.getId() > b.getId() ? a : b))/' $f;     javac --release 17 -nowarn -proc:full -processorpath /lombok.jar       -cp "/app/classes:/app/libs/*:/lombok.jar" -d /out $f
+# ODDRN models the Java generator lacks: SQL Server's, and our own contract
+# checks'. Without them the Directory files both under "Other". The generator
+# discovers models by scanning their package, so a class only has to be on the
+# classpath. Delete MssqlPathsModel when oddrn-generator-java ships one.
+COPY odd-platform-api/*.java /patch/models/
+RUN javac --release 17 -nowarn -proc:full -processorpath /lombok.jar \
+      -cp "/app/classes:/app/libs/*:/lombok.jar" -d /out /patch/models/*.java
 
 FROM ghcr.io/opendatadiscovery/odd-platform:${ODD_VERSION}
 ARG ODD_VERSION

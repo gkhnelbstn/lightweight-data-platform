@@ -522,6 +522,18 @@ which is the default branch.
   Raising the interval or the timeout cannot help a contended lock. The
   demo's API is `demo/integration/loyalty_api.py`, the app image with a
   different command, seeded by `demo/integration/loyalty_setup.sql`.
+* **A contract's domain is an ODD domain, and a source's namespace only when
+  it has one** (`curate.sync_domains`, `source_domain`). A namespace on a data
+  source shows on every entity it holds, so an ERP whose contracts span five
+  domains used to take the first one's and all 3 700 tables read
+  `yard_operations`. Domains are manual `DOMAIN` groups (type id 22) whose
+  members are replaced each run. A group member must be a full `DataEntityRef`
+  (`id`, `is_stale`, `status`): an oddrn alone is a 400. ODD 0.29 has **no
+  API to delete a manual group** -- setting its status to `DELETED` is the
+  way out -- so do not create one to probe.
+* ODD's Directory types a source by parsing its ODDRN with the Java
+  generator, which has no `//mssql` model: every SQL Server source was
+  "Other" until `deploy/odd-platform-api/` added one (ADR 0011).
 * **A discussion about an asset is a Slack thread, and nothing else.** ODD's
   Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
   channel list is empty until a workspace is connected:
