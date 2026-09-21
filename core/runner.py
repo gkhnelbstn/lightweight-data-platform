@@ -219,10 +219,7 @@ def persist(results: dict, contract: dict, as_of: date,
     rows = []
     for check in results.get("checks", []):
         d = check.get("diagnostics") or {}
-        failed = d.get("failed_rows")
-        if failed is None:
-            failed = d.get("value") if d.get("value") is not None else (
-                0 if check.get("result") == "passed" else 1)
+        failed = failed_rows(check)
         # A custom rule has no row_count of its own; the table it is about is
         # the denominator, counted once per run in the same window.
         total = d.get("row_count") or (row_counts or {}).get(
@@ -260,6 +257,22 @@ def persist(results: dict, contract: dict, as_of: date,
         store.write_score(dq, as_of, contract_id, s, len(rows), failed_n,
                           _min_score(contract), window, errored_n)
     return rows
+
+
+def failed_rows(check: dict) -> int:
+    """How many rows a check failed on.
+
+    A custom SQL rule reports only the value its query returned. Under
+    `mustBe: 0` that is the count of bad rows; under a threshold on the table's
+    size it is the size, so a passing row-count rule used to be stored as every
+    row failed. A check that passed failed on nothing, whatever its value.
+    """
+    d = check.get("diagnostics") or {}
+    if d.get("failed_rows") is not None:
+        return int(d["failed_rows"])
+    if check.get("result") == "passed":
+        return 0
+    return int(d["value"]) if d.get("value") is not None else 1
 
 
 def _only_count(row_counts: dict[str, int] | None) -> int:
