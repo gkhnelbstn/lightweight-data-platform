@@ -534,15 +534,18 @@ which is the default branch.
   Raising the interval or the timeout cannot help a contended lock. The
   demo's API is `demo/integration/loyalty_api.py`, the app image with a
   different command, seeded by `demo/integration/loyalty_setup.sql`.
-* **A discussion about an asset is a Slack thread, and nothing else.** ODD's
-  Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
-  channel list is empty until a workspace is connected:
-  `deploy/slack-app-manifest.yaml` is the app, `ODD_SLACK_ENABLED` and
-  `ODD_SLACK_TOKEN` in `.env` are the wiring, and the token is the
-  workspace owner's to create. `DATACOLLABORATION_ENABLED: true` with an
-  empty token refuses to start ODD ("Slack OAuth token is empty"), which is
-  why both default to off. Replies arrive at `/api/slack/events`, so they
-  need this platform reachable from Slack; posting does not.
+* **A discussion about an asset is a Google Chat thread, one way** (ADR
+  0028). ODD's own Discussions tab has one provider, Slack, so
+  `deploy/odd-platform-discussions.mjs` points the tab at
+  `Discussions.tsx`: a message is kept in `dq.discussion` and posted to a
+  Google Chat space's incoming webhook, one thread per asset
+  (`threadKey: odd-entity-<id>`). Spaces are added on that tab. **A space
+  URL is a credential and an SSRF door**: only
+  `https://chat.googleapis.com/v1/spaces/<id>/messages?key&token` is
+  accepted, redirects are not followed, the URL returns to the screen masked,
+  and adding or removing one needs the API token. Replies typed in Chat stay
+  in Chat -- a webhook cannot read. The Slack wiring (`ODD_SLACK_*`,
+  `deploy/slack-app-manifest.yaml`) is still in the image and unreached.
 * **ODD's Master Data page is the hub's golden record, one way** (ADR 0025,
   `integrations/odd/master_data.py`): a lookup table per hub entity plus
   `value_maps`, matched by key, classified columns left out. An edit made in
