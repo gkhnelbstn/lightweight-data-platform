@@ -302,6 +302,48 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getOverview = () => json<Overview>('/api/overview');
 
+/** The quality half of the overview tab (#145); see api/quality_overview.py. */
+export interface QualityOverview {
+  as_of: string | null;
+  kpis: {
+    contracts: number;
+    at_sla: number;
+    checks: number;
+    failing: number;
+    errored: number;
+    newly_failing: number;
+    accepted: number;
+  };
+  contracts: {
+    id: string;
+    title: string;
+    domain: string | null;
+    score: number | null;
+    previous: number | null;
+    sla_min: number | null;
+    sla_met: boolean | null;
+    checks_total: number;
+    checks_failed: number;
+    checks_errored: number;
+    run_at: string | null;
+  }[];
+  dimensions: { dimension: string; weight: number; total: number; failing: number; errored: number }[];
+  aging: { new: number; week: number; month: number; older: number };
+  domains: { domain: string; points: { run_at: string; score: number }[] }[];
+  worst: {
+    check_id: string;
+    contract_id: string;
+    dimension: string;
+    name: string | null;
+    failed_rows: number;
+    total_rows: number;
+    since: string | null;
+    state: string;
+  }[];
+}
+
+export const getQualityOverview = () => json<QualityOverview>('/api/overview/quality');
+
 export const getContract = (id: string) =>
   json<ContractDetail>(`/api/contracts/${encodeURIComponent(id)}`);
 

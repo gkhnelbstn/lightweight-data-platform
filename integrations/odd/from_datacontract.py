@@ -62,10 +62,26 @@ _STATUS = {
 # datacontract-cli reports a dimension per check; ODD buckets by category and
 # counts an uncategorised test as zero on its Data Quality dashboard.
 # ODD offers ASSERTION, VOLUME_ANOMALY, FRESHNESS_ANOMALY,
-# COLUMN_VALUES_ANOMALY and SCHEMA_CHANGE. Only timeliness has an honest
-# non-assertion home; the rest of datacontract's dimensions describe what a
-# deterministic check asserts, not an anomaly someone detected.
-_CATEGORY = {"timeliness": DataQualityTestExpectationCategory.FRESHNESS_ANOMALY}
+# COLUMN_VALUES_ANOMALY and SCHEMA_CHANGE. A category is the *kind of fact*
+# a check watches, and three have an honest home: timeliness is freshness,
+# coverage (is the expected population there at all -- a row count) is
+# volume, and datacontract's own structural checks -- a declared column
+# missing, or of another type -- are exactly a schema change. They arrive
+# labelled `conformity`, so they are recognised by check type, not dimension.
+# Everything else describes what a deterministic check asserts about values,
+# not an anomaly someone detected, and stays ASSERTION. Before this every
+# Siber check counted as an assertion and four of ODD's five rows read zero.
+_CATEGORY = {"timeliness": DataQualityTestExpectationCategory.FRESHNESS_ANOMALY,
+             "coverage": DataQualityTestExpectationCategory.VOLUME_ANOMALY}
+_SCHEMA_TYPES = frozenset({"field_is_present", "field_physical_type", "field_type"})
+
+
+def category(check: dict) -> DataQualityTestExpectationCategory:
+    """The ODD dashboard row a check is counted in."""
+    if check.get("type") in _SCHEMA_TYPES:
+        return DataQualityTestExpectationCategory.SCHEMA_CHANGE
+    return _CATEGORY.get(check.get("dimension"),
+                         DataQualityTestExpectationCategory.ASSERTION)
 
 
 def _json(url: str, body: dict | None = None) -> dict:
@@ -178,9 +194,7 @@ def build(contract: dict, results: dict, ds_oddrn: str) -> list[DataEntity]:
                 suite_name=contract_id, dataset_list=[ds_oddrn],
                 expectation=DataQualityTestExpectation(
                     type=check.get("type") or "assertion",
-                    category=_CATEGORY.get(
-                        check.get("dimension"),
-                        DataQualityTestExpectationCategory.ASSERTION),
+                    category=category(check),
                     **{k: str(v) for k, v in (
                         ("field", check.get("field")),
                         ("dimension", check.get("dimension")),

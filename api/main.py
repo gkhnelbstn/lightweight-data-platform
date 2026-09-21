@@ -35,6 +35,7 @@ from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
 from core.scoring import DIMENSION_WEIGHT
 
 from api.integration import router as integration_router
+from api.quality_overview import router as quality_overview_router
 from api.integration_detail import router as integration_detail_router
 from api.integration_edit import router as integration_edit_router
 from api.odd_alerts import router as odd_alerts_router
@@ -79,6 +80,7 @@ app.add_middleware(
 
 # The Integration tab's one route, in a module of its own (#78).
 app.include_router(integration_router)
+app.include_router(quality_overview_router)
 app.include_router(integration_detail_router)
 app.include_router(integration_edit_router)
 app.include_router(runs_router)

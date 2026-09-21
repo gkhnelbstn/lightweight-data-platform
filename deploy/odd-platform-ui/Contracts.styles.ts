@@ -170,6 +170,41 @@ export const Actions = styled.div(
   `
 );
 
+/** The overview's headline numbers: one card each, as many per row as fit. */
+export const Kpis = styled.div(
+  ({ theme }) => css`
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: ${theme.spacing(1.5)};
+  `
+);
+
+export const Kpi = styled.div<{ $tone?: 'good' | 'bad' | 'plain' }>(
+  ({ theme, $tone }) => css`
+    display: flex;
+    flex-direction: column;
+    gap: ${theme.spacing(0.25)};
+    padding: ${theme.spacing(1.5)} ${theme.spacing(2)};
+    border: 1px solid ${theme.palette.border.primary};
+    border-left: 4px solid
+      ${$tone === 'good'
+        ? theme.palette.success.main
+        : $tone === 'bad'
+          ? theme.palette.error.main
+          : theme.palette.border.primary};
+    border-radius: ${theme.spacing(1)};
+  `
+);
+
+/** Two panels side by side where there is room, stacked where there is not. */
+export const Split = styled.div(
+  ({ theme }) => css`
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: ${theme.spacing(2)};
+  `
+);
+
 /** One property (Definitions) or one check (Checks): a compact row rather
  * than a full Table.RowContainer -- there is no second column to align, just
  * a label line and, sometimes, a line of prose under it. */

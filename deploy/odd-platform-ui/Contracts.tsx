@@ -6,6 +6,7 @@ import { getOverview, getRuleTypes } from './api';
 import { ChecksTab } from './ChecksTab';
 import { ContractsTab } from './ContractsTab';
 import { HistoryTab } from './HistoryTab';
+import { QualityOverview } from './QualityOverview';
 import { Replication } from './Replication';
 import { readParam, showDashboard, useT, writeParams } from './shared';
 import * as S from './Contracts.styles';
@@ -120,11 +121,14 @@ export const Contracts: React.FC = () => {
       {tab === 2 && <HistoryTab />}
       {tab === 3 && <Replication />}
       {tab === 4 && (
-        <Typography variant='subtitle2' color='texts.secondary'>
-          {t(
-            "This platform's own dashboard, below — table health, the test results breakdown and the category table, counted from everything it has ingested rather than from the contracts."
-          )}
-        </Typography>
+        <>
+          <QualityOverview />
+          <Typography variant='subtitle2' color='texts.secondary'>
+            {t(
+              "This platform's own dashboard, below — table health, the test results breakdown and the category table, counted from everything it has ingested rather than from the contracts."
+            )}
+          </Typography>
+        </>
       )}
     </S.Shell>
   );
