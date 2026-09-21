@@ -65,6 +65,10 @@ COPY odd-platform-locale-tr.json /src/odd-platform-ui/src/locales/translations/t
 COPY odd-platform-integration-tab.mjs /tmp/integration-tab.mjs
 RUN node /tmp/patch.mjs /src && node /tmp/lineage-icon.mjs /src && node /tmp/tr.mjs /src     && node /tmp/integration-tab.mjs /src
 WORKDIR /src/odd-platform-ui
+# A group's lineage too large to draw (a whole ERP schema) is listed instead
+# of freezing the tab; see the script and ADR 0011.
+COPY odd-platform-lineage-limit.mjs /tmp/lineage-limit.mjs
+RUN node /tmp/lineage-limit.mjs /src
 # pnpm is pinned rather than taken from corepack: the lockfile is version 9.0
 # and corepack hands out whatever is current, which rejects it under
 # --frozen-lockfile. A fork that cannot reproduce its own build is not a fork,
