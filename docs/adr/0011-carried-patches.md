@@ -52,6 +52,24 @@ Reported as
 upstream** — tracked in
 [#19](https://github.com/gkhnelbstn/lightweight-data-platform/issues/19).
 
+### `deploy/odd-platform-lineage-limit.mjs` — a group lineage too large to draw
+
+A data entity group's Lineage tab renders every node to measure it, then lays
+the whole graph out with ELK on the main thread. For a schema of an ERP, which
+odd-collector files as a group, that is the whole ERP. Siber's `dbo` answered
+with 1 120 subgraphs, 3 740 nodes and 9 391 edges. The 3.4 MB arrived in two
+seconds, and the tab then froze for good.
+
+Two anchored lines in `DEGLineage.tsx`, placed after the last hook, render
+`LineageTooLarge.tsx` instead of the graph when the group has more than 400
+distinct nodes. The component lists the group's entities by how many links
+each has, searchable, and each one opens its own lineage, which ODD draws well
+(it groups a large neighbourhood into one node). Below the limit nothing
+changes. The build fails if either anchor moves.
+
+**Delete the script and the component when ODD lays a group's lineage out off
+the main thread or pages it.** Not reported yet.
+
 ### `deploy/Dockerfile.odd-platform` — the ER diagram of a versioned table
 
 ODD's Data Modelling > Relationships page, and the Relationships tab of every
