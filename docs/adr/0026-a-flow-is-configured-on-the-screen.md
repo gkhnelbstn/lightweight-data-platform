@@ -41,7 +41,12 @@ job: {checkpointInterval: 5000, rowsPerSecond: 400}
   costs at most, and what the engine spends when nothing is happening.
 * `rowsPerSecond` — SeaTunnel's own `read_limit.rows_per_second`. A first read
   of a large table is the one thing a flow does that can take a source
-  database down with it.
+  database down with it. It also sets the job's `checkpoint.timeout`: that
+  first read comes in chunks of 8 096 rows, a checkpoint waits for the chunk
+  being emitted, and at 30 rows a second that is 270 s against a 60 s
+  default. The timeout is twice the chunk's time at the stated rate. Without
+  it, a 35 654-row table failed its job every 90 s and restored the same
+  chunk each time, for hours.
 
 Anything else in `job:` is refused, by name, with the two it takes.
 

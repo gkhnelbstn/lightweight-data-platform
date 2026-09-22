@@ -35,6 +35,10 @@ from core import flows as flowmod
 from core.mapping import _properties
 
 CHECKPOINT_MS = int(os.getenv("FLOW_CHECKPOINT_MS", "3000"))
+# SeaTunnel's default `snapshot.split.size`: a CDC source's first read comes in
+# chunks of this many rows, and a chunk is emitted whole before a checkpoint
+# barrier can pass it.
+SNAPSHOT_CHUNK_ROWS = 8096
 
 
 def env(flow: flowmod.Flow, name: str) -> dict:
@@ -51,13 +55,19 @@ def env(flow: flowmod.Flow, name: str) -> dict:
     # they queue behind the sleep and one expires, and SeaTunnel answers that
     # by failing the whole job ("Checkpoint expired before completing").
     poll = flow.job.get("pollSeconds")
+    # ...and one that outlasts a sleeping reader: the barrier waits for the
+    # poll in flight, and the default 30 s is the poll plus a slow answer on a
+    # bad day. A throttled CDC source is the same wait in another shape: the
+    # barrier waits for the snapshot chunk being emitted, which at 30 rows a
+    # second is 270 s. Measured: under the 60 s default a 35 654-row table
+    # failed its job every 90 s for hours, restored the same chunk each time,
+    # and never moved.
+    timeout = (max(60_000, 6 * poll * 1000) if poll else
+               max(60_000, 2 * SNAPSHOT_CHUNK_ROWS * 1000 // rows) if rows else None)
     return {"job.mode": "STREAMING", "parallelism": 1, "job.name": name,
             "checkpoint.interval": flow.job.get(
                 "checkpointInterval", 2 * poll * 1000 if poll else CHECKPOINT_MS),
-            # ...and one that outlasts a sleeping reader: the barrier waits
-            # for the poll in flight, and the default 30 s is the poll plus a
-            # slow answer on a bad day.
-            **({"checkpoint.timeout": max(60_000, 6 * poll * 1000)} if poll else {}),
+            **({"checkpoint.timeout": timeout} if timeout else {}),
             **({"read_limit.rows_per_second": rows} if rows else {})}
 
 
