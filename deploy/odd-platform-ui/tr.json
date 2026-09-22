@@ -232,6 +232,7 @@
   "No hub contract with flows yet.": "Henüz akışları olan bir merkez kontratı yok.",
   "{{n}} records · the first sync goes to {{system}}": "{{n}} kayıt · ilk eşitlemede {{system}} esas alınır",
   "each system keeps its own code: {{columns}}": "her sistem kendi kodunu tutar: {{columns}}",
+  "Hub database: {{where}}, table {{table}}": "Merkez veritabanı: {{where}}, tablo {{table}}",
   "Hub database unreachable: {{error}}": "Merkez veritabanına ulaşılamıyor: {{error}}",
   "System": "Sistem",
   "Into the hub": "Merkeze",

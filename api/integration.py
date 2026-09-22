@@ -179,6 +179,7 @@ def integration() -> dict:
             row = systems.setdefault(table, {
                 "table": table, "system": flowmod.system_of(table),
                 "title": (by_id.get(table) or {}).get("name") or table,
+                "where": flow_schema.where(by_id.get(table)),
                 "in": [], "out": [], "drift": []})
             row["in" if into else "out"].append(
                 {"flow": f.id, "match": f.match, "job": running.get(f.id)})
@@ -197,6 +198,7 @@ def integration() -> dict:
                 unreachable[host] = exc.__class__.__name__
                 row["drift"].append(f"{table}: schema not readable ({unreachable[host]})")
         hub = {"id": cid, "title": contract.get("name") or cid,
+               "where": flow_schema.where(contract),
                "authority": spec.get("authority"), "codes": flowmod.keys_of(contract),
                "systems": sorted(systems.values(), key=lambda s: s["table"])}
         try:

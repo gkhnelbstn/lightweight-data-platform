@@ -33,6 +33,7 @@ python integrations/odd/lineage.py --url http://odd-platform:8080   # declared l
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
 python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
 python integrations/odd/master_data.py --url http://odd-platform:8080  # golden records -> Master Data
+python integrations/odd/flow_lineage.py --url http://odd-platform:8080 --contracts demo/integration  # flows -> lineage
 uvicorn api.main:app --port 8077                           # UI + API
 python core/mapping.py --check                             # validate the declared column mappings
 python core/sync.py --check                                # validate the sync rules
@@ -552,6 +553,15 @@ which is the default branch.
   ODD is overwritten by the next run -- a record changes in its system. ODD
   does not quote the names in its own `ALTER TABLE`, so a lookup column named
   `column` is a 500.
+* **A flow is a job on ODD's lineage** (ADR 0029,
+  `integrations/odd/flow_lineage.py`), from the table it reads to the one it
+  writes. A table on a server **no collector owns** -- a source nobody
+  catalogues, the hub -- is published from its contract into a data source
+  named by the contract's server. One a collector owns is left to it: ODD
+  gives an API-registered data source a token and a collector's none, and
+  publishing the contract's mapped columns over a collector's table is a new
+  structure version on every run of either. A data source description is
+  `varchar(255)` in ODD; longer is a 500.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why
