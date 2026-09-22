@@ -56,3 +56,4 @@ upstream feature that would let it be deleted.
 | [0026](0026-a-flow-is-configured-on-the-screen.md) | A flow is configured on the screen, and states two things about how it runs | SeaTunnel gains ordered parallel readers per key |
 | [0027](0027-an-api-source-is-a-poll.md) | An API source is a poll, one way, and it must say when a record changed | SeaTunnel grows an incremental API source, or an API is expected to be written back |
 | [0028](0028-discussions-in-google-chat.md) | An asset's discussion is posted to Google Chat, one way; spaces are set on the screen | ODD's data-collaboration grows a provider model |
+| [0029](0029-a-flow-is-a-job-in-the-catalogue.md) | A flow is a job in the catalogue, between tables its contracts describe | SeaTunnel or ODD grows lineage for SeaTunnel jobs |

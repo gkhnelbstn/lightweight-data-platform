@@ -22,6 +22,8 @@ Integration tab shows the same list while the flow runs.
 """
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from core import flows as flowmod
 from core.flow_resume import mssql
 
@@ -44,6 +46,20 @@ def mapped(flow: flowmod.Flow, by_id: dict[str, dict]) -> tuple[dict, list[str],
         return by_id[flow.mapping.reference], sorted(
             {*flow.mapping.columns.values(), *flow.match}), True
     return by_id[flow.target], sorted({*flow.mapping.columns, *flow.match}), False
+
+
+def where(contract: dict | None) -> str | None:
+    """Where a contract's table lives, in one line: engine, host, port and
+    database, or an API's host. A system's name says neither, and "hub" said
+    nothing about which machine the golden record is on. An API is named by
+    its host only: a URL may carry a key in its query."""
+    for s in (contract or {}).get("servers") or []:
+        if s.get("type") == "api":
+            return f"api {urlparse(str(s.get('location', ''))).netloc}"
+        if s.get("type") in ("sqlserver", "postgres", "postgresql"):
+            port = s.get("port", 1433 if s["type"] == "sqlserver" else 5432)
+            return f"{s['type']} {s['host']}:{port}, database {s['database']}"
+    return None
 
 
 def server_of(flow: flowmod.Flow, by_id: dict[str, dict]) -> dict | None:

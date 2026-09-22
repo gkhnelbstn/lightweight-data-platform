@@ -470,6 +470,7 @@ def main() -> None:
                   f"score={r['score']:.4f} failed={r['failed']}/{r['total']}{note}")
     if a.odd_url:
         publish_master_data(a.odd_url)
+        publish_flows(a.odd_url)
 
 
 def publish_master_data(url: str) -> None:
@@ -483,6 +484,19 @@ def publish_master_data(url: str) -> None:
             print(f"MASTER {master_data.publish(url, table)}", flush=True)
     except Exception as e:
         print(f"WARN master data not published ({e})", flush=True)
+
+
+def publish_flows(url: str) -> None:
+    """Each flow a job in ODD's lineage, and the tables it joins (ADR 0029),
+    once per run -- so a flow added since yesterday is on the graph today."""
+    from pathlib import Path
+
+    from integrations.odd import flow_lineage
+    try:
+        for line in flow_lineage.publish(url, Path(os.getenv("INTEGRATION_DIR", "contracts"))):
+            print(f"FLOWS {line}", flush=True)
+    except Exception as e:
+        print(f"WARN flows not published ({e})", flush=True)
 
 
 if __name__ == "__main__":

@@ -101,6 +101,7 @@ its own round trip. Expressions wait for a one-way case that needs them.
   filtered on write) and applies one flow per target; that is the next record.
 * A lineage edge for a flow, most likely an ODD `DataTransformer` between the
   two datasets rather than a `derivedFrom` cycle, is also not built yet.
+  It is now: [ADR 0029](0029-a-flow-is-a-job-in-the-catalogue.md).
 
 ## On upgrade
 
