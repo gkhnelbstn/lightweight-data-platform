@@ -206,6 +206,16 @@ which is the default branch.
   everyone -- ODD link names, the alert message -- follows `LDP_LANGUAGE`
   (`core/language.py`) instead, since no viewer's picker can choose it; so
   `odd_links` keys a link by what it is (`checks`), never by its words.
+* **A contract opens on its agreement** (ADR 0030, `api/contract_agreement.py`,
+  `ContractOverview.tsx`): owner, purpose and terms, its rules, and every
+  `slaProperties` promise beside what the runs measured -- **only where
+  something measures it**. A promise nothing here measures reads "not measured
+  here", never a number from elsewhere. The owner is `tenant`, as `curate.py`
+  has it, and `team` is ODCS 3.1's object (the 3.0 array still reads). ODCS
+  names are shown through a map in the component, because the English
+  catalogue is the keys and `dataClassification` is not a label. The tab's
+  lineage is ODD's own API from the browser (`findEntityId`, `getNeighbours`
+  in `api.ts`): the panel is part of ODD's page and has its session.
 * **A contract's domain is an ODD domain, and a source's namespace only when
   it has one** (`curate.sync_domains`, `source_domain`). A namespace on a data
   source shows on every entity it holds, so an ERP whose contracts span five
