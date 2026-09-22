@@ -34,6 +34,7 @@ from core.runner import (CONTRACTS, DAILY_SERVER, ROOT,  # noqa: F401
                          TABLE_SCOPED_TYPES, load_contracts, run)
 from core.scoring import DIMENSION_WEIGHT
 
+from api.contract_agreement import agreement
 from api.discussions import router as discussions_router
 from api.integration import router as integration_router
 from api.quality_overview import router as quality_overview_router
@@ -202,6 +203,17 @@ def overview() -> dict:
             "dimensions": DIMENSIONS}
 
 
+def _dataset_oddrn(doc: dict) -> str | None:
+    """The table's ODDRN, as the runner pushes checks onto it, so the page can
+    find the same entity in ODD's catalogue; None for an engine without one."""
+    from integrations.odd.from_datacontract import dataset_oddrn
+    servers = {s.get("server") for s in doc.get("servers") or []}
+    try:
+        return dataset_oddrn(doc, "erp" if "erp" in servers else None)
+    except (SystemExit, KeyError):
+        return None
+
+
 @app.get("/api/contracts/{contract_id}")
 def contract_detail(contract_id: str) -> dict:
     path = _contract_file(contract_id)
@@ -234,7 +246,17 @@ def contract_detail(contract_id: str) -> dict:
         window w as (partition by table_name, column_name order by run_at desc)
         order by table_name, column_name, run_at desc""", (contract_id,))
 
+    # A month of daily rows: enough to say how often it is checked.
+    scores = q("""
+        select run_at, score, sla_met, checks_errored
+        from contract_scores
+        where contract_id = %s and run_window = 'incremental'
+          and run_at > current_date - 30
+        order by run_at desc""", (contract_id,))
+
     return {"contract": _summary(doc),
+            "agreement": agreement(doc, load_contracts(), scores, checks),
+            "oddrn": _dataset_oddrn(doc),
             "properties": model.get("properties") or [],
             "profile": profile,
             "rules": model.get("quality") or [],
