@@ -165,6 +165,13 @@ which is the point of forking rather than injecting: `tsc` caught a real bug in
 it before the image was ever built. Select a contract to see the rules behind
 its tests, add another, or open the rows a failing check counted.
 
+A contract opens on its agreement: who owns it, what it is for and may be used
+for, which rules it holds, how often it is checked, and each promise in
+`slaProperties` next to what the runs measured. The overview also lists the
+tables its foreign keys join, in both directions, and what ODD's catalogue has
+one step up or down its lineage. Every answer is the contract's own ODCS field
+(ADR 0030).
+
 **Adding a rule does not mean writing SQL.** Pick a column, pick a rule — is
 never empty, is one of a list, is between two numbers, has no duplicates,
 exists in another table — and the service composes the statement, in the

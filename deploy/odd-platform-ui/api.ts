@@ -127,8 +127,67 @@ export interface ColumnProfile {
   prev_rows: number | null;
 }
 
+/** What the runs measured against one promise (api/contract_agreement.py). */
+export type Measured =
+  | { kind: 'score'; value: number; met: boolean; as_of: string }
+  | { kind: 'last_run'; days: number; met: boolean; runs: number; as_of: string }
+  | { kind: 'checks'; passed: number; total: number; met: boolean }
+  | { kind: 'answered'; ok: number; total: number; met: boolean | null };
+
+export interface SlaPromise {
+  property: string;
+  value: unknown;
+  unit: string | null;
+  element: string | null;
+  driver: string | null;
+  description: string | null;
+  scheduler: string | null;
+  schedule: string | null;
+  measured: Measured | null;
+}
+
+export interface ForeignKey {
+  column: string;
+  table: string;
+  to_column: string;
+  /** The contract covering the other table, where there is one. */
+  contract: string | null;
+}
+
+/** The contract as an agreement: who, what for, how often, what was promised. */
+export interface ContractAgreement {
+  status: string | null;
+  version: string | null;
+  api_version: string | null;
+  domain: string | null;
+  tags: string[];
+  owner: string | null;
+  team: { name: string | null; members: { username: string; name: string | null; role: string | null }[] };
+  description: { purpose: string | null; usage: string | null; limitations: string | null };
+  use_cases: string[];
+  semantics: { name: string; rule?: string; description?: string }[];
+  terms: { key: string; value: string }[];
+  roles: { role: string; access?: string; description?: string }[];
+  support: { channel: string; url?: string; tool?: string; description?: string }[];
+  sla: SlaPromise[];
+  location: {
+    type: string | null;
+    host: string | null;
+    port: number | null;
+    database: string | null;
+    schema: string | null;
+    table: string;
+  };
+  runs: { as_of: string; met: boolean; errored: boolean }[];
+  references: ForeignKey[];
+  referenced_by: ForeignKey[];
+}
+
 export interface ContractDetail {
   contract: ContractSummary;
+  agreement: ContractAgreement;
+  /** The table's ODDRN in ODD's catalogue, or null for an engine without one. */
+  oddrn: string | null;
   properties: ContractProperty[];
   profile: ColumnProfile[];
   rules: QualityRule[];
@@ -289,6 +348,82 @@ export interface PreviewResult {
   failed_rows?: number | null;
   row_count?: number | null;
   compiled_sql?: string | null;
+}
+
+/** A catalogue entity next to the contract's table, from ODD's own lineage. */
+export interface CatalogueNode {
+  id: number;
+  oddrn: string;
+  name: string;
+  kind: 'table' | 'view' | 'job' | 'consumer' | 'input' | 'other';
+  source: string | null;
+}
+
+interface OddLineageNode {
+  id: number;
+  oddrn: string;
+  external_name?: string | null;
+  internal_name?: string | null;
+  entity_classes?: { name: string }[];
+  data_source?: { name?: string | null } | null;
+}
+
+// ODD's own API, on the same origin as the page this panel is part of: its
+// session is the page's, so nothing here holds a credential of its own.
+async function odd<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) throw new Error(`ODD ${res.status}`);
+  return (await res.json()) as T;
+}
+
+/** ODD's id for an ODDRN. There is no lookup by ODDRN, so search by the
+ * table's name and match the ODDRN exactly (integrations/odd/entity_page.py). */
+export async function findEntityId(oddrn: string): Promise<number | null> {
+  const query = oddrn.slice(oddrn.lastIndexOf('/') + 1);
+  const { search_id: id } = await odd<{ search_id: string }>('/api/search', {
+    method: 'POST',
+    body: JSON.stringify({ query, filters: {} }),
+  });
+  for (let page = 1; page <= 5; page += 1) {
+    const got = await odd<{ items: { id: number; oddrn: string }[]; page_info?: { hasNext?: boolean } }>(
+      `/api/search/${id}/results?page=${page}&size=100`
+    );
+    const hit = got.items.find(i => i.oddrn === oddrn);
+    if (hit) return hit.id;
+    if (!got.page_info?.hasNext) break;
+  }
+  return null;
+}
+
+const kindOf = (n: OddLineageNode): CatalogueNode['kind'] => {
+  const classes = (n.entity_classes ?? []).map(c => c.name);
+  if (classes.includes('DATA_SET')) return classes.includes('DATA_TRANSFORMER') ? 'view' : 'table';
+  if (classes.includes('DATA_TRANSFORMER')) return 'job';
+  if (classes.includes('DATA_CONSUMER')) return 'consumer';
+  if (classes.includes('DATA_INPUT')) return 'input';
+  return 'other';
+};
+
+/** One step up or down ODD's lineage from an entity, the entity itself left out. */
+export async function getNeighbours(
+  id: number,
+  direction: 'upstream' | 'downstream'
+): Promise<CatalogueNode[]> {
+  const body = await odd<Record<string, { nodes: OddLineageNode[] }>>(
+    `/api/dataentities/${id}/lineage/${direction}?lineage_depth=1`
+  );
+  return (body[direction]?.nodes ?? [])
+    .filter(n => n.id !== id)
+    .map(n => ({
+      id: n.id,
+      oddrn: n.oddrn,
+      name: n.internal_name || n.external_name || n.oddrn,
+      kind: kindOf(n),
+      source: n.data_source?.name ?? null,
+    }));
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
