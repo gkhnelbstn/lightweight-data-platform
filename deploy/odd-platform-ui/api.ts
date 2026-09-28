@@ -470,6 +470,8 @@ export interface IntegrationSystem {
   table: string;
   system: string;
   title: string;
+  /** Engine, host, port and database -- or an API's host. */
+  where: string | null;
   in: IntegrationFlow[];
   out: IntegrationFlow[];
   /** Mapped columns the live table or its CDC capture no longer has. */
@@ -514,6 +516,8 @@ export interface Tombstone {
 export interface Hub {
   id: string;
   title: string;
+  /** The hub database: engine, host, port and database. */
+  where: string | null;
   authority: string;
   codes: Record<string, string>;
   systems: IntegrationSystem[];

@@ -45,6 +45,7 @@ Everything in this repository is one of four things. Nothing is a fifth.
 | replication rules → Postgres publications | `core/sync.py` | — [0008](0008-replication.md) |
 | replication rules → SQL Server CDC | `core/sync_mssql.py` | — [0008](0008-replication.md) |
 | declared lineage → `DataTransformer` | `integrations/odd/lineage.py` | the loads moving to dbt — [0014](0014-declared-lineage.md) |
+| a flow → `DataTransformer`, and the tables no collector reads | `integrations/odd/flow_lineage.py` | lineage for SeaTunnel jobs — [0029](0029-a-flow-is-a-job-in-the-catalogue.md) |
 | the catalogue entry, filled from the contract | `integrations/odd/curate.py` | ODD importing ODCS directly — [0013](0013-fill-the-catalogue-from-the-contract.md) |
 | the links on the table's page | `integrations/odd/entity_page.py` | — |
 

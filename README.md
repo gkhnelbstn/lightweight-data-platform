@@ -308,6 +308,13 @@ ODDRN as the escape hatch for a table that has no contract. An unresolvable
 reference is reported rather than dropped, because a graph that silently loses
 an edge still looks complete.
 
+An integration flow (ADR 0019) is an edge of the same kind:
+`integrations/odd/flow_lineage.py` publishes each one as a job from the table
+it reads to the table it writes. A table on a server no collector reads, such
+as a CDC source or the hub, is published from its contract into a data source
+that says where the server is. See
+[ADR 0029](docs/adr/0029-a-flow-is-a-job-in-the-catalogue.md).
+
 This is dataset-level lineage, and dataset-level is all "which dashboards
 break" needs. Column-level is a different question, and ODD cannot answer it —
 see [ADR 0012](docs/adr/0012-odd-not-openmetadata.md).
