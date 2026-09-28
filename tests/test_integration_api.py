@@ -41,6 +41,11 @@ def test_flows_are_grouped_by_system_table_even_with_everything_down(monkeypatch
     # shop -- each asked once, not once per flow.
     assert len(asked) == 2
     assert any("schema not readable" in d for s in hub["systems"] for d in s["drift"])
+    # Which machine each end is on: "hub" alone did not say.
+    assert hub["where"] == "postgres db:5432, database hub"
+    assert address["where"] == "sqlserver mssql:1433, database crm"
+    loyalty = next(s for s in hub["systems"] if s["table"] == "loyalty.member")
+    assert loyalty["where"].startswith("api ") and "?" not in loyalty["where"]
 
 
 def test_a_classified_value_is_never_shown():
