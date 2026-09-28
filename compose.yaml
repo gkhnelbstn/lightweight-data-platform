@@ -84,6 +84,13 @@ services:
       # refuses to start ("Slack OAuth token is empty").
       DATACOLLABORATION_ENABLED: ${ODD_SLACK_ENABLED:-false}
       DATACOLLABORATION_SLACK_OAUTH_TOKEN: ${ODD_SLACK_TOKEN:-}
+      # ODD's own alerts -- failed tests, schema changes -- to the chat
+      # DQ_ALERT_URL names. ODD speaks Slack, e-mail, or its own JSON to a
+      # generic webhook; api/odd_alerts.py turns that JSON into the text a
+      # Google Chat or Teams webhook accepts. Off unless asked for: ODD then
+      # reads its own WAL through a replication slot on odd-db.
+      NOTIFICATIONS_ENABLED: ${ODD_ALERTS_TO_CHAT:-false}
+      NOTIFICATIONS_RECEIVERS_WEBHOOK_URL: http://app:8077/api/alerts/odd
     ports: ["8080:8080"]
     restart: always
     healthcheck:

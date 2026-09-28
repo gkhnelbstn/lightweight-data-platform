@@ -1,7 +1,9 @@
 # Working in this repo
 
 Contract-driven data quality. Read `README.md` first for the why; this file is
-the operating manual.
+the operating manual. **On a machine where none of it is running yet, follow
+`docs/setup.md`** -- every feature as a layer, what it needs, and the command
+that says whether it worked.
 
 **Before changing anything that touches a dependency version, read
 `docs/adr/`.** Every decision here has a record with an *On upgrade* section
@@ -17,7 +19,7 @@ needs. Anything touching SQL Server, MongoDB or Superset wants both:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                                  # 448 tests; the ones that need a database skip without one
+pytest -q                                                  # 450 tests; the ones that need a database skip without one
 docker compose exec app pytest -q tests                    # the same suite, from the app image -- see issue #7
 python seed/seed.py                                        # rebuild the demo ERP data
 python seed/seed.py --mutate                               # re-grade 20 customers in place
@@ -31,12 +33,14 @@ python integrations/odd/lineage.py --url http://odd-platform:8080   # declared l
 python integrations/odd/classify.py --url http://odd-platform:8080   # PII tags
 python integrations/odd/curate.py --url http://odd-platform:8080  # owner, docs, glossary
 python integrations/odd/master_data.py --url http://odd-platform:8080  # golden records -> Master Data
+python integrations/odd/flow_lineage.py --url http://odd-platform:8080 --contracts demo/integration  # flows -> lineage
 uvicorn api.main:app --port 8077                           # UI + API
 python core/mapping.py --check                             # validate the declared column mappings
 python core/sync.py --check                                # validate the sync rules
 python core/sync.py --apply                                # publication + subscription
 python core/sync_mssql.py --interval 30                    # SQL Server CDC -> Postgres
 python core/hub.py --init                                  # the two-way integration hub
+python core/hub.py --prune --days 30                       # ...and drop the log nobody reads
 python core/flow_jobs.py --check --contracts demo/integration  # refuse bad flows
 python core/flow_jobs.py --apply --contracts demo/integration  # hub + SeaTunnel jobs (needs --profile flows)
 psql -U postgres -f demo/integration/loyalty_setup.sql      # the demo's API source (#97)
@@ -203,6 +207,28 @@ which is the default branch.
   everyone -- ODD link names, the alert message -- follows `LDP_LANGUAGE`
   (`core/language.py`) instead, since no viewer's picker can choose it; so
   `odd_links` keys a link by what it is (`checks`), never by its words.
+* **A contract opens on its agreement** (ADR 0030, `api/contract_agreement.py`,
+  `ContractOverview.tsx`): owner, purpose and terms, its rules, and every
+  `slaProperties` promise beside what the runs measured -- **only where
+  something measures it**. A promise nothing here measures reads "not measured
+  here", never a number from elsewhere. The owner is `tenant`, as `curate.py`
+  has it, and `team` is ODCS 3.1's object (the 3.0 array still reads). ODCS
+  names are shown through a map in the component, because the English
+  catalogue is the keys and `dataClassification` is not a label. The tab's
+  lineage is ODD's own API from the browser (`findEntityId`, `getNeighbours`
+  in `api.ts`): the panel is part of ODD's page and has its session.
+* **A contract's domain is an ODD domain, and a source's namespace only when
+  it has one** (`curate.sync_domains`, `source_domain`). A namespace on a data
+  source shows on every entity it holds, so an ERP whose contracts span five
+  domains used to take the first one's and all 3 700 tables read
+  `yard_operations`. Domains are manual `DOMAIN` groups (type id 22) whose
+  members are replaced each run. A group member must be a full `DataEntityRef`
+  (`id`, `is_stale`, `status`): an oddrn alone is a 400. ODD 0.29 has **no
+  API to delete a manual group** -- setting its status to `DELETED` is the
+  way out -- so do not create one to probe.
+* ODD's Directory types a source by parsing its ODDRN with the Java
+  generator, which has no `//mssql` model: every SQL Server source was
+  "Other" until `deploy/odd-platform-api/` added one (ADR 0011).
 * ODD reports an existing collector's token **masked**, so it cannot be read
   back. `odd-bootstrap.sh` reuses the token from the config it wrote last time
   and rotates only when there is no local copy — creating a collector whose
@@ -452,6 +478,19 @@ which is the default branch.
   hub card leads with its counts and one bar per hour of what arrived, and
   each log has a search box. Everything else on the tab stays read-only --
   what a field holds is the flows' to carry.
+* **Four tables in the hub grow with what happens, and `--prune` is what
+  bounds three of them** (#56, ADR 0021): each entity's inbox, each
+  aggregate's inbox, and `hub.conflict`. The rest are a working set --
+  `hub.expect` keeps an hour, `hub.pending_before` is popped by the row it
+  waits for, `hub.unmatched` waits for a person -- or the record itself.
+  Nothing reads a pruned row: the merge runs in the trigger, so an inbox is a
+  log for people rather than a queue, and `--days` trades against how far a
+  screen can look and nothing else. **`hub.tombstone` is never pruned**: a
+  change arriving for a record the hub no longer has looks like a new record
+  without one, and how late a delivery can be is CDC retention plus a
+  checkpoint's age plus an outage, which is a number nobody has. Nothing
+  schedules the prune either -- who runs it is a deployment question, the one
+  `core/sync_mssql.py --interval` leaves to compose.
 * **A row the hub did nothing with is not kept** (#56): `hub.on_inbox` drops
   its own row when `hub.merge` answers `unchanged`. A polled source writes one
   per record per poll whether or not anything happened (ADR 0027), and the
@@ -506,21 +545,33 @@ which is the default branch.
   Raising the interval or the timeout cannot help a contended lock. The
   demo's API is `demo/integration/loyalty_api.py`, the app image with a
   different command, seeded by `demo/integration/loyalty_setup.sql`.
-* **A discussion about an asset is a Slack thread, and nothing else.** ODD's
-  Discussions tab has one provider (`MessageProviderDto.SLACK`), so the
-  channel list is empty until a workspace is connected:
-  `deploy/slack-app-manifest.yaml` is the app, `ODD_SLACK_ENABLED` and
-  `ODD_SLACK_TOKEN` in `.env` are the wiring, and the token is the
-  workspace owner's to create. `DATACOLLABORATION_ENABLED: true` with an
-  empty token refuses to start ODD ("Slack OAuth token is empty"), which is
-  why both default to off. Replies arrive at `/api/slack/events`, so they
-  need this platform reachable from Slack; posting does not.
+* **A discussion about an asset is a Google Chat thread, one way** (ADR
+  0028). ODD's own Discussions tab has one provider, Slack, so
+  `deploy/odd-platform-discussions.mjs` points the tab at
+  `Discussions.tsx`: a message is kept in `dq.discussion` and posted to a
+  Google Chat space's incoming webhook, one thread per asset
+  (`threadKey: odd-entity-<id>`). Spaces are added on that tab. **A space
+  URL is a credential and an SSRF door**: only
+  `https://chat.googleapis.com/v1/spaces/<id>/messages?key&token` is
+  accepted, redirects are not followed, the URL returns to the screen masked,
+  and adding or removing one needs the API token. Replies typed in Chat stay
+  in Chat -- a webhook cannot read. The Slack wiring (`ODD_SLACK_*`,
+  `deploy/slack-app-manifest.yaml`) is still in the image and unreached.
 * **ODD's Master Data page is the hub's golden record, one way** (ADR 0025,
   `integrations/odd/master_data.py`): a lookup table per hub entity plus
   `value_maps`, matched by key, classified columns left out. An edit made in
   ODD is overwritten by the next run -- a record changes in its system. ODD
   does not quote the names in its own `ALTER TABLE`, so a lookup column named
   `column` is a 500.
+* **A flow is a job on ODD's lineage** (ADR 0029,
+  `integrations/odd/flow_lineage.py`), from the table it reads to the one it
+  writes. A table on a server **no collector owns** -- a source nobody
+  catalogues, the hub -- is published from its contract into a data source
+  named by the contract's server. One a collector owns is left to it: ODD
+  gives an API-registered data source a token and a collector's none, and
+  publishing the contract's mapped columns over a collector's table is a new
+  structure version on every run of either. A data source description is
+  `varchar(255)` in ODD; longer is a 500.
 * `generated` in a `syncTo` rule is the target's half: columns that exist only
   in the replica and that the replica fills itself, so a sequence or a default
   there is what puts a value in them. They are never in `columns`, which is why

@@ -17,6 +17,7 @@ import type {
 } from './api';
 import { getContractAudit, getRun, startRun } from './api';
 import type { RunState } from './api';
+import { ContractOverview } from './ContractOverview';
 import { RawSqlRule, RuleBuilder, SyncRuleForm } from './RuleForms';
 import { runStatus, useT, when } from './shared';
 import * as S from './Contracts.styles';
@@ -36,16 +37,20 @@ interface Props {
   dimensions: string[];
   ruleTypes: RuleType[];
   onSaved: () => void;
+  /** Opens another contract, for a foreign key that points at one. */
+  onOpenContract?: (id: string) => void;
 }
 
-// English keys into the panel's catalogue; translated where shown.
-const TABS = ['Schema', 'Checks', 'Add a rule', 'Replication', 'Changes'];
+// English keys into the panel's catalogue; translated where shown. The
+// agreement comes first: it is what a contract is, the rest is how it checks.
+const TABS = ['Overview', 'Schema', 'Checks', 'Add a rule', 'Replication', 'Changes'];
 
 export const ContractPanel: React.FC<Props> = ({
   detail,
   dimensions,
   ruleTypes,
   onSaved,
+  onOpenContract,
 }) => {
   const t = useT();
   const [tab, setTab] = useState(0);
@@ -79,11 +84,12 @@ export const ContractPanel: React.FC<Props> = ({
         items={TABS.map(name => ({ name: t(name) }))}
       />
 
-      {tab === 0 && (
+      {tab === 0 && <ContractOverview detail={detail} onOpenContract={onOpenContract} />}
+      {tab === 1 && (
         <Definitions properties={detail.properties} profile={detail.profile} />
       )}
-      {tab === 1 && <ContractChecks detail={detail} />}
-      {tab === 2 && (
+      {tab === 2 && <ContractChecks detail={detail} />}
+      {tab === 3 && (
         <AddRule
           detail={detail}
           dimensions={dimensions}
@@ -91,8 +97,8 @@ export const ContractPanel: React.FC<Props> = ({
           onSaved={saved}
         />
       )}
-      {tab === 3 && <SyncRuleForm detail={detail} onSaved={saved} />}
-      {tab === 4 && <AuditTrail key={auditKey} contractId={detail.contract.id} />}
+      {tab === 4 && <SyncRuleForm detail={detail} onSaved={saved} />}
+      {tab === 5 && <AuditTrail key={auditKey} contractId={detail.contract.id} />}
     </S.Panel>
   );
 };

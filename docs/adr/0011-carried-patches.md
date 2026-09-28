@@ -52,6 +52,24 @@ Reported as
 upstream** — tracked in
 [#19](https://github.com/gkhnelbstn/lightweight-data-platform/issues/19).
 
+### `deploy/odd-platform-lineage-limit.mjs` — a group lineage too large to draw
+
+A data entity group's Lineage tab renders every node to measure it, then lays
+the whole graph out with ELK on the main thread. For a schema of an ERP, which
+odd-collector files as a group, that is the whole ERP. Siber's `dbo` answered
+with 1 120 subgraphs, 3 740 nodes and 9 391 edges. The 3.4 MB arrived in two
+seconds, and the tab then froze for good.
+
+Two anchored lines in `DEGLineage.tsx`, placed after the last hook, render
+`LineageTooLarge.tsx` instead of the graph when the group has more than 400
+distinct nodes. The component lists the group's entities by how many links
+each has, searchable, and each one opens its own lineage, which ODD draws well
+(it groups a large neighbourhood into one node). Below the limit nothing
+changes. The build fails if either anchor moves.
+
+**Delete the script and the component when ODD lays a group's lineage out off
+the main thread or pages it.** Not reported yet.
+
 ### `deploy/Dockerfile.odd-platform` — the ER diagram of a versioned table
 
 ODD's Data Modelling > Relationships page, and the Relationships tab of every
@@ -83,6 +101,20 @@ before the patch existed, and the write-up there has the same reproduction.
 **Delete the `api` stage and its `COPY` when a release carries the fix** --
 tracked in
 [#8](https://github.com/gkhnelbstn/lightweight-data-platform/issues/8).
+
+### `deploy/odd-platform-api/` — ODDRN models the Java generator lacks
+
+ODD's Directory sorts data sources by parsing their ODDRN with
+oddrn-generator-java, and 0.1.21 has no model for `//mssql` or for our own
+`//datafletch` checks. Every SQL Server source and every contract check was
+filed under "Other". The generator finds its models by scanning the
+`org.opendatadiscovery.oddrn.model` package, so the fix is two classes on the
+classpath and no change to the generator: the `api` stage compiles them into
+`/app/classes`.
+
+**Delete `MssqlPathsModel.java` when oddrn-generator-java ships an MSSQL
+model.** `DatafletchPathsModel.java` is ours for as long as the `datafletch`
+ODDRNs are.
 
 ### `deploy/odd-platform-tr.mjs` — Turkish in ODD's language picker
 
@@ -129,6 +161,40 @@ the fork, `gkhnelbstn/seatunnel`, as `ldp/2.3.13-source-timestamp`.
 **Delete the `src` and `build` stages when a SeaTunnel release contains
 #10667.** Nothing is reported, because nothing needs to be: it is already
 merged.
+
+### `deploy/Dockerfile.odd-collector` — the mssql adapter on a Turkish collation
+
+Measured against a production ERP whose database is `Turkish_CI_AS`. Two
+defects, and either one alone stops the whole pull:
+
+* The adapter spells `information_schema` in lower case. The collation is
+  case-insensitive, but in Turkish the upper case of `i` is `İ`, so the view
+  is not found: `Invalid object name 'information_schema.table_constraints'`.
+* Its primary- and foreign-key CTEs return a column once per constraint it is
+  in, and ODD refuses the push with `IllegalStateException: Duplicate key`.
+
+`deploy/mssql-turkish-collation.patch.py` upper-cases the `INFORMATION_SCHEMA`
+references (the `sys.*` views are lower case and stay so) and adds `DISTINCT`
+to both CTEs. It fails the build when the file stops looking the way it did.
+
+**Delete the patch and its two Dockerfile lines when odd-collector's mssql
+adapter quotes `INFORMATION_SCHEMA` in upper case and de-duplicates key
+columns.** Not reported yet.
+
+### `deploy/Dockerfile.odd-collector` — the Superset adapter on a current Superset
+
+Measured against Superset 5 (abc-bi). The adapter asks for collection URLs
+without their trailing slash (`/dataset`, `/chart`, `/dashboard`,
+`/database/<id>/schemas`); Superset answers each with a 308 to the slashed
+URL, and aiohttp drops the `Authorization` header on the redirect. The 401
+has no `result`, and the pull dies on `KeyError: 'result'`. The same crash
+follows one database Superset cannot open: a Google Sheets connection whose
+key file is gone answers its table listing with `{"error": ...}` and took all
+59 dashboards with it. Three `sed`s: ask for the slash, and read a failed
+listing as no tables.
+
+**Delete the three `sed`s when the adapter requests slashed URLs and
+tolerates a database it cannot list.** Not reported yet.
 
 ### Worked around without a patch
 

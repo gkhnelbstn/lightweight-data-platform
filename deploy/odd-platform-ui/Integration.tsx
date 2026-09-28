@@ -218,6 +218,11 @@ const HubCard: React.FC<{ hub: Hub }> = ({ hub }) => {
           {codes.length > 0 &&
             ` · ${t('each system keeps its own code: {{columns}}', { columns: codes.join(', ') })}`}
         </Typography>
+        {hub.where && (
+          <Typography variant='caption' color='texts.secondary' component='div'>
+            {t('Hub database: {{where}}, table {{table}}', { where: hub.where, table: hub.id })}
+          </Typography>
+        )}
       </div>
       {hub.hub_error && (
         <Typography variant='body2' color='error.main'>
@@ -276,6 +281,11 @@ const Flows: React.FC<{ hub: Hub }> = ({ hub }) => {
                 <Typography variant='caption' color='texts.secondary'>
                   {s.table}
                 </Typography>
+                {s.where && (
+                  <Typography variant='caption' color='texts.secondary' component='div'>
+                    {s.where}
+                  </Typography>
+                )}
                 {s.drift.map(d => (
                   <Typography key={d} variant='caption' color='error.main' component='div'>
                     {d}

@@ -255,6 +255,7 @@ export const ContractsTab: React.FC<Props> = ({ overview, ruleTypes, onSaved }) 
             dimensions={overview.dimensions}
             ruleTypes={ruleTypes}
             onSaved={saved}
+            onOpenContract={select}
           />
         </div>
       )}

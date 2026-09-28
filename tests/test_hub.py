@@ -518,3 +518,34 @@ def test_every_other_outcome_is_history(hub):
     assert [o for _, o in hub.execute(
         "select id, outcome from hub.customer_inbox order by id").fetchall()] == [
         "created", "echo", "before", "applied"]
+
+
+def test_what_the_hub_keeps_only_to_be_looked_at_can_be_dropped(hub):
+    """#56: the inbox and `hub.conflict` grow with what happens and nothing
+    bounds them. Nothing reads a pruned row either -- the merge runs in the
+    trigger, so the inbox is a log for people, not a queue."""
+    from core import hub as h
+
+    send(hub, "crm", "INSERT", 100, **ACME)
+    update(hub, "billing", 105, ACME, {**ACME, "name": "Acme Ltd"})
+    update(hub, "crm", 110, {**ACME, "name": "Acme Ltd"}, {**ACME, "name": "Acme GmbH"})
+    hub.execute("update hub.customer_inbox set landed_at = now() - interval '40 days' "
+                "where id <= 2")
+    hub.execute("update hub.conflict set at = now() - interval '40 days'")
+    assert h.prune(hub, days=30)["hub.customer_inbox"] == 2
+    assert hub.execute("select count(*) from hub.conflict").fetchone() == (0,)
+    assert hub.execute("select count(*) from hub.customer_inbox").fetchone()[0] > 0
+    assert golden(hub)[0] == "Acme GmbH", "the record itself is untouched"
+
+
+def test_a_tombstone_is_never_pruned(hub):
+    """A change arriving for a record the hub no longer has looks like a new
+    record without one, and a late delivery once resurrected a deleted
+    customer (ADR 0021). How late a delivery can be is a number nobody has."""
+    from core import hub as h
+
+    send(hub, "crm", "INSERT", 100, **ACME)
+    send(hub, "crm", "DELETE", 110, **ACME)
+    hub.execute("update hub.tombstone set deleted_ms = 0")
+    h.prune(hub, days=0)
+    assert hub.execute("select count(*) from hub.tombstone").fetchone() == (1,)

@@ -16,7 +16,9 @@
 # * Patched again, and this one is ours: the `Http` source waits out
 #   `poll_interval_millis` holding the checkpoint lock, so a streaming job's
 #   checkpoint never completes and SeaTunnel fails the job. `Object.wait`
-#   frees the monitor while it waits; `Thread.sleep` does not. Issue #126.
+#   frees the monitor while it waits; `Thread.sleep` does not. Issue #126,
+#   reported as apache/seatunnel#12411 with the fix as #12412 -- so this one
+#   is deleted when a release carries that, not when somebody notices.
 #
 # Delete the `src` and `build` stages, and the COPY lines from `build`, when a
 # SeaTunnel release carries #10667 *and* the Http reader stops sleeping under

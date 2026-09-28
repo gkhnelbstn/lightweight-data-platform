@@ -395,6 +395,46 @@ retention rule beyond this one: with the no-ops gone the log grows with real
 changes, and no measurement yet says that is a problem. Rows already there
 stay, because an upgrade should not delete somebody's log.
 
+## What the hub keeps, and what bounds it (#56)
+
+The hub is the landing log this repository argued about for a long time: every
+source writes its changes into one store we own, and every target reads the
+golden record rather than another system. What it did not have is the other
+half of that argument -- how long any of it is kept.
+
+Audited on the running demo, which is where the numbers are:
+
+| table | what bounds it |
+|---|---|
+| `hub.<entity>_inbox` | **nothing** |
+| `flow.<id>_inbox` | **nothing** |
+| `hub.conflict` | **nothing** |
+| `hub.tombstone` | nothing, and deliberately so |
+| `hub.expect` | an hour |
+| `hub.pending_before` | the row it waits for, or the next poll |
+| `hub.unmatched` | a person |
+| `hub.<entity>`, `flow.<id>`, `flow.<id>_lines` | the data |
+| `hub.entity`, `hub.system`, `hub.job`, `flow.spec` | one row per flow or system |
+
+So three tables needed an answer, and `core/hub.py --prune --days N` is it.
+The number is a display choice rather than a correctness one: nothing reads a
+pruned row, because the merge runs in the trigger and the inbox is therefore a
+log for people, not a queue. The Integration tab's chart looks back
+twenty-four hours and a record's history looks back as far as there is;
+thirty days is generous for both.
+
+`hub.tombstone` is the exception and stays. A change arriving for a record the
+hub no longer has looks like a new record without one -- a late delivery once
+resurrected a deleted customer -- and how old is old enough is bounded by how
+late a delivery can be: CDC retention, a checkpoint's age, an outage. That is
+a number nobody has, and one row per record ever deleted is not what grows
+here anyway.
+
+Nothing schedules the prune. Who runs it and how often is a deployment
+question, the same one `core/sync_mssql.py --interval` leaves to compose, and
+inventing a service to run a `DELETE` once a day is the kind of infrastructure
+invariant 6 exists to refuse.
+
 ## Consequences
 
 * The conflict rule has a measurable cost: `hub.conflict` is the list of every

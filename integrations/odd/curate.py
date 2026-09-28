@@ -12,7 +12,8 @@ one:
 
     contract                     ODD
     ---------------------------  --------------------------------------------
-    domain                       namespace, on the data source and as a tag
+    domain                       an ODD domain holding its tables, a tag, and
+                                 the source's namespace when it has only one
     name                         the entity's business name
     tenant                       owner, and its ownership of the entity
     description.purpose          the entity's description
@@ -175,15 +176,88 @@ def set_tags(url: str, eid: int, entity: dict, contract: dict) -> int:
     return len(want - have)
 
 
-def set_datasource_namespace(url: str, entity: dict, domain: str) -> bool:
+def source_domain(contracts: list[dict], source_oddrn: str) -> str | None:
+    """The one domain every contracted table of a source belongs to, or None.
+
+    A namespace on a data source shows on every entity it holds -- all 3 700
+    tables of an ERP -- so it may only name a domain the whole source is in. An
+    ERP whose contracts span five domains used to take the first contract's,
+    and every table in it read `yard_operations`.
+    """
+    found = {c.get("domain") for c in contracts
+             if dataset_oddrn(c, "erp").startswith(source_oddrn + "/")}
+    return found.pop() if len(found) == 1 else None
+
+
+def set_datasource_namespace(url: str, entity: dict, domain: str | None,
+                             ours: set[str]) -> bool:
     """The namespace shows on every entity of the source, and the collector
-    has no way to know it -- it is a business fact, not a schema one."""
+    has no way to know it -- it is a business fact, not a schema one.
+
+    `ours` is every domain a contract names: a namespace that is one of them
+    and no longer the source's single domain was written here and is taken
+    back. One somebody chose by hand is left alone.
+    """
     source = entity.get("data_source") or {}
-    if not domain or not source.get("id") or (source.get("namespace") or {}):
+    current = (source.get("namespace") or {}).get("name")
+    if not source.get("id") or current == domain:
         return False
-    _send(f"{url.rstrip('/')}/api/datasources/{source['id']}",
-          {"name": source["name"], "namespace_name": domain}, method="PUT")
+    if current and current not in ours:
+        return False
+    body = {"name": source["name"]}
+    if domain:
+        body["namespace_name"] = domain
+    _send(f"{url.rstrip('/')}/api/datasources/{source['id']}", body, method="PUT")
     return True
+
+
+# ODD's own group type for a business domain; its Catalog page lists these.
+DOMAIN_TYPE = {"id": 22, "name": "DOMAIN"}
+
+
+def _ref(url: str, eid: int) -> dict:
+    """A group member as ODD validates it: an oddrn alone is a 400 for want of
+    `id`, `is_stale` and `status`."""
+    e = _get(f"{url.rstrip('/')}/api/dataentities/{eid}")
+    return {"id": e["id"], "oddrn": e["oddrn"], "is_stale": e.get("is_stale", False),
+            "status": e.get("status"), "entity_classes": e.get("entity_classes")}
+
+
+def tables_by_domain(contracts: list[dict]) -> dict[str, list[str]]:
+    """Each domain's contracted tables, by the ODDRN the collector gave them."""
+    out: dict[str, set[str]] = {}
+    for c in contracts:
+        if c.get("domain"):
+            out.setdefault(c["domain"], set()).add(dataset_oddrn(c, "erp"))
+    return {d: sorted(oddrns) for d, oddrns in sorted(out.items())}
+
+
+def sync_domains(url: str, contracts: list[dict]) -> dict[str, int]:
+    """One ODD domain per contract domain, holding that domain's tables.
+
+    A namespace labels; a domain *groups* -- it is what ODD's Catalog opens on
+    and what a person browses by. Its members are replaced on every run, so a
+    table whose contract moved domain moves with it. A table the collector has
+    not catalogued yet is left out rather than refused.
+    """
+    base = url.rstrip("/")
+    have = {(d.get("domain") or {}).get("internal_name")
+            or (d.get("domain") or {}).get("external_name"): d["domain"]["id"]
+            for d in _get(f"{base}/api/dataentitygroups/domains").get("items", [])
+            if d.get("domain")}
+    out = {}
+    for domain, oddrns in tables_by_domain(contracts).items():
+        members = [_ref(url, eid) for eid in
+                   (entity_id(url, o) for o in oddrns) if eid is not None]
+        form = {"name": domain, "namespace_name": domain, "type": DOMAIN_TYPE,
+                "entities": members}
+        ensure_namespace(url, domain)
+        if domain in have:
+            _send(f"{base}/api/dataentitygroups/{have[domain]}", form, method="PUT")
+        else:
+            _send(f"{base}/api/dataentitygroups", form)
+        out[domain] = len(members)
+    return out
 
 
 def metadata_values(contract: dict) -> dict[str, str]:
@@ -272,18 +346,23 @@ def add_query_examples(url: str, eid: int, contract: dict) -> int:
 
 # --- one contract, everything -----------------------------------------------
 
-def fill(url: str, contract: dict, terms: dict[str, int]) -> dict:
+def fill(url: str, contract: dict, terms: dict[str, int],
+         contracts: list[dict] | None = None) -> dict:
     oddrn = dataset_oddrn(contract, "erp")
     eid = entity_id(url, oddrn)
     if eid is None:
         return {"contract": contract["id"], "note": "not in ODD yet -- has the "
                                                     "collector run?"}
-    ensure_namespace(url, contract.get("domain"))
+    contracts = contracts if contracts is not None else load_contracts()
     ensure_owner(url, contract.get("tenant"))
     entity = _get(f"{url.rstrip('/')}/api/dataentities/{eid}")
+    source = (entity.get("data_source") or {}).get("oddrn") or ""
+    domain = source_domain(contracts, source) if source else None
+    ensure_namespace(url, domain)
     return {
         "contract": contract["id"],
-        "namespace": set_datasource_namespace(url, entity, contract.get("domain")),
+        "namespace": set_datasource_namespace(
+            url, entity, domain, {c.get("domain") for c in contracts} - {None}),
         "business_name": set_business_name(url, eid, entity, contract),
         "tags": set_tags(url, eid, entity, contract),
         "owner": set_ownership(url, eid, entity, contract.get("tenant")),
@@ -303,9 +382,11 @@ def main() -> None:
 
     terms = ensure_terms(a.url)
     print(f"dictionary: {len(terms)} quality terms in {TERM_NAMESPACE!r}")
-    for contract in load_contracts():
+    contracts = load_contracts()
+    for contract in contracts:
         if a.contract in (None, contract.get("id")):
-            print(fill(a.url, contract, terms))
+            print(fill(a.url, contract, terms, contracts))
+    print(f"domains: {sync_domains(a.url, contracts)}")
 
 
 if __name__ == "__main__":

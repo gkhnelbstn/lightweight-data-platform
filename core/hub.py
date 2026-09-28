@@ -20,6 +20,7 @@ ours in the stream: SeaTunnel inserts, Postgres merges in the same
 transaction.
 
     python core/hub.py --init          # create the hub database and its functions
+    python core/hub.py --prune         # ...and drop the log nobody is looking at
 """
 from __future__ import annotations
 
@@ -38,6 +39,52 @@ META = ("_at", "_by", "_rev", "_changed", "_skip", "_link")
 
 def init(cx: psycopg.Connection) -> None:
     cx.execute(HUB_SQL.read_text(encoding="utf-8"))
+
+
+def prune(cx: psycopg.Connection, days: int = 30) -> dict[str, int]:
+    """Drop what the hub keeps only so that somebody can look at it. #56
+
+    Three kinds of table grow with what happens and nothing bounds them: each
+    entity's inbox, each aggregate flow's inbox, and `hub.conflict`. Every
+    other table here is a working set or the data itself -- `hub.expect` keeps
+    an hour, `hub.pending_before` is popped by the row it waits for,
+    `hub.unmatched` is settled by a person, and the golden record is the
+    record.
+
+    Nothing reads a pruned row. The merge runs in the trigger, so the inbox is
+    a log for people rather than a queue: the Integration tab's chart looks
+    back twenty-four hours and a record's history looks back as far as there
+    is. So `days` trades against how far a screen can look and nothing else,
+    and thirty is generous for both.
+
+    **`hub.tombstone` is not pruned**, deliberately. A change arriving for a
+    record the hub no longer has looks like a new record without one, and a
+    late delivery once resurrected a deleted customer (ADR 0021). How old is
+    old enough is bounded by how late a delivery can be -- CDC retention, a
+    checkpoint's age, an outage -- which is a number nobody has, so the row
+    stays. One row per record ever deleted is not what grows here anyway.
+
+    Nothing runs this either. Who prunes and how often is a deployment
+    question, the same one `core/sync_mssql.py --interval` leaves to compose.
+    """
+    cut = sql.SQL("landed_at < now() - {}").format(
+        sql.SQL("interval {}").format(sql.Literal(f"{days} days")))
+    out: dict[str, int] = {}
+    for schema, table in (
+            [("hub", f"{name}_inbox") for (name,) in
+             cx.execute("select name from hub.entity order by name").fetchall()]
+            # `flow.spec` exists only once an aggregate has been installed
+            # (core/flow_aggregate.py); a hub without one has no `flow` schema.
+            + [("flow", f"{flow}_inbox") for (flow,) in cx.execute(
+                "select flow from flow.spec order by flow"
+                if cx.execute("select to_regclass('flow.spec')").fetchone()[0]
+                else "select null where false").fetchall()]):
+        out[f"{schema}.{table}"] = cx.execute(sql.SQL("delete from {}.{} where {}").format(
+            sql.Identifier(schema), sql.Identifier(table), cut)).rowcount
+    out["hub.conflict"] = cx.execute(
+        "delete from hub.conflict where at < now() - make_interval(days => %s)",
+        (days,)).rowcount
+    return out
 
 
 def register_entity(cx: psycopg.Connection, name: str, key: list[str],
@@ -137,9 +184,18 @@ def main() -> None:
     from core.bootstrap_db import admin_dsn, ensure_database
 
     ap = argparse.ArgumentParser(description="The two-way integration hub.")
-    ap.add_argument("--init", action="store_true", required=True)
-    ap.parse_args()
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--init", action="store_true")
+    mode.add_argument("--prune", action="store_true",
+                      help="drop inbox rows and conflicts older than --days")
+    ap.add_argument("--days", type=int, default=30)
+    args = ap.parse_args()
     host, port = os.getenv("HUB_HOST", "db"), int(os.getenv("HUB_PORT", "5432"))
+    if args.prune:
+        with psycopg.connect(admin_dsn(host, port, "hub"), autocommit=True) as cx:
+            for table, gone in prune(cx, args.days).items():
+                print(f"{table}: {gone} row(s) older than {args.days} days")
+        return
     ensure_database(host, port, "hub")
     with psycopg.connect(admin_dsn(host, port, "hub"), autocommit=True) as cx:
         init(cx)

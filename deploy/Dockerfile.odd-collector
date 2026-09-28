@@ -24,3 +24,23 @@ RUN sed -i 's/dashboards=dashboard.id/dashboards=str(dashboard.id)/' \
 # the BI lineage entirely. See the patch for why that is the whole feature.
 COPY deploy/superset-mssql-lineage.patch.py /tmp/patch.py
 RUN python /tmp/patch.py && rm /tmp/patch.py
+
+# Superset answers a collection URL without its trailing slash -- `/dataset`,
+# `/chart`, `/dashboard`, `/database/<id>/schemas` -- with a 308 to the slashed
+# one, and aiohttp drops the Authorization header on the redirect: a 401 with
+# no `result`, and the whole pull dies on KeyError 'result'. Ask for the slash.
+# One more way to die the same way: a database Superset cannot open (a Google
+# Sheets connection whose key file is gone) answers its table listing with
+# `{"error": ...}`, and one broken connection took every dashboard with it.
+# Its tables are then unknown, which is what they are.
+RUN f=/app/odd_collector/adapters/superset/client.py \
+ && sed -i -e 's|/database/{database_id}/schemas"|/database/{database_id}/schemas/"|' \
+           -e 's|url = f"{self.base_url}/{endpoint}"|url = f"{self.base_url}/{endpoint}/"|' \
+           -e 's|return lmap(Table.from_dict, response\["result"\])|return lmap(Table.from_dict, response.get("result") or [])|' $f \
+ && grep -q '/schemas/"' $f && grep -q '{endpoint}/"' $f \
+ && grep -q 'response.get("result") or \[\]' $f
+
+# The mssql adapter spells INFORMATION_SCHEMA in lower case, which a Turkish
+# collation refuses, and can repeat a key column, which ODD refuses. See the patch.
+COPY deploy/mssql-turkish-collation.patch.py /tmp/patch.py
+RUN python /tmp/patch.py && rm /tmp/patch.py

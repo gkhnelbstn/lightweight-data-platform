@@ -219,10 +219,7 @@ def persist(results: dict, contract: dict, as_of: date,
     rows = []
     for check in results.get("checks", []):
         d = check.get("diagnostics") or {}
-        failed = d.get("failed_rows")
-        if failed is None:
-            failed = d.get("value") if d.get("value") is not None else (
-                0 if check.get("result") == "passed" else 1)
+        failed = failed_rows(check)
         # A custom rule has no row_count of its own; the table it is about is
         # the denominator, counted once per run in the same window.
         total = d.get("row_count") or (row_counts or {}).get(
@@ -260,6 +257,22 @@ def persist(results: dict, contract: dict, as_of: date,
         store.write_score(dq, as_of, contract_id, s, len(rows), failed_n,
                           _min_score(contract), window, errored_n)
     return rows
+
+
+def failed_rows(check: dict) -> int:
+    """How many rows a check failed on.
+
+    A custom SQL rule reports only the value its query returned. Under
+    `mustBe: 0` that is the count of bad rows; under a threshold on the table's
+    size it is the size, so a passing row-count rule used to be stored as every
+    row failed. A check that passed failed on nothing, whatever its value.
+    """
+    d = check.get("diagnostics") or {}
+    if d.get("failed_rows") is not None:
+        return int(d["failed_rows"])
+    if check.get("result") == "passed":
+        return 0
+    return int(d["value"]) if d.get("value") is not None else 1
 
 
 def _only_count(row_counts: dict[str, int] | None) -> int:
@@ -457,6 +470,7 @@ def main() -> None:
                   f"score={r['score']:.4f} failed={r['failed']}/{r['total']}{note}")
     if a.odd_url:
         publish_master_data(a.odd_url)
+        publish_flows(a.odd_url)
 
 
 def publish_master_data(url: str) -> None:
@@ -470,6 +484,19 @@ def publish_master_data(url: str) -> None:
             print(f"MASTER {master_data.publish(url, table)}", flush=True)
     except Exception as e:
         print(f"WARN master data not published ({e})", flush=True)
+
+
+def publish_flows(url: str) -> None:
+    """Each flow a job in ODD's lineage, and the tables it joins (ADR 0029),
+    once per run -- so a flow added since yesterday is on the graph today."""
+    from pathlib import Path
+
+    from integrations.odd import flow_lineage
+    try:
+        for line in flow_lineage.publish(url, Path(os.getenv("INTEGRATION_DIR", "contracts"))):
+            print(f"FLOWS {line}", flush=True)
+    except Exception as e:
+        print(f"WARN flows not published ({e})", flush=True)
 
 
 if __name__ == "__main__":

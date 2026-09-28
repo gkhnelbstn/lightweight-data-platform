@@ -190,12 +190,25 @@ def test_a_flows_settings_reach_seatunnels_env(compiled):
                           "job": {"checkpointInterval": 5000, "rowsPerSecond": 400}})
     assert flow_jobs.env(flow, "x") == {
         "job.mode": "STREAMING", "parallelism": 1, "job.name": "x",
-        "checkpoint.interval": 5000, "read_limit.rows_per_second": 400}
+        "checkpoint.interval": 5000, "checkpoint.timeout": 60_000,
+        "read_limit.rows_per_second": 400}
     # A flow that says nothing gets the platform's default and no limit.
     plain = flowmod.parse({"id": "y", "from": "a", "to": "b", "columns": {}})
     assert flow_jobs.env(plain, "y") == {
         "job.mode": "STREAMING", "parallelism": 1, "job.name": "y",
         "checkpoint.interval": flow_jobs.CHECKPOINT_MS}
+
+
+def test_a_throttled_snapshot_chunk_fits_in_a_checkpoint():
+    """A snapshot chunk is emitted whole before the barrier passes it, so at
+    30 rows a second the default 60 s timeout expired on every checkpoint of
+    a 35 654-row table and the job never got past one chunk. The timeout is
+    twice the chunk's time at the flow's own rate."""
+    from core import flow_jobs, flows as flowmod
+    slow = flowmod.parse({"id": "z", "from": "a", "to": "b", "columns": {},
+                          "job": {"rowsPerSecond": 30}})
+    timeout = flow_jobs.env(slow, "z")["checkpoint.timeout"]
+    assert timeout >= 2 * flow_jobs.SNAPSHOT_CHUNK_ROWS / 30 * 1000 - 1
 
 
 def test_only_a_flow_that_can_fall_back_to_linkby_reads_the_hubs_permission(compiled):
